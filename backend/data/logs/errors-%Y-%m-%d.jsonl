@@ -39,3 +39,5 @@
 {"timestamp":"2025-08-16T18:11:10.227106Z","level":"ERROR","logger":"app.bootstrap","message":"Error closing RPC connections: 'EvmClient' object has no attribute 'close'","module":"bootstrap"}
 {"timestamp":"2025-08-16T18:11:21.063373Z","level":"ERROR","logger":"app.bootstrap","message":"Error closing RPC connections: 'EvmClient' object has no attribute 'close'","module":"bootstrap"}
 {"timestamp":"2025-08-16T18:11:25.153638Z","level":"ERROR","logger":"app.bootstrap","message":"Error closing RPC connections: 'EvmClient' object has no attribute 'close'","module":"bootstrap"}
+{"timestamp":"2025-08-16T18:43:46.461348Z","level":"ERROR","logger":"app.bootstrap","message":"Error closing RPC connections: 'EvmClient' object has no attribute 'close'","module":"bootstrap"}
+{"timestamp":"2025-08-16T18:48:23.321861Z","level":"ERROR","logger":"app.bootstrap","message":"Error closing RPC connections: 'EvmClient' object has no attribute 'close'","module":"bootstrap"}

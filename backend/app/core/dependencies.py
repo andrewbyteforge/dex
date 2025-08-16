@@ -1,11 +1,41 @@
-# backend/app/core/dependencies.py (additions)
+"""
+FastAPI dependencies for chain clients and RPC pools.
+"""
 from __future__ import annotations
 
 from fastapi import Request
+from typing import Dict, Any
+
+from ..chains.rpc_pool import rpc_pool
+from ..chains.evm_client import evm_client
+from ..chains.solana_client import solana_client
 
 
-def get_rpc_pool(request: Request):
-    return request.app.state.rpc_pool
+async def get_rpc_pool():
+    """FastAPI dependency to get RPC pool instance."""
+    if not rpc_pool._initialized:
+        await rpc_pool.initialize()
+    return rpc_pool
 
-def get_clients(request: Request):
-    return {"evm": request.app.state.evm, "solana": request.app.state.solana}
+
+async def get_evm_client():
+    """FastAPI dependency to get EVM client instance."""
+    if not evm_client._initialized:
+        await evm_client.initialize()
+    return evm_client
+
+
+async def get_solana_client():
+    """FastAPI dependency to get Solana client instance."""
+    if not solana_client._initialized:
+        await solana_client.initialize()
+    return solana_client
+
+
+async def get_chain_clients() -> Dict[str, Any]:
+    """FastAPI dependency to get all chain clients."""
+    return {
+        "evm": await get_evm_client(),
+        "solana": await get_solana_client(),
+        "rpc_pool": await get_rpc_pool()
+    }

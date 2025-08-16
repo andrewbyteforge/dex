@@ -18,9 +18,6 @@ from .logging import cleanup_logging, setup_logging
 from .middleware import RequestTracingMiddleware, SecurityHeadersMiddleware
 from .settings import settings
 from ..storage.database import init_database, close_database
-from ..chains.rpc_pool import rpc_pool
-from ..chains.evm_client import evm_client
-from ..chains.solana_client import solana_client
 
 
 # --- Windows event loop compatibility (use selector loop for some libs) ---
@@ -88,8 +85,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Initialize RPC pools and chain clients (Phase 2.1)
     try:
+        from ..chains.rpc_pool import rpc_pool
+        from ..chains.evm_client import evm_client
+        from ..chains.solana_client import solana_client
+        
         await rpc_pool.initialize()
-        await evm_client.initialize() 
+        await evm_client.initialize()
         await solana_client.initialize()
         log.info("RPC pools and chain clients initialized successfully")
         
@@ -100,7 +101,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         
     except Exception as e:
         log.error(f"Failed to initialize chain clients: {e}")
-        raise
+        # Don't raise - allow app to start without chains for development
+        app.state.rpc_pool = None
+        app.state.evm_client = None
+        app.state.solana_client = None
 
     # TODO: Initialize background tasks / schedulers (later phases)
 
@@ -119,9 +123,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         # Cleanup RPC connections and chain clients
         try:
-            await rpc_pool.close()
-            await evm_client.close()
-            await solana_client.close()
+            if hasattr(app.state, 'rpc_pool') and app.state.rpc_pool:
+                await app.state.rpc_pool.close()
+            if hasattr(app.state, 'evm_client') and app.state.evm_client:
+                # EVM client doesn't have close method yet, but prepare for it
+                pass
+            if hasattr(app.state, 'solana_client') and app.state.solana_client:
+                await app.state.solana_client.close()
             log.info("RPC connections and chain clients closed")
         except Exception as e:
             log.error(f"Error closing RPC connections: {e}")
