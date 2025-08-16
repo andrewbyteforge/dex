@@ -11,6 +11,7 @@ from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from .logging import get_logger
+from .settings import settings
 
 logger = get_logger(__name__)
 
@@ -118,19 +119,33 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         """
         response = await call_next(request)
         
-        # Add security headers
+        # Basic security headers
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         
-        # Add CSP header (will be configurable later)
-        csp = (
-            "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline'; "
-            "style-src 'self' 'unsafe-inline'; "
-            "connect-src 'self' *.walletconnect.com *.walletconnect.org"
-        )
+        # Environment-specific CSP settings
+        if settings.environment == "development":
+            # Relaxed CSP for development (allows FastAPI docs to work)
+            csp = (
+                "default-src 'self'; "
+                "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; "
+                "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+                "img-src 'self' data: https:; "
+                "font-src 'self' https://cdn.jsdelivr.net; "
+                "connect-src 'self' *.walletconnect.com *.walletconnect.org"
+            )
+        else:
+            # Strict CSP for production
+            csp = (
+                "default-src 'self'; "
+                "script-src 'self'; "
+                "style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data:; "
+                "connect-src 'self' *.walletconnect.com *.walletconnect.org"
+            )
+        
         response.headers["Content-Security-Policy"] = csp
         
         return response
