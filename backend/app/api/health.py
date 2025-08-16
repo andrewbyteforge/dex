@@ -38,10 +38,10 @@ start_time = time.time()
 @router.get("/", response_model=HealthResponse)
 async def health_check() -> HealthResponse:
     """
-    Basic health check endpoint with database status.
+    Basic health check endpoint with database and RPC status.
     
     Returns:
-        Health status information including database connectivity
+        Health status information including database and RPC connectivity
     """
     uptime = time.time() - start_time
     
@@ -69,8 +69,46 @@ async def health_check() -> HealthResponse:
             extra={'extra_data': {'error': str(e)}}
         )
     
-    # Add RPC pools placeholder
-    subsystems["rpc_pools"] = "NOT_IMPLEMENTED"
+    # Add RPC pool health check
+    try:
+        from ..chains.rpc_pool import rpc_pool
+        rpc_health = await rpc_pool.get_health_status()
+        
+        # Determine overall RPC status
+        rpc_status = "OK"
+        degraded_providers = []
+        failed_providers = []
+        
+        for chain, chain_health in rpc_health.items():
+            for provider_name, provider_health in chain_health.items():
+                provider_status = provider_health["status"]
+                if provider_status in ["failed", "circuit_open"]:
+                    failed_providers.append(f"{chain}:{provider_name}")
+                    rpc_status = "DEGRADED"
+                elif provider_status == "degraded":
+                    degraded_providers.append(f"{chain}:{provider_name}")
+                    if rpc_status == "OK":
+                        rpc_status = "DEGRADED"
+        
+        subsystems["rpc_pools"] = rpc_status
+        
+        # Log RPC issues if any
+        if failed_providers or degraded_providers:
+            logger.warning(
+                f"RPC providers with issues - Failed: {failed_providers}, Degraded: {degraded_providers}",
+                extra={'extra_data': {
+                    'failed_providers': failed_providers,
+                    'degraded_providers': degraded_providers,
+                    'rpc_status': rpc_status
+                }}
+            )
+            
+    except Exception as e:
+        subsystems["rpc_pools"] = "ERROR"
+        logger.error(
+            f"RPC health check failed: {e}",
+            extra={'extra_data': {'error': str(e)}}
+        )
     
     # Determine overall status
     status = "OK"
@@ -110,7 +148,7 @@ async def debug_info() -> Dict[str, Any]:
     Debug information endpoint (only available in development).
     
     Returns:
-        Debug information including database details
+        Debug information including database and RPC details
     """
     if not settings.enable_debug_routes:
         from fastapi import HTTPException, status
@@ -121,6 +159,14 @@ async def debug_info() -> Dict[str, Any]:
     
     # Get detailed database health
     db_health = await db_manager.health_check()
+    
+    # Get detailed RPC health
+    rpc_health = {}
+    try:
+        from ..chains.rpc_pool import rpc_pool
+        rpc_health = await rpc_pool.get_health_status()
+    except Exception as e:
+        rpc_health = {"error": str(e)}
     
     return {
         "settings": {
@@ -136,6 +182,10 @@ async def debug_info() -> Dict[str, Any]:
             "health": db_health,
             "initialized": db_manager._is_initialized,
         },
+        "rpc_pools": {
+            "health": rpc_health,
+            "configured_chains": list(rpc_health.keys()) if isinstance(rpc_health, dict) and "error" not in rpc_health else [],
+        },
         "rpc_urls": {
             "eth": settings.get_rpc_urls("eth"),
             "bsc": settings.get_rpc_urls("bsc"),
@@ -143,3 +193,53 @@ async def debug_info() -> Dict[str, Any]:
             "sol": settings.get_rpc_urls("sol"),
         }
     }
+
+
+@router.get("/rpc")
+async def rpc_health_detail() -> Dict[str, Any]:
+    """
+    Detailed RPC health endpoint for monitoring.
+    
+    Returns:
+        Detailed RPC provider health status
+    """
+    try:
+        from ..chains.rpc_pool import rpc_pool
+        rpc_health = await rpc_pool.get_health_status()
+        
+        # Calculate summary statistics
+        total_providers = 0
+        healthy_providers = 0
+        degraded_providers = 0
+        failed_providers = 0
+        
+        for chain_health in rpc_health.values():
+            for provider_health in chain_health.values():
+                total_providers += 1
+                status = provider_health["status"]
+                if status == "healthy":
+                    healthy_providers += 1
+                elif status == "degraded":
+                    degraded_providers += 1
+                else:
+                    failed_providers += 1
+        
+        return {
+            "status": "OK" if failed_providers == 0 else "DEGRADED",
+            "summary": {
+                "total_providers": total_providers,
+                "healthy": healthy_providers,
+                "degraded": degraded_providers,
+                "failed": failed_providers,
+            },
+            "providers": rpc_health,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+        
+    except Exception as e:
+        logger.error(f"RPC health detail failed: {e}")
+        return {
+            "status": "ERROR",
+            "error": str(e),
+            "timestamp": datetime.utcnow().isoformat(),
+        }

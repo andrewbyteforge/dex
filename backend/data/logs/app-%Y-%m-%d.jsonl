@@ -435,3 +435,207 @@
 {"timestamp":"2025-08-16T16:53:31.419137Z","level":"INFO","logger":"app.chains.evm_client","message":"EVM Client initialized","module":"evm_client"}
 {"timestamp":"2025-08-16T16:53:31.596557Z","level":"INFO","logger":"app.chains.solana_client","message":"Solana Client initialized","module":"solana_client"}
 {"timestamp":"2025-08-16T16:53:31.596557Z","level":"INFO","logger":"app.bootstrap","message":"RPC pools and chain clients initialized successfully","module":"bootstrap"}
+{"timestamp":"2025-08-16T16:57:43.763462Z","level":"INFO","logger":"app.bootstrap","message":"Shutting down DEX Sniper Pro","module":"bootstrap","uptime_sec":252.57359}
+{"timestamp":"2025-08-16T16:57:43.767909Z","level":"INFO","logger":"app.chains.rpc_pool","message":"RPC Pool closed","module":"rpc_pool"}
+{"timestamp":"2025-08-16T16:57:43.767909Z","level":"ERROR","logger":"app.bootstrap","message":"Error closing RPC connections: 'EvmClient' object has no attribute 'close'","module":"bootstrap"}
+{"timestamp":"2025-08-16T16:57:43.768915Z","level":"INFO","logger":"app.storage.database","message":"Database connections closed","module":"database"}
+{"timestamp":"2025-08-16T16:57:43.768915Z","level":"INFO","logger":"app.bootstrap","message":"Database connections closed","module":"bootstrap"}
+{"timestamp":"2025-08-16T16:57:45.586185Z","level":"INFO","logger":"root","message":"Logging system initialized","module":"logging","log_level":"INFO","debug":false,"environment":"development"}
+{"timestamp":"2025-08-16T16:57:45.586185Z","level":"INFO","logger":"app.bootstrap","message":"Starting DEX Sniper Pro","module":"bootstrap","environment":"development","service_mode":"free","debug":false}
+{"timestamp":"2025-08-16T16:57:45.586185Z","level":"INFO","logger":"app.storage.database","message":"Initializing database at: data\\app.db","module":"database"}
+{"timestamp":"2025-08-16T16:57:45.600733Z","level":"INFO","logger":"app.storage.database","message":"Database initialized successfully with WAL mode","module":"database"}
+{"timestamp":"2025-08-16T16:57:45.606572Z","level":"INFO","logger":"app.storage.database","message":"Database tables created successfully","module":"database"}
+{"timestamp":"2025-08-16T16:57:45.606572Z","level":"INFO","logger":"app.bootstrap","message":"Database initialized successfully with WAL mode","module":"bootstrap"}
+{"timestamp":"2025-08-16T16:57:45.812787Z","level":"INFO","logger":"app.chains.rpc_pool","message":"RPC Pool initialized with providers for chains: ['ethereum', 'bsc', 'polygon', 'solana']","module":"rpc_pool","chains":["ethereum","bsc","polygon","solana"]}
+{"timestamp":"2025-08-16T16:57:45.812787Z","level":"INFO","logger":"app.chains.evm_client","message":"EVM Client initialized","module":"evm_client"}
+{"timestamp":"2025-08-16T16:57:45.992720Z","level":"INFO","logger":"app.chains.solana_client","message":"Solana Client initialized","module":"solana_client"}
+{"timestamp":"2025-08-16T16:57:45.992720Z","level":"INFO","logger":"app.bootstrap","message":"RPC pools and chain clients initialized successfully","module":"bootstrap"}
+{"timestamp":"2025-08-16T16:57:45.996591Z","level":"INFO","logger":"app.core.middleware","message":"Request started: GET /","module":"middleware","trace_id":"4f5c18b0-cb8a-4ff0-a73d-e72fafdfb0e7","method":"GET","path":"/","query_params":"","client_ip":"127.0.0.1","user_agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:141.0) Gecko/20100101 Firefox/141.0"}
+{"timestamp":"2025-08-16T16:57:45.996591Z","level":"INFO","logger":"app.core.middleware","message":"Request completed: GET /","module":"middleware","trace_id":"4f5c18b0-cb8a-4ff0-a73d-e72fafdfb0e7","status_code":200,"process_time_ms":0.0,"response_size":0}
+{"timestamp":"2025-08-16T16:57:46.009296Z","level":"INFO","logger":"app.core.middleware","message":"Request started: GET /favicon.ico","module":"middleware","trace_id":"612cca83-39c4-4479-a863-d510d4636a08","method":"GET","path":"/favicon.ico","query_params":"","client_ip":"127.0.0.1","user_agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:141.0) Gecko/20100101 Firefox/141.0"}
+{"timestamp":"2025-08-16T16:57:46.010150Z","level":"INFO","logger":"app.core.middleware","message":"Request completed: GET /favicon.ico","module":"middleware","trace_id":"612cca83-39c4-4479-a863-d510d4636a08","status_code":404,"process_time_ms":0.01,"response_size":0}
+{"timestamp":"2025-08-16T16:59:06.617044Z","level":"INFO","logger":"app.bootstrap","message":"Shutting down DEX Sniper Pro","module":"bootstrap","uptime_sec":81.030355}
+{"timestamp":"2025-08-16T16:59:06.617050Z","level":"INFO","logger":"app.chains.rpc_pool","message":"RPC Pool closed","module":"rpc_pool"}
+{"timestamp":"2025-08-16T16:59:06.617050Z","level":"ERROR","logger":"app.bootstrap","message":"Error closing RPC connections: 'EvmClient' object has no attribute 'close'","module":"bootstrap"}
+{"timestamp":"2025-08-16T16:59:06.617050Z","level":"INFO","logger":"app.storage.database","message":"Database connections closed","module":"database"}
+{"timestamp":"2025-08-16T16:59:06.617050Z","level":"INFO","logger":"app.bootstrap","message":"Database connections closed","module":"bootstrap"}
+{"timestamp":"2025-08-16T16:59:08.772816Z","level":"INFO","logger":"root","message":"Logging system initialized","module":"logging","log_level":"INFO","debug":false,"environment":"development"}
+{"timestamp":"2025-08-16T16:59:08.773826Z","level":"INFO","logger":"app.bootstrap","message":"Starting DEX Sniper Pro","module":"bootstrap","environment":"development","service_mode":"free","debug":false}
+{"timestamp":"2025-08-16T16:59:08.773826Z","level":"INFO","logger":"app.storage.database","message":"Initializing database at: data\\app.db","module":"database"}
+{"timestamp":"2025-08-16T16:59:08.789440Z","level":"INFO","logger":"app.storage.database","message":"Database initialized successfully with WAL mode","module":"database"}
+{"timestamp":"2025-08-16T16:59:08.795913Z","level":"INFO","logger":"app.storage.database","message":"Database tables created successfully","module":"database"}
+{"timestamp":"2025-08-16T16:59:08.795913Z","level":"INFO","logger":"app.bootstrap","message":"Database initialized successfully with WAL mode","module":"bootstrap"}
+{"timestamp":"2025-08-16T16:59:09.012468Z","level":"INFO","logger":"app.chains.rpc_pool","message":"RPC Pool initialized with providers for chains: ['ethereum', 'bsc', 'polygon', 'solana']","module":"rpc_pool","chains":["ethereum","bsc","polygon","solana"]}
+{"timestamp":"2025-08-16T16:59:09.012468Z","level":"INFO","logger":"app.chains.evm_client","message":"EVM Client initialized","module":"evm_client"}
+{"timestamp":"2025-08-16T16:59:09.199123Z","level":"INFO","logger":"app.chains.solana_client","message":"Solana Client initialized","module":"solana_client"}
+{"timestamp":"2025-08-16T16:59:09.199123Z","level":"INFO","logger":"app.bootstrap","message":"RPC pools and chain clients initialized successfully","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:00:24.880434Z","level":"INFO","logger":"app.bootstrap","message":"Shutting down DEX Sniper Pro","module":"bootstrap","uptime_sec":76.107618}
+{"timestamp":"2025-08-16T17:00:24.884587Z","level":"INFO","logger":"app.chains.rpc_pool","message":"RPC Pool closed","module":"rpc_pool"}
+{"timestamp":"2025-08-16T17:00:24.884587Z","level":"ERROR","logger":"app.bootstrap","message":"Error closing RPC connections: 'EvmClient' object has no attribute 'close'","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:00:24.884587Z","level":"INFO","logger":"app.storage.database","message":"Database connections closed","module":"database"}
+{"timestamp":"2025-08-16T17:00:24.884587Z","level":"INFO","logger":"app.bootstrap","message":"Database connections closed","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:00:26.766543Z","level":"INFO","logger":"root","message":"Logging system initialized","module":"logging","log_level":"INFO","debug":false,"environment":"development"}
+{"timestamp":"2025-08-16T17:00:26.766543Z","level":"INFO","logger":"app.bootstrap","message":"Starting DEX Sniper Pro","module":"bootstrap","environment":"development","service_mode":"free","debug":false}
+{"timestamp":"2025-08-16T17:00:26.767584Z","level":"INFO","logger":"app.storage.database","message":"Initializing database at: data\\app.db","module":"database"}
+{"timestamp":"2025-08-16T17:00:26.782863Z","level":"INFO","logger":"app.storage.database","message":"Database initialized successfully with WAL mode","module":"database"}
+{"timestamp":"2025-08-16T17:00:26.788774Z","level":"INFO","logger":"app.storage.database","message":"Database tables created successfully","module":"database"}
+{"timestamp":"2025-08-16T17:00:26.788774Z","level":"INFO","logger":"app.bootstrap","message":"Database initialized successfully with WAL mode","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:00:26.998098Z","level":"INFO","logger":"app.chains.rpc_pool","message":"RPC Pool initialized with providers for chains: ['ethereum', 'bsc', 'polygon', 'solana']","module":"rpc_pool","chains":["ethereum","bsc","polygon","solana"]}
+{"timestamp":"2025-08-16T17:00:26.998098Z","level":"INFO","logger":"app.chains.evm_client","message":"EVM Client initialized","module":"evm_client"}
+{"timestamp":"2025-08-16T17:00:27.178879Z","level":"INFO","logger":"app.chains.solana_client","message":"Solana Client initialized","module":"solana_client"}
+{"timestamp":"2025-08-16T17:00:27.178879Z","level":"INFO","logger":"app.bootstrap","message":"RPC pools and chain clients initialized successfully","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:19:12.880895Z","level":"INFO","logger":"app.bootstrap","message":"Shutting down DEX Sniper Pro","module":"bootstrap","uptime_sec":1126.114352}
+{"timestamp":"2025-08-16T17:19:12.885463Z","level":"INFO","logger":"app.chains.rpc_pool","message":"RPC Pool closed","module":"rpc_pool"}
+{"timestamp":"2025-08-16T17:19:12.885463Z","level":"ERROR","logger":"app.bootstrap","message":"Error closing RPC connections: 'EvmClient' object has no attribute 'close'","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:19:12.886194Z","level":"INFO","logger":"app.storage.database","message":"Database connections closed","module":"database"}
+{"timestamp":"2025-08-16T17:19:12.886194Z","level":"INFO","logger":"app.bootstrap","message":"Database connections closed","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:19:14.834065Z","level":"INFO","logger":"root","message":"Logging system initialized","module":"logging","log_level":"INFO","debug":false,"environment":"development"}
+{"timestamp":"2025-08-16T17:19:14.835062Z","level":"INFO","logger":"app.bootstrap","message":"Starting DEX Sniper Pro","module":"bootstrap","environment":"development","service_mode":"free","debug":false}
+{"timestamp":"2025-08-16T17:19:14.835062Z","level":"INFO","logger":"app.storage.database","message":"Initializing database at: data\\app.db","module":"database"}
+{"timestamp":"2025-08-16T17:19:14.848831Z","level":"INFO","logger":"app.storage.database","message":"Database initialized successfully with WAL mode","module":"database"}
+{"timestamp":"2025-08-16T17:19:14.856067Z","level":"INFO","logger":"app.storage.database","message":"Database tables created successfully","module":"database"}
+{"timestamp":"2025-08-16T17:19:14.856067Z","level":"INFO","logger":"app.bootstrap","message":"Database initialized successfully with WAL mode","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:19:15.077739Z","level":"INFO","logger":"app.chains.rpc_pool","message":"RPC Pool initialized with providers for chains: ['ethereum', 'bsc', 'polygon', 'solana']","module":"rpc_pool","chains":["ethereum","bsc","polygon","solana"]}
+{"timestamp":"2025-08-16T17:19:15.077739Z","level":"INFO","logger":"app.chains.evm_client","message":"EVM Client initialized","module":"evm_client"}
+{"timestamp":"2025-08-16T17:19:15.260118Z","level":"INFO","logger":"app.chains.solana_client","message":"Solana Client initialized","module":"solana_client"}
+{"timestamp":"2025-08-16T17:19:15.260118Z","level":"INFO","logger":"app.bootstrap","message":"RPC pools and chain clients initialized successfully","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:19:17.401155Z","level":"INFO","logger":"app.bootstrap","message":"Shutting down DEX Sniper Pro","module":"bootstrap","uptime_sec":2.56709}
+{"timestamp":"2025-08-16T17:19:17.405046Z","level":"INFO","logger":"app.chains.rpc_pool","message":"RPC Pool closed","module":"rpc_pool"}
+{"timestamp":"2025-08-16T17:19:17.405046Z","level":"ERROR","logger":"app.bootstrap","message":"Error closing RPC connections: 'EvmClient' object has no attribute 'close'","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:19:17.405553Z","level":"INFO","logger":"app.storage.database","message":"Database connections closed","module":"database"}
+{"timestamp":"2025-08-16T17:19:17.405553Z","level":"INFO","logger":"app.bootstrap","message":"Database connections closed","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:19:19.166960Z","level":"INFO","logger":"root","message":"Logging system initialized","module":"logging","log_level":"INFO","debug":false,"environment":"development"}
+{"timestamp":"2025-08-16T17:19:19.166960Z","level":"INFO","logger":"app.bootstrap","message":"Starting DEX Sniper Pro","module":"bootstrap","environment":"development","service_mode":"free","debug":false}
+{"timestamp":"2025-08-16T17:19:19.167958Z","level":"INFO","logger":"app.storage.database","message":"Initializing database at: data\\app.db","module":"database"}
+{"timestamp":"2025-08-16T17:19:19.182231Z","level":"INFO","logger":"app.storage.database","message":"Database initialized successfully with WAL mode","module":"database"}
+{"timestamp":"2025-08-16T17:19:19.188210Z","level":"INFO","logger":"app.storage.database","message":"Database tables created successfully","module":"database"}
+{"timestamp":"2025-08-16T17:19:19.188210Z","level":"INFO","logger":"app.bootstrap","message":"Database initialized successfully with WAL mode","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:19:19.401364Z","level":"INFO","logger":"app.chains.rpc_pool","message":"RPC Pool initialized with providers for chains: ['ethereum', 'bsc', 'polygon', 'solana']","module":"rpc_pool","chains":["ethereum","bsc","polygon","solana"]}
+{"timestamp":"2025-08-16T17:19:19.401364Z","level":"INFO","logger":"app.chains.evm_client","message":"EVM Client initialized","module":"evm_client"}
+{"timestamp":"2025-08-16T17:19:19.579605Z","level":"INFO","logger":"app.chains.solana_client","message":"Solana Client initialized","module":"solana_client"}
+{"timestamp":"2025-08-16T17:19:19.579605Z","level":"INFO","logger":"app.bootstrap","message":"RPC pools and chain clients initialized successfully","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:23:00.342676Z","level":"INFO","logger":"app.bootstrap","message":"Shutting down DEX Sniper Pro","module":"bootstrap","uptime_sec":221.175716}
+{"timestamp":"2025-08-16T17:23:00.346733Z","level":"INFO","logger":"app.chains.rpc_pool","message":"RPC Pool closed","module":"rpc_pool"}
+{"timestamp":"2025-08-16T17:23:00.346873Z","level":"ERROR","logger":"app.bootstrap","message":"Error closing RPC connections: 'EvmClient' object has no attribute 'close'","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:23:00.346873Z","level":"INFO","logger":"app.storage.database","message":"Database connections closed","module":"database"}
+{"timestamp":"2025-08-16T17:23:00.346873Z","level":"INFO","logger":"app.bootstrap","message":"Database connections closed","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:23:02.137234Z","level":"INFO","logger":"root","message":"Logging system initialized","module":"logging","log_level":"INFO","debug":false,"environment":"development"}
+{"timestamp":"2025-08-16T17:23:02.138245Z","level":"INFO","logger":"app.bootstrap","message":"Starting DEX Sniper Pro","module":"bootstrap","environment":"development","service_mode":"free","debug":false}
+{"timestamp":"2025-08-16T17:23:02.138274Z","level":"INFO","logger":"app.storage.database","message":"Initializing database at: data\\app.db","module":"database"}
+{"timestamp":"2025-08-16T17:23:02.150932Z","level":"INFO","logger":"app.storage.database","message":"Database initialized successfully with WAL mode","module":"database"}
+{"timestamp":"2025-08-16T17:23:02.157363Z","level":"INFO","logger":"app.storage.database","message":"Database tables created successfully","module":"database"}
+{"timestamp":"2025-08-16T17:23:02.157363Z","level":"INFO","logger":"app.bootstrap","message":"Database initialized successfully with WAL mode","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:23:02.370009Z","level":"INFO","logger":"app.chains.rpc_pool","message":"RPC Pool initialized with providers for chains: ['ethereum', 'bsc', 'polygon', 'solana']","module":"rpc_pool","chains":["ethereum","bsc","polygon","solana"]}
+{"timestamp":"2025-08-16T17:23:02.370009Z","level":"INFO","logger":"app.chains.evm_client","message":"EVM Client initialized","module":"evm_client"}
+{"timestamp":"2025-08-16T17:23:02.547060Z","level":"INFO","logger":"app.chains.solana_client","message":"Solana Client initialized","module":"solana_client"}
+{"timestamp":"2025-08-16T17:23:02.547060Z","level":"INFO","logger":"app.bootstrap","message":"RPC pools and chain clients initialized successfully","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:23:48.544860Z","level":"INFO","logger":"app.bootstrap","message":"Shutting down DEX Sniper Pro","module":"bootstrap","uptime_sec":46.407626}
+{"timestamp":"2025-08-16T17:23:48.549292Z","level":"INFO","logger":"app.chains.rpc_pool","message":"RPC Pool closed","module":"rpc_pool"}
+{"timestamp":"2025-08-16T17:23:48.549292Z","level":"ERROR","logger":"app.bootstrap","message":"Error closing RPC connections: 'EvmClient' object has no attribute 'close'","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:23:48.550304Z","level":"INFO","logger":"app.storage.database","message":"Database connections closed","module":"database"}
+{"timestamp":"2025-08-16T17:23:48.550304Z","level":"INFO","logger":"app.bootstrap","message":"Database connections closed","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:23:50.377373Z","level":"INFO","logger":"root","message":"Logging system initialized","module":"logging","log_level":"INFO","debug":false,"environment":"development"}
+{"timestamp":"2025-08-16T17:23:50.378406Z","level":"INFO","logger":"app.bootstrap","message":"Starting DEX Sniper Pro","module":"bootstrap","environment":"development","service_mode":"free","debug":false}
+{"timestamp":"2025-08-16T17:23:50.378406Z","level":"INFO","logger":"app.storage.database","message":"Initializing database at: data\\app.db","module":"database"}
+{"timestamp":"2025-08-16T17:23:50.393176Z","level":"INFO","logger":"app.storage.database","message":"Database initialized successfully with WAL mode","module":"database"}
+{"timestamp":"2025-08-16T17:23:50.398577Z","level":"INFO","logger":"app.storage.database","message":"Database tables created successfully","module":"database"}
+{"timestamp":"2025-08-16T17:23:50.398577Z","level":"INFO","logger":"app.bootstrap","message":"Database initialized successfully with WAL mode","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:23:50.605074Z","level":"INFO","logger":"app.chains.rpc_pool","message":"RPC Pool initialized with providers for chains: ['ethereum', 'bsc', 'polygon', 'solana']","module":"rpc_pool","chains":["ethereum","bsc","polygon","solana"]}
+{"timestamp":"2025-08-16T17:23:50.605074Z","level":"INFO","logger":"app.chains.evm_client","message":"EVM Client initialized","module":"evm_client"}
+{"timestamp":"2025-08-16T17:23:50.782322Z","level":"INFO","logger":"app.chains.solana_client","message":"Solana Client initialized","module":"solana_client"}
+{"timestamp":"2025-08-16T17:23:50.782322Z","level":"INFO","logger":"app.bootstrap","message":"RPC pools and chain clients initialized successfully","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:27:45.850928Z","level":"INFO","logger":"app.bootstrap","message":"Shutting down DEX Sniper Pro","module":"bootstrap","uptime_sec":235.473555}
+{"timestamp":"2025-08-16T17:27:45.855256Z","level":"INFO","logger":"app.chains.rpc_pool","message":"RPC Pool closed","module":"rpc_pool"}
+{"timestamp":"2025-08-16T17:27:45.855256Z","level":"ERROR","logger":"app.bootstrap","message":"Error closing RPC connections: 'EvmClient' object has no attribute 'close'","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:27:45.856303Z","level":"INFO","logger":"app.storage.database","message":"Database connections closed","module":"database"}
+{"timestamp":"2025-08-16T17:27:45.856303Z","level":"INFO","logger":"app.bootstrap","message":"Database connections closed","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:27:47.832972Z","level":"INFO","logger":"root","message":"Logging system initialized","module":"logging","log_level":"INFO","debug":false,"environment":"development"}
+{"timestamp":"2025-08-16T17:27:47.834027Z","level":"INFO","logger":"app.bootstrap","message":"Starting DEX Sniper Pro","module":"bootstrap","environment":"development","service_mode":"free","debug":false}
+{"timestamp":"2025-08-16T17:27:47.834027Z","level":"INFO","logger":"app.storage.database","message":"Initializing database at: data\\app.db","module":"database"}
+{"timestamp":"2025-08-16T17:27:47.855988Z","level":"INFO","logger":"app.storage.database","message":"Database initialized successfully with WAL mode","module":"database"}
+{"timestamp":"2025-08-16T17:27:47.863291Z","level":"INFO","logger":"app.storage.database","message":"Database tables created successfully","module":"database"}
+{"timestamp":"2025-08-16T17:27:47.863291Z","level":"INFO","logger":"app.bootstrap","message":"Database initialized successfully with WAL mode","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:27:48.072219Z","level":"INFO","logger":"app.chains.rpc_pool","message":"RPC Pool initialized with providers for chains: ['ethereum', 'bsc', 'polygon', 'solana']","module":"rpc_pool","chains":["ethereum","bsc","polygon","solana"]}
+{"timestamp":"2025-08-16T17:27:48.072219Z","level":"INFO","logger":"app.chains.evm_client","message":"EVM Client initialized","module":"evm_client"}
+{"timestamp":"2025-08-16T17:27:48.251029Z","level":"INFO","logger":"app.chains.solana_client","message":"Solana Client initialized","module":"solana_client"}
+{"timestamp":"2025-08-16T17:27:48.251555Z","level":"INFO","logger":"app.bootstrap","message":"RPC pools and chain clients initialized successfully","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:27:50.416996Z","level":"INFO","logger":"app.bootstrap","message":"Shutting down DEX Sniper Pro","module":"bootstrap","uptime_sec":2.583517}
+{"timestamp":"2025-08-16T17:27:50.420313Z","level":"INFO","logger":"app.chains.rpc_pool","message":"RPC Pool closed","module":"rpc_pool"}
+{"timestamp":"2025-08-16T17:27:50.420313Z","level":"ERROR","logger":"app.bootstrap","message":"Error closing RPC connections: 'EvmClient' object has no attribute 'close'","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:27:50.421523Z","level":"INFO","logger":"app.storage.database","message":"Database connections closed","module":"database"}
+{"timestamp":"2025-08-16T17:27:50.421523Z","level":"INFO","logger":"app.bootstrap","message":"Database connections closed","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:27:52.273533Z","level":"INFO","logger":"root","message":"Logging system initialized","module":"logging","log_level":"INFO","debug":false,"environment":"development"}
+{"timestamp":"2025-08-16T17:27:52.273533Z","level":"INFO","logger":"app.bootstrap","message":"Starting DEX Sniper Pro","module":"bootstrap","environment":"development","service_mode":"free","debug":false}
+{"timestamp":"2025-08-16T17:27:52.273533Z","level":"INFO","logger":"app.storage.database","message":"Initializing database at: data\\app.db","module":"database"}
+{"timestamp":"2025-08-16T17:27:52.289183Z","level":"INFO","logger":"app.storage.database","message":"Database initialized successfully with WAL mode","module":"database"}
+{"timestamp":"2025-08-16T17:27:52.296023Z","level":"INFO","logger":"app.storage.database","message":"Database tables created successfully","module":"database"}
+{"timestamp":"2025-08-16T17:27:52.296023Z","level":"INFO","logger":"app.bootstrap","message":"Database initialized successfully with WAL mode","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:27:52.506710Z","level":"INFO","logger":"app.chains.rpc_pool","message":"RPC Pool initialized with providers for chains: ['ethereum', 'bsc', 'polygon', 'solana']","module":"rpc_pool","chains":["ethereum","bsc","polygon","solana"]}
+{"timestamp":"2025-08-16T17:27:52.507245Z","level":"INFO","logger":"app.chains.evm_client","message":"EVM Client initialized","module":"evm_client"}
+{"timestamp":"2025-08-16T17:27:52.686506Z","level":"INFO","logger":"app.chains.solana_client","message":"Solana Client initialized","module":"solana_client"}
+{"timestamp":"2025-08-16T17:27:52.686506Z","level":"INFO","logger":"app.bootstrap","message":"RPC pools and chain clients initialized successfully","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:31:45.376492Z","level":"INFO","logger":"app.bootstrap","message":"Shutting down DEX Sniper Pro","module":"bootstrap","uptime_sec":233.102505}
+{"timestamp":"2025-08-16T17:31:45.384705Z","level":"INFO","logger":"app.chains.rpc_pool","message":"RPC Pool closed","module":"rpc_pool"}
+{"timestamp":"2025-08-16T17:31:45.384705Z","level":"ERROR","logger":"app.bootstrap","message":"Error closing RPC connections: 'EvmClient' object has no attribute 'close'","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:31:45.387488Z","level":"INFO","logger":"app.storage.database","message":"Database connections closed","module":"database"}
+{"timestamp":"2025-08-16T17:31:45.387488Z","level":"INFO","logger":"app.bootstrap","message":"Database connections closed","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:31:47.154841Z","level":"INFO","logger":"root","message":"Logging system initialized","module":"logging","log_level":"INFO","debug":false,"environment":"development"}
+{"timestamp":"2025-08-16T17:31:47.154841Z","level":"INFO","logger":"app.bootstrap","message":"Starting DEX Sniper Pro","module":"bootstrap","environment":"development","service_mode":"free","debug":false}
+{"timestamp":"2025-08-16T17:31:47.154841Z","level":"INFO","logger":"app.storage.database","message":"Initializing database at: data\\app.db","module":"database"}
+{"timestamp":"2025-08-16T17:31:47.169494Z","level":"INFO","logger":"app.storage.database","message":"Database initialized successfully with WAL mode","module":"database"}
+{"timestamp":"2025-08-16T17:31:47.174363Z","level":"INFO","logger":"app.storage.database","message":"Database tables created successfully","module":"database"}
+{"timestamp":"2025-08-16T17:31:47.174363Z","level":"INFO","logger":"app.bootstrap","message":"Database initialized successfully with WAL mode","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:31:47.384365Z","level":"INFO","logger":"app.chains.rpc_pool","message":"RPC Pool initialized with providers for chains: ['ethereum', 'bsc', 'polygon', 'solana']","module":"rpc_pool","chains":["ethereum","bsc","polygon","solana"]}
+{"timestamp":"2025-08-16T17:31:47.384365Z","level":"INFO","logger":"app.chains.evm_client","message":"EVM Client initialized","module":"evm_client"}
+{"timestamp":"2025-08-16T17:31:47.562565Z","level":"INFO","logger":"app.chains.solana_client","message":"Solana Client initialized","module":"solana_client"}
+{"timestamp":"2025-08-16T17:31:47.562565Z","level":"INFO","logger":"app.bootstrap","message":"RPC pools and chain clients initialized successfully","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:32:57.578754Z","level":"INFO","logger":"app.bootstrap","message":"Shutting down DEX Sniper Pro","module":"bootstrap","uptime_sec":70.424911}
+{"timestamp":"2025-08-16T17:32:57.583182Z","level":"INFO","logger":"app.chains.rpc_pool","message":"RPC Pool closed","module":"rpc_pool"}
+{"timestamp":"2025-08-16T17:32:57.583182Z","level":"ERROR","logger":"app.bootstrap","message":"Error closing RPC connections: 'EvmClient' object has no attribute 'close'","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:32:57.584101Z","level":"INFO","logger":"app.storage.database","message":"Database connections closed","module":"database"}
+{"timestamp":"2025-08-16T17:32:57.584101Z","level":"INFO","logger":"app.bootstrap","message":"Database connections closed","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:32:59.345037Z","level":"INFO","logger":"root","message":"Logging system initialized","module":"logging","log_level":"INFO","debug":false,"environment":"development"}
+{"timestamp":"2025-08-16T17:32:59.345589Z","level":"INFO","logger":"app.bootstrap","message":"Starting DEX Sniper Pro","module":"bootstrap","environment":"development","service_mode":"free","debug":false}
+{"timestamp":"2025-08-16T17:32:59.345589Z","level":"INFO","logger":"app.storage.database","message":"Initializing database at: data\\app.db","module":"database"}
+{"timestamp":"2025-08-16T17:32:59.359711Z","level":"INFO","logger":"app.storage.database","message":"Database initialized successfully with WAL mode","module":"database"}
+{"timestamp":"2025-08-16T17:32:59.364685Z","level":"INFO","logger":"app.storage.database","message":"Database tables created successfully","module":"database"}
+{"timestamp":"2025-08-16T17:32:59.364685Z","level":"INFO","logger":"app.bootstrap","message":"Database initialized successfully with WAL mode","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:32:59.571533Z","level":"INFO","logger":"app.chains.rpc_pool","message":"RPC Pool initialized with providers for chains: ['ethereum', 'bsc', 'polygon', 'solana']","module":"rpc_pool","chains":["ethereum","bsc","polygon","solana"]}
+{"timestamp":"2025-08-16T17:32:59.571533Z","level":"INFO","logger":"app.chains.evm_client","message":"EVM Client initialized","module":"evm_client"}
+{"timestamp":"2025-08-16T17:32:59.752651Z","level":"INFO","logger":"app.chains.solana_client","message":"Solana Client initialized","module":"solana_client"}
+{"timestamp":"2025-08-16T17:32:59.752651Z","level":"INFO","logger":"app.bootstrap","message":"RPC pools and chain clients initialized successfully","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:34:00.421678Z","level":"INFO","logger":"app.bootstrap","message":"Shutting down DEX Sniper Pro","module":"bootstrap","uptime_sec":61.076641}
+{"timestamp":"2025-08-16T17:34:00.426043Z","level":"INFO","logger":"app.chains.rpc_pool","message":"RPC Pool closed","module":"rpc_pool"}
+{"timestamp":"2025-08-16T17:34:00.426043Z","level":"ERROR","logger":"app.bootstrap","message":"Error closing RPC connections: 'EvmClient' object has no attribute 'close'","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:34:00.426118Z","level":"INFO","logger":"app.storage.database","message":"Database connections closed","module":"database"}
+{"timestamp":"2025-08-16T17:34:00.426118Z","level":"INFO","logger":"app.bootstrap","message":"Database connections closed","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:34:02.187957Z","level":"INFO","logger":"root","message":"Logging system initialized","module":"logging","log_level":"INFO","debug":false,"environment":"development"}
+{"timestamp":"2025-08-16T17:34:02.187996Z","level":"INFO","logger":"app.bootstrap","message":"Starting DEX Sniper Pro","module":"bootstrap","environment":"development","service_mode":"free","debug":false}
+{"timestamp":"2025-08-16T17:34:02.187996Z","level":"INFO","logger":"app.storage.database","message":"Initializing database at: data\\app.db","module":"database"}
+{"timestamp":"2025-08-16T17:34:02.202559Z","level":"INFO","logger":"app.storage.database","message":"Database initialized successfully with WAL mode","module":"database"}
+{"timestamp":"2025-08-16T17:34:02.208848Z","level":"INFO","logger":"app.storage.database","message":"Database tables created successfully","module":"database"}
+{"timestamp":"2025-08-16T17:34:02.208848Z","level":"INFO","logger":"app.bootstrap","message":"Database initialized successfully with WAL mode","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:34:02.416224Z","level":"INFO","logger":"app.chains.rpc_pool","message":"RPC Pool initialized with providers for chains: ['ethereum', 'bsc', 'polygon', 'solana']","module":"rpc_pool","chains":["ethereum","bsc","polygon","solana"]}
+{"timestamp":"2025-08-16T17:34:02.416224Z","level":"INFO","logger":"app.chains.evm_client","message":"EVM Client initialized","module":"evm_client"}
+{"timestamp":"2025-08-16T17:34:02.598646Z","level":"INFO","logger":"app.chains.solana_client","message":"Solana Client initialized","module":"solana_client"}
+{"timestamp":"2025-08-16T17:34:02.598646Z","level":"INFO","logger":"app.bootstrap","message":"RPC pools and chain clients initialized successfully","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:35:03.734728Z","level":"INFO","logger":"app.bootstrap","message":"Shutting down DEX Sniper Pro","module":"bootstrap","uptime_sec":61.547487}
+{"timestamp":"2025-08-16T17:35:03.738272Z","level":"INFO","logger":"app.chains.rpc_pool","message":"RPC Pool closed","module":"rpc_pool"}
+{"timestamp":"2025-08-16T17:35:03.738272Z","level":"ERROR","logger":"app.bootstrap","message":"Error closing RPC connections: 'EvmClient' object has no attribute 'close'","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:35:03.738861Z","level":"INFO","logger":"app.storage.database","message":"Database connections closed","module":"database"}
+{"timestamp":"2025-08-16T17:35:03.738861Z","level":"INFO","logger":"app.bootstrap","message":"Database connections closed","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:35:05.782576Z","level":"INFO","logger":"root","message":"Logging system initialized","module":"logging","log_level":"INFO","debug":false,"environment":"development"}
+{"timestamp":"2025-08-16T17:35:05.783620Z","level":"INFO","logger":"app.bootstrap","message":"Starting DEX Sniper Pro","module":"bootstrap","environment":"development","service_mode":"free","debug":false}
+{"timestamp":"2025-08-16T17:35:05.783620Z","level":"INFO","logger":"app.storage.database","message":"Initializing database at: data\\app.db","module":"database"}
+{"timestamp":"2025-08-16T17:35:05.799085Z","level":"INFO","logger":"app.storage.database","message":"Database initialized successfully with WAL mode","module":"database"}
+{"timestamp":"2025-08-16T17:35:05.805792Z","level":"INFO","logger":"app.storage.database","message":"Database tables created successfully","module":"database"}
+{"timestamp":"2025-08-16T17:35:05.805792Z","level":"INFO","logger":"app.bootstrap","message":"Database initialized successfully with WAL mode","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:35:06.017373Z","level":"INFO","logger":"app.chains.rpc_pool","message":"RPC Pool initialized with providers for chains: ['ethereum', 'bsc', 'polygon', 'solana']","module":"rpc_pool","chains":["ethereum","bsc","polygon","solana"]}
+{"timestamp":"2025-08-16T17:35:06.017373Z","level":"INFO","logger":"app.chains.evm_client","message":"EVM Client initialized","module":"evm_client"}
+{"timestamp":"2025-08-16T17:35:06.197964Z","level":"INFO","logger":"app.chains.solana_client","message":"Solana Client initialized","module":"solana_client"}
+{"timestamp":"2025-08-16T17:35:06.197964Z","level":"INFO","logger":"app.bootstrap","message":"RPC pools and chain clients initialized successfully","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:35:35.118813Z","level":"INFO","logger":"app.bootstrap","message":"Shutting down DEX Sniper Pro","module":"bootstrap","uptime_sec":29.335658}
+{"timestamp":"2025-08-16T17:35:35.122311Z","level":"INFO","logger":"app.chains.rpc_pool","message":"RPC Pool closed","module":"rpc_pool"}
+{"timestamp":"2025-08-16T17:35:35.122311Z","level":"ERROR","logger":"app.bootstrap","message":"Error closing RPC connections: 'EvmClient' object has no attribute 'close'","module":"bootstrap"}
+{"timestamp":"2025-08-16T17:35:35.122311Z","level":"INFO","logger":"app.storage.database","message":"Database connections closed","module":"database"}
+{"timestamp":"2025-08-16T17:35:35.122311Z","level":"INFO","logger":"app.bootstrap","message":"Database connections closed","module":"bootstrap"}
