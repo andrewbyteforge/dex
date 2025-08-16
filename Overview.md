@@ -1,4 +1,3 @@
-Awesome — I’ve updated the overview to (a) bake in the competitive defaults you asked me to choose, (b) reflect fixes to gaps/problems we identified, (c) keep a clean folder structure, and (d) explicitly require type annotations + docstrings everywhere. Paste-ready, no code.
 ________________________________________
 DEX Sniper Pro — Multi-Chain Sniping & Autotrading (Single-User)
 Goal: A professional-grade, single-user trading app that competes with paid tools for discovering and trading brand-new tokens across multiple networks — with strong safety rails, transparent logging, and a polished Bootstrap 5 dashboard.
