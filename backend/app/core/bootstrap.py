@@ -17,6 +17,7 @@ from .exceptions import exception_handler
 from .logging import cleanup_logging, setup_logging
 from .middleware import RequestTracingMiddleware, SecurityHeadersMiddleware
 from .settings import settings
+from ..storage.database import init_database, close_database
 
 
 # --- Windows event loop compatibility (use selector loop for some libs) ---
@@ -72,7 +73,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         },
     )
 
-    # TODO: Initialize database connection (Phase 1.2)
+    # Initialize database connection (Phase 1.2)
+    try:
+        await init_database()
+        log.info("Database initialized successfully with WAL mode")
+    except Exception as e:
+        log.error(f"Failed to initialize database: {e}")
+        raise
+
     # TODO: Initialize RPC pools (Phase 2.1)
     # TODO: Start background tasks / schedulers (later phases)
 
@@ -85,7 +93,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             extra={"uptime_sec": (datetime.now(timezone.utc) - app.state.started_at).total_seconds()},
         )
 
-        # TODO: Cleanup database connections
+        # Cleanup database connections
+        try:
+            await close_database()
+            log.info("Database connections closed")
+        except Exception as e:
+            log.error(f"Error closing database: {e}")
+
         # TODO: Cleanup RPC connections
         # TODO: Stop background tasks
 
@@ -141,6 +155,11 @@ def create_app() -> FastAPI:
     # Health
     from ..api.health import router as health_router  # local import to avoid early imports
     api_router.include_router(health_router, tags=["Health"])
+
+    # Database testing routes (development only)
+    if settings.environment == "development":
+        from ..api.database import router as database_router
+        api_router.include_router(database_router, tags=["Database"])
 
     app.include_router(api_router)
 
