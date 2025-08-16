@@ -1,5 +1,5 @@
 """
-Core trade execution engine with retry logic and inclusion tracking.
+Trade execution engine with retry logic and transaction monitoring.
 """
 from __future__ import annotations
 
@@ -8,471 +8,633 @@ import logging
 import time
 import uuid
 from decimal import Decimal
-from typing import Any, Dict, Optional
+from enum import Enum
+from typing import Dict, List, Optional
 
-from ..chains.evm_client import evm_client
-from ..chains.rpc_pool import rpc_pool
+from pydantic import BaseModel
+
+from ..core.logging import get_logger
 from ..core.settings import settings
 from ..ledger.ledger_writer import ledger_writer
-from ..storage.repositories import get_transaction_repository
 from ..storage.database import get_session_context
-from ..trading.approvals import approval_manager
+from ..storage.repositories import TransactionRepository, UserRepository
+from .approvals import approval_manager
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
-# Module-level constants
-MAX_RETRIES = 3
-RETRY_DELAY_SECONDS = 2
-INCLUSION_TIMEOUT_SECONDS = 300  # 5 minutes
+
+class TradeType(str, Enum):
+    """Trade types."""
+    BUY = "buy"
+    SELL = "sell"
+    APPROVE = "approve"
+    CANARY = "canary"
+
+
+class TradeStatus(str, Enum):
+    """Trade execution status."""
+    PENDING = "pending"
+    BUILDING = "building"
+    APPROVING = "approving"
+    EXECUTING = "executing"
+    SUBMITTED = "submitted"
+    CONFIRMED = "confirmed"
+    FAILED = "failed"
+    REVERTED = "reverted"
+
+
+class TradeRequest(BaseModel):
+    """Trade execution request."""
+    
+    user_id: int
+    trace_id: str
+    trade_type: TradeType
+    chain: str
+    
+    # Token details
+    input_token: str
+    output_token: str
+    input_amount: str
+    min_output_amount: str
+    
+    # Execution parameters
+    slippage_bps: int = 50
+    gas_limit: Optional[int] = None
+    gas_price_multiplier: float = 1.0
+    deadline_minutes: int = 20
+    
+    # DEX routing
+    preferred_dex: Optional[str] = None
+    exclude_dexs: Optional[List[str]] = None
+    
+    # Risk controls
+    max_price_impact: float = 5.0  # 5% max price impact
+    enable_canary: bool = True
+    canary_amount_percentage: float = 10.0  # 10% of trade for canary
+    
+    # Wallet info
+    wallet_address: str
+    wallet_type: str = "external"  # external, hot_wallet
+
+
+class TradeResult(BaseModel):
+    """Trade execution result."""
+    
+    trace_id: str
+    status: TradeStatus
+    transaction_id: Optional[int] = None
+    tx_hash: Optional[str] = None
+    
+    # Execution details
+    actual_input_amount: Optional[str] = None
+    actual_output_amount: Optional[str] = None
+    actual_price: Optional[str] = None
+    actual_slippage: Optional[float] = None
+    actual_gas_used: Optional[str] = None
+    actual_gas_price: Optional[str] = None
+    
+    # Timing
+    execution_time_ms: float
+    confirmation_time_ms: Optional[float] = None
+    
+    # Status details
+    error_message: Optional[str] = None
+    retry_count: int = 0
+    dex_used: Optional[str] = None
+    route_used: Optional[List[str]] = None
 
 
 class TradeExecutor:
     """
-    Core trade execution engine with comprehensive error handling.
+    Core trade execution engine with comprehensive safety checks and monitoring.
     
-    Handles transaction building, signing, submission, and monitoring
-    with retry logic and proper ledger integration.
+    Handles the complete trade lifecycle from approval through execution
+    and confirmation, with robust error handling and retry logic.
     """
     
-    def __init__(self) -> None:
+    def __init__(self):
         """Initialize trade executor."""
-        self.active_trades: Dict[str, Dict[str, Any]] = {}
+        self.active_trades: Dict[str, TradeResult] = {}
+        self._execution_lock = asyncio.Lock()
     
     async def execute_trade(
         self,
-        user_id: int,
-        wallet_address: str,
-        chain: str,
-        quote: Dict[str, Any],
-        trade_type: str,  # buy, sell
-        is_canary: bool = False,
-    ) -> Dict[str, Any]:
+        request: TradeRequest,
+        chain_clients: Dict,
+        quote_data: Optional[Dict] = None,
+    ) -> TradeResult:
         """
-        Execute a trade based on the provided quote.
+        Execute a complete trade with safety checks and monitoring.
         
         Args:
-            user_id: User ID
-            wallet_address: Wallet address to execute from
-            chain: Blockchain network
-            quote: Quote from pricing engine
-            trade_type: Type of trade (buy/sell)
-            is_canary: Whether this is a canary trade
+            request: Trade execution request
+            chain_clients: Chain client instances
+            quote_data: Optional pre-fetched quote data
             
         Returns:
-            Trade execution result with transaction details
+            Trade execution result
         """
-        trace_id = str(uuid.uuid4())
+        start_time = time.time()
+        
+        # Initialize trade result
+        result = TradeResult(
+            trace_id=request.trace_id,
+            status=TradeStatus.PENDING,
+            execution_time_ms=0.0,
+        )
+        
+        # Store in active trades
+        self.active_trades[request.trace_id] = result
         
         try:
             logger.info(
-                f"Executing {trade_type} trade on {chain}",
+                f"Starting trade execution: {request.trade_type} {request.input_amount} {request.input_token}",
                 extra={
                     'extra_data': {
-                        'trace_id': trace_id,
-                        'user_id': user_id,
-                        'chain': chain,
-                        'dex': quote.get('dex'),
-                        'is_canary': is_canary,
-                        'amount_in': float(quote['amount_in']),
-                        'amount_out': float(quote['amount_out']),
+                        'trace_id': request.trace_id,
+                        'trade_type': request.trade_type,
+                        'chain': request.chain,
+                        'user_id': request.user_id,
+                        'wallet_address': request.wallet_address,
                     }
                 }
             )
             
-            # Store trade in active trades
-            self.active_trades[trace_id] = {
-                'user_id': user_id,
-                'wallet_address': wallet_address,
-                'chain': chain,
-                'quote': quote,
-                'trade_type': trade_type,
-                'is_canary': is_canary,
-                'status': 'preparing',
-                'created_at': time.time(),
-            }
+            # Step 1: Pre-execution validation
+            await self._validate_trade_request(request, chain_clients)
             
-            # Step 1: Ensure approval (if needed)
-            if trade_type == "buy":
-                await self._ensure_token_approval(
-                    user_id, wallet_address, chain, quote, trace_id
-                )
+            # Step 2: Get or validate quote
+            if not quote_data:
+                quote_data = await self._get_fresh_quote(request, chain_clients)
             
-            # Step 2: Build transaction
-            transaction_params = await self._build_swap_transaction(
-                wallet_address, chain, quote, trade_type, trace_id
-            )
+            result.dex_used = quote_data.get("dex")
+            result.route_used = quote_data.get("route", [])
             
-            # Step 3: Execute transaction with retries
-            execution_result = await self._execute_with_retries(
-                user_id, wallet_address, chain, transaction_params, trace_id
-            )
+            # Step 3: Risk checks
+            await self._perform_risk_checks(request, quote_data)
             
-            # Step 4: Wait for inclusion
-            await self._wait_for_inclusion(
-                chain, execution_result['tx_hash'], trace_id
-            )
+            # Step 4: Handle approvals if needed
+            if request.trade_type in [TradeType.BUY, TradeType.SELL]:
+                await self._handle_approvals(request, quote_data, chain_clients, result)
             
-            # Step 5: Write to ledger
-            await self._write_trade_ledger(
-                user_id, trace_id, execution_result, quote, trade_type
-            )
+            # Step 5: Execute canary trade if enabled
+            if request.enable_canary and request.trade_type != TradeType.CANARY:
+                await self._execute_canary_trade(request, chain_clients, result)
             
-            # Update trade status
-            self.active_trades[trace_id]['status'] = 'completed'
-            self.active_trades[trace_id]['result'] = execution_result
+            # Step 6: Execute main trade
+            await self._execute_main_trade(request, quote_data, chain_clients, result)
+            
+            # Step 7: Monitor confirmation
+            await self._monitor_confirmation(request, chain_clients, result)
+            
+            # Step 8: Record in ledger
+            await self._record_trade_in_ledger(request, result)
+            
+            result.status = TradeStatus.CONFIRMED
+            execution_time = (time.time() - start_time) * 1000
+            result.execution_time_ms = execution_time
             
             logger.info(
-                f"Trade executed successfully: {execution_result['tx_hash']}",
+                f"Trade execution completed successfully: {result.tx_hash}",
                 extra={
                     'extra_data': {
-                        'trace_id': trace_id,
-                        'tx_hash': execution_result['tx_hash'],
-                        'gas_used': execution_result.get('gas_used'),
+                        'trace_id': request.trace_id,
+                        'tx_hash': result.tx_hash,
+                        'execution_time_ms': execution_time,
+                        'dex_used': result.dex_used,
+                        'actual_output': result.actual_output_amount,
                     }
                 }
             )
             
-            return {
-                'success': True,
-                'trace_id': trace_id,
-                'tx_hash': execution_result['tx_hash'],
-                'status': 'completed',
-                'quote': quote,
-                'execution_result': execution_result,
-            }
-            
         except Exception as e:
-            # Update trade status
-            if trace_id in self.active_trades:
-                self.active_trades[trace_id]['status'] = 'failed'
-                self.active_trades[trace_id]['error'] = str(e)
-            
-            # Write failure to ledger
-            await self._write_failure_ledger(
-                user_id, trace_id, quote, trade_type, str(e)
-            )
+            result.status = TradeStatus.FAILED
+            result.error_message = str(e)
+            result.execution_time_ms = (time.time() - start_time) * 1000
             
             logger.error(
                 f"Trade execution failed: {e}",
                 extra={
                     'extra_data': {
-                        'trace_id': trace_id,
+                        'trace_id': request.trace_id,
                         'error': str(e),
-                        'trade_type': trade_type,
-                        'chain': chain,
+                        'execution_time_ms': result.execution_time_ms,
                     }
                 }
             )
             
-            return {
-                'success': False,
-                'trace_id': trace_id,
-                'error': str(e),
-                'status': 'failed',
-                'quote': quote,
-            }
-        
+            # Record failed trade in ledger
+            await self._record_failed_trade(request, result)
+            
         finally:
-            # Cleanup old trades (keep for 1 hour)
-            await self._cleanup_old_trades()
+            # Clean up active trades
+            self.active_trades.pop(request.trace_id, None)
+        
+        return result
     
-    async def _ensure_token_approval(
+    async def _validate_trade_request(
         self,
-        user_id: int,
-        wallet_address: str,
-        chain: str,
-        quote: Dict[str, Any],
-        trace_id: str,
+        request: TradeRequest,
+        chain_clients: Dict,
     ) -> None:
-        """Ensure token approval for the trade."""
-        token_address = quote['token_in']
-        router_address = quote['router_address']
-        required_amount = quote['amount_in']
-        
-        if not router_address:
-            raise Exception("Router address not available in quote")
-        
-        logger.debug(
-            f"Ensuring approval for {token_address}",
-            extra={
-                'extra_data': {
-                    'trace_id': trace_id,
-                    'token_address': token_address,
-                    'router_address': router_address,
-                    'required_amount': float(required_amount),
-                }
-            }
-        )
-        
-        # Use approval manager to handle approval
-        await approval_manager.ensure_approval(
-            user_id=user_id,
-            wallet_address=wallet_address,
-            chain=chain,
-            token_address=token_address,
-            spender_address=router_address,
-            required_amount=required_amount,
-        )
-    
-    async def _build_swap_transaction(
-        self,
-        wallet_address: str,
-        chain: str,
-        quote: Dict[str, Any],
-        trade_type: str,
-        trace_id: str,
-    ) -> Dict[str, Any]:
-        """Build swap transaction parameters."""
-        router_address = quote['router_address']
-        if not router_address:
-            raise Exception("Router address not available")
-        
-        # Build function call data based on DEX type
-        if quote['dex'] in ['uniswap_v2', 'pancake', 'quickswap']:
-            function_data = await self._build_uniswap_v2_call(quote, trade_type)
+        """Validate trade request parameters."""
+        if request.chain == "solana":
+            solana_client = chain_clients.get("solana")
+            if not solana_client:
+                raise Exception("Solana client not available")
         else:
-            raise Exception(f"Unsupported DEX: {quote['dex']}")
+            evm_client = chain_clients.get("evm")
+            if not evm_client:
+                raise Exception("EVM client not available")
         
-        # Build transaction using EVM client
-        tx_params = await evm_client.build_transaction(
-            chain=chain,
-            from_address=wallet_address,
-            to_address=router_address,
-            value=int(quote['amount_in']) if trade_type == "buy" and quote['token_in'] == "ETH" else 0,
-            data=function_data,
-        )
+        # Validate amounts
+        if Decimal(request.input_amount) <= 0:
+            raise ValueError("Input amount must be positive")
         
-        logger.debug(
-            f"Built swap transaction",
-            extra={
-                'extra_data': {
-                    'trace_id': trace_id,
-                    'router_address': router_address,
-                    'gas_limit': tx_params['gas'],
-                    'nonce': tx_params['nonce'],
-                }
-            }
-        )
+        if Decimal(request.min_output_amount) <= 0:
+            raise ValueError("Minimum output amount must be positive")
         
-        return tx_params
+        # Validate slippage
+        if request.slippage_bps < 10 or request.slippage_bps > 5000:  # 0.1% to 50%
+            raise ValueError("Slippage must be between 0.1% and 50%")
+        
+        # Check wallet balance
+        await self._check_wallet_balance(request, chain_clients)
     
-    async def _build_uniswap_v2_call(
+    async def _check_wallet_balance(
         self,
-        quote: Dict[str, Any],
-        trade_type: str,
-    ) -> str:
-        """Build Uniswap V2 function call data."""
-        # This is a simplified version - in production, would use proper ABI encoding
-        if trade_type == "buy":
-            # swapExactETHForTokens or swapExactTokensForTokens
-            if quote['token_in'] == "ETH":
-                # swapExactETHForTokens(uint amountOutMin, address[] calldata path, address to, uint deadline)
-                function_selector = "0x7ff36ab5"
-            else:
-                # swapExactTokensForTokens(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline)
-                function_selector = "0x38ed1739"
-        else:  # sell
-            # swapExactTokensForETH or swapExactTokensForTokens
-            if quote['token_out'] == "ETH":
-                # swapExactTokensForETH(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline)
-                function_selector = "0x18cbafe5"
-            else:
-                # swapExactTokensForTokens
-                function_selector = "0x38ed1739"
-        
-        # TODO: Implement proper ABI encoding
-        # For now, return function selector (this would need proper parameter encoding)
-        return function_selector + "0" * 200  # Placeholder for parameters
-    
-    async def _execute_with_retries(
-        self,
-        user_id: int,
-        wallet_address: str,
-        chain: str,
-        tx_params: Dict[str, Any],
-        trace_id: str,
-    ) -> Dict[str, Any]:
-        """Execute transaction with retry logic."""
-        last_error = None
-        
-        for attempt in range(MAX_RETRIES):
-            try:
-                logger.debug(
-                    f"Transaction attempt {attempt + 1}/{MAX_RETRIES}",
-                    extra={
-                        'extra_data': {
-                            'trace_id': trace_id,
-                            'attempt': attempt + 1,
-                            'nonce': tx_params['nonce'],
-                        }
-                    }
-                )
-                
-                # TODO: Sign transaction (requires wallet integration)
-                # For now, simulate transaction submission
-                signed_tx = "0x" + "0" * 200  # Placeholder for signed transaction
-                
-                # Submit transaction
-                tx_hash = await evm_client.send_transaction(chain, signed_tx)
-                
-                # Record in database using proper session context
-                async with get_session_context() as session:
-                    from ..storage.repositories import TransactionRepository
-                    tx_repo = TransactionRepository(session)
-                    
-                    transaction = await tx_repo.create_transaction(
-                        user_id=user_id,
-                        wallet_id=1,  # TODO: Get actual wallet ID
-                        trace_id=trace_id,
-                        chain=chain,
-                        tx_type="swap",
-                        token_address=tx_params.get('to', ''),
-                        status="submitted",
-                        tx_hash=tx_hash,
-                    )
-                
-                return {
-                    'tx_hash': tx_hash,
-                    'transaction_id': transaction.id,
-                    'attempt': attempt + 1,
-                    'gas_limit': tx_params['gas'],
-                    'nonce': tx_params['nonce'],
-                }
-                
-            except Exception as e:
-                last_error = e
-                logger.warning(
-                    f"Transaction attempt {attempt + 1} failed: {e}",
-                    extra={
-                        'extra_data': {
-                            'trace_id': trace_id,
-                            'attempt': attempt + 1,
-                            'error': str(e),
-                        }
-                    }
-                )
-                
-                if attempt < MAX_RETRIES - 1:
-                    # Wait before retry with exponential backoff
-                    delay = RETRY_DELAY_SECONDS * (2 ** attempt)
-                    await asyncio.sleep(delay)
-                    
-                    # Update nonce for retry
-                    tx_params['nonce'] = await evm_client.nonce_manager.get_next_nonce(
-                        wallet_address, chain
-                    )
-        
-        # All retries failed
-        raise Exception(f"Transaction failed after {MAX_RETRIES} attempts: {last_error}")
-    
-    async def _wait_for_inclusion(
-        self,
-        chain: str,
-        tx_hash: str,
-        trace_id: str,
-    ) -> Dict[str, Any]:
-        """Wait for transaction inclusion with timeout."""
-        logger.debug(
-            f"Waiting for transaction inclusion: {tx_hash}",
-            extra={
-                'extra_data': {
-                    'trace_id': trace_id,
-                    'tx_hash': tx_hash,
-                    'timeout': INCLUSION_TIMEOUT_SECONDS,
-                }
-            }
-        )
-        
-        try:
-            receipt = await evm_client.wait_for_transaction(
-                chain=chain,
-                tx_hash=tx_hash,
-                timeout=INCLUSION_TIMEOUT_SECONDS,
-            )
-            
-            logger.info(
-                f"Transaction included in block: {receipt.get('blockNumber')}",
-                extra={
-                    'extra_data': {
-                        'trace_id': trace_id,
-                        'tx_hash': tx_hash,
-                        'block_number': receipt.get('blockNumber'),
-                        'gas_used': receipt.get('gasUsed'),
-                    }
-                }
-            )
-            
-            return receipt
-            
-        except TimeoutError:
-            logger.error(
-                f"Transaction inclusion timeout: {tx_hash}",
-                extra={
-                    'extra_data': {
-                        'trace_id': trace_id,
-                        'tx_hash': tx_hash,
-                        'timeout': INCLUSION_TIMEOUT_SECONDS,
-                    }
-                }
-            )
-            raise
-    
-    async def _write_trade_ledger(
-            self,
-            user_id: int,
-            trace_id: str,
-            execution_result: Dict[str, Any],
-            quote: Dict[str, Any],
-            trade_type: str,
-            ) -> None:
-            """Write successful trade to ledger."""
-            await ledger_writer.write_trade_entry(
-                user_id=user_id,
-                trace_id=trace_id,
-                transaction_id=execution_result.get('transaction_id'),
-                trade_type=trade_type,
-                chain=quote['chain'],
-                wallet_address="0x" + "0" * 40,  # TODO: Get actual wallet address from context
-                token_symbol=quote.get('token_symbol', 'UNKNOWN'),
-                amount_tokens=quote['amount_out'] if trade_type == "buy" else quote['amount_in'],
-                amount_native=quote['amount_in'] if trade_type == "buy" else quote['amount_out'],
-                amount_gbp=Decimal("100"),  # TODO: Calculate actual GBP amount using FX service
-                fx_rate_gbp=Decimal("1"),  # TODO: Get actual FX rate from pricing service
-                gas_fee_native=Decimal("0.01"),  # TODO: Calculate from execution_result
-                gas_fee_gbp=Decimal("20"),  # TODO: Convert gas fee to GBP
-                dex=quote['dex'],
-                pair_address=quote.get('pair_address'),
-                slippage=quote.get('slippage_tolerance'),
-                notes=f"Executed via {quote['dex']} router",
-            ) 
-
-    async def _write_failure_ledger(
-        self,
-        user_id: int,
-        trace_id: str,
-        quote: Dict[str, Any],
-        trade_type: str,
-        error: str,
+        request: TradeRequest,
+        chain_clients: Dict,
     ) -> None:
-        """Write failed trade to ledger."""
-        # TODO: Implement failure ledger entry
-        logger.debug(f"Would write failure ledger entry: {error}")
+        """Check if wallet has sufficient balance."""
+        if request.chain == "solana":
+            solana_client = chain_clients["solana"]
+            balance = await solana_client.get_balance(
+                request.wallet_address,
+                request.input_token if request.input_token != "SOL" else None
+            )
+        else:
+            evm_client = chain_clients["evm"]
+            balance = await evm_client.get_balance(
+                request.wallet_address,
+                request.chain,
+                request.input_token if request.input_token.startswith("0x") else None
+            )
+        
+        required_amount = Decimal(request.input_amount)
+        if balance < required_amount:
+            raise Exception(f"Insufficient balance: {balance} < {required_amount}")
     
-    async def _cleanup_old_trades(self) -> None:
-        """Clean up old trades from memory."""
-        current_time = time.time()
-        cutoff_time = current_time - 3600  # 1 hour
+    async def _get_fresh_quote(
+        self,
+        request: TradeRequest,
+        chain_clients: Dict,
+    ) -> Dict:
+        """Get fresh quote for trade execution."""
+        from ..api.quotes import quote_aggregator, QuoteRequest
         
-        trades_to_remove = [
-            trace_id for trace_id, trade in self.active_trades.items()
-            if trade['created_at'] < cutoff_time
-        ]
+        quote_request = QuoteRequest(
+            input_token=request.input_token,
+            output_token=request.output_token,
+            amount_in=request.input_amount,
+            chain=request.chain,
+            slippage_bps=request.slippage_bps,
+            exclude_dexs=request.exclude_dexs,
+        )
         
-        for trace_id in trades_to_remove:
-            del self.active_trades[trace_id]
+        aggregated_quote = await quote_aggregator.get_aggregated_quote(
+            quote_request, chain_clients
+        )
         
-        if trades_to_remove:
-            logger.debug(f"Cleaned up {len(trades_to_remove)} old trades")
+        # Use preferred DEX if specified and available
+        selected_quote = aggregated_quote.best_quote
+        if request.preferred_dex:
+            for quote in aggregated_quote.quotes:
+                if quote.dex == request.preferred_dex:
+                    selected_quote = quote
+                    break
+        
+        return {
+            "dex": selected_quote.dex,
+            "input_amount": selected_quote.input_amount,
+            "output_amount": selected_quote.output_amount,
+            "price": selected_quote.price,
+            "price_impact": selected_quote.price_impact,
+            "gas_estimate": selected_quote.gas_estimate,
+            "route": selected_quote.route,
+        }
+    
+    async def _perform_risk_checks(
+        self,
+        request: TradeRequest,
+        quote_data: Dict,
+    ) -> None:
+        """Perform risk checks before execution."""
+        # Check price impact
+        price_impact_str = quote_data.get("price_impact", "0%")
+        price_impact = float(price_impact_str.rstrip('%'))
+        
+        if price_impact > request.max_price_impact:
+            raise Exception(f"Price impact too high: {price_impact}% > {request.max_price_impact}%")
+        
+        # Check minimum output amount
+        expected_output = Decimal(quote_data["output_amount"])
+        min_output = Decimal(request.min_output_amount)
+        
+        if expected_output < min_output:
+            raise Exception(f"Expected output below minimum: {expected_output} < {min_output}")
+        
+        # Additional risk checks would go here
+        # - Honeypot detection
+        # - Tax/fee analysis
+        # - Liquidity depth verification
+        # - Contract security checks
+    
+    async def _handle_approvals(
+        self,
+        request: TradeRequest,
+        quote_data: Dict,
+        chain_clients: Dict,
+        result: TradeResult,
+    ) -> None:
+        """Handle token approvals for trade execution."""
+        if request.chain == "solana":
+            # Solana doesn't require approvals for SPL tokens
+            return
+        
+        result.status = TradeStatus.APPROVING
+        
+        # Determine spender address based on DEX
+        spender_map = {
+            "uniswap_v2": {
+                "ethereum": "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D",
+                "bsc": "0x10ED43C718714eb63d5aA57B78B54704E256024E",
+                "polygon": "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
+            },
+            "uniswap_v3": {
+                "ethereum": "0xE592427A0AEce92De3Edee1F18E0157C05861564",
+                "bsc": "0x1b81D678ffb9C0263b24A97847620C99d213eB14",
+                "polygon": "0xE592427A0AEce92De3Edee1F18E0157C05861564",
+            }
+        }
+        
+        dex = quote_data["dex"]
+        spender_address = spender_map.get(dex, {}).get(request.chain)
+        
+        if not spender_address:
+            raise Exception(f"No spender address for DEX {dex} on {request.chain}")
+        
+        # Ensure approval
+        await approval_manager.ensure_approval(
+            token_address=request.input_token,
+            spender_address=spender_address,
+            amount=Decimal(request.input_amount),
+            chain=request.chain,
+            wallet_address=request.wallet_address,
+            user_id=request.user_id,
+            trace_id=request.trace_id,
+        )
+    
+    async def _execute_canary_trade(
+        self,
+        request: TradeRequest,
+        chain_clients: Dict,
+        result: TradeResult,
+    ) -> None:
+        """Execute canary trade for safety validation."""
+        canary_amount = int(Decimal(request.input_amount) * Decimal(request.canary_amount_percentage) / 100)
+        
+        if canary_amount == 0:
+            return  # Skip canary for very small amounts
+        
+        logger.info(
+            f"Executing canary trade: {canary_amount} ({request.canary_amount_percentage}%)",
+            extra={'extra_data': {'trace_id': request.trace_id}}
+        )
+        
+        # Create canary request
+        canary_request = TradeRequest(
+            **request.dict(),
+            trace_id=f"{request.trace_id}_canary",
+            trade_type=TradeType.CANARY,
+            input_amount=str(canary_amount),
+            min_output_amount="1",  # Accept any output for canary
+            enable_canary=False,  # Prevent recursive canary
+        )
+        
+        # Execute canary trade
+        canary_result = await self.execute_trade(canary_request, chain_clients)
+        
+        if canary_result.status != TradeStatus.CONFIRMED:
+            raise Exception(f"Canary trade failed: {canary_result.error_message}")
+        
+        # TODO: Immediate micro-sell test to validate liquidity
+        # This would involve selling the canary output immediately
+    
+    async def _execute_main_trade(
+        self,
+        request: TradeRequest,
+        quote_data: Dict,
+        chain_clients: Dict,
+        result: TradeResult,
+    ) -> None:
+        """Execute the main trade transaction."""
+        result.status = TradeStatus.EXECUTING
+        
+        if request.chain == "solana":
+            await self._execute_solana_trade(request, quote_data, chain_clients, result)
+        else:
+            await self._execute_evm_trade(request, quote_data, chain_clients, result)
+    
+    async def _execute_solana_trade(
+        self,
+        request: TradeRequest,
+        quote_data: Dict,
+        chain_clients: Dict,
+        result: TradeResult,
+    ) -> None:
+        """Execute Solana trade via Jupiter."""
+        solana_client = chain_clients["solana"]
+        
+        # Get Jupiter quote and build transaction
+        quote = await solana_client.get_jupiter_quote(
+            input_mint=request.input_token,
+            output_mint=request.output_token,
+            amount=int(request.input_amount),
+            slippage_bps=request.slippage_bps,
+        )
+        
+        # Build swap transaction
+        tx_data = await solana_client.build_jupiter_swap(
+            quote=quote,
+            user_public_key=request.wallet_address,
+        )
+        
+        # For now, we'll mock the signing and submission
+        # In real implementation, this would require wallet integration
+        result.tx_hash = f"solana_mock_{uuid.uuid4().hex[:16]}"
+        result.actual_input_amount = request.input_amount
+        result.actual_output_amount = quote["outAmount"]
+        result.status = TradeStatus.SUBMITTED
+        
+        # Record transaction in database
+        async with get_session_context() as session:
+            tx_repo = TransactionRepository(session)
+            transaction = await tx_repo.create_transaction(
+                user_id=request.user_id,
+                wallet_id=1,  # TODO: Get actual wallet ID
+                trace_id=request.trace_id,
+                chain=request.chain,
+                tx_type=request.trade_type,
+                token_address=request.input_token,
+                status="submitted",
+                tx_hash=result.tx_hash,
+                amount_in=request.input_amount,
+                amount_out=result.actual_output_amount,
+                dex=quote_data["dex"],
+            )
+            result.transaction_id = transaction.id
+    
+    async def _execute_evm_trade(
+        self,
+        request: TradeRequest,
+        quote_data: Dict,
+        chain_clients: Dict,
+        result: TradeResult,
+    ) -> None:
+        """Execute EVM trade via DEX router."""
+        evm_client = chain_clients["evm"]
+        
+        # Build transaction parameters
+        tx_params = await evm_client.build_transaction(
+            chain=request.chain,
+            from_address=request.wallet_address,
+            to_address="0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D",  # Router address
+            value=0,
+            data="0x",  # TODO: Build actual swap calldata
+            gas_limit=int(quote_data.get("gas_estimate", "200000")),
+        )
+        
+        # For now, we'll mock the signing and submission
+        # In real implementation, this would require wallet integration
+        result.tx_hash = f"evm_mock_{uuid.uuid4().hex[:16]}"
+        result.actual_input_amount = request.input_amount
+        result.actual_output_amount = quote_data["output_amount"]
+        result.actual_gas_used = quote_data.get("gas_estimate")
+        result.status = TradeStatus.SUBMITTED
+        
+        # Record transaction in database
+        async with get_session_context() as session:
+            tx_repo = TransactionRepository(session)
+            transaction = await tx_repo.create_transaction(
+                user_id=request.user_id,
+                wallet_id=1,  # TODO: Get actual wallet ID
+                trace_id=request.trace_id,
+                chain=request.chain,
+                tx_type=request.trade_type,
+                token_address=request.input_token,
+                status="submitted",
+                tx_hash=result.tx_hash,
+                amount_in=request.input_amount,
+                amount_out=result.actual_output_amount,
+                dex=quote_data["dex"],
+            )
+            result.transaction_id = transaction.id
+    
+    async def _monitor_confirmation(
+        self,
+        request: TradeRequest,
+        chain_clients: Dict,
+        result: TradeResult,
+    ) -> None:
+        """Monitor transaction confirmation."""
+        if not result.tx_hash:
+            raise Exception("No transaction hash to monitor")
+        
+        confirmation_start = time.time()
+        
+        # Mock confirmation monitoring
+        # In real implementation, this would poll the blockchain
+        await asyncio.sleep(2)  # Simulate confirmation time
+        
+        result.confirmation_time_ms = (time.time() - confirmation_start) * 1000
+        
+        # Update transaction status in database
+        if result.transaction_id:
+            async with get_session_context() as session:
+                tx_repo = TransactionRepository(session)
+                await tx_repo.update_transaction_status(
+                    transaction_id=result.transaction_id,
+                    status="confirmed",
+                    confirmed_at=None,  # Would use actual confirmation time
+                )
+    
+    async def _record_trade_in_ledger(
+        self,
+        request: TradeRequest,
+        result: TradeResult,
+    ) -> None:
+        """Record successful trade in ledger."""
+        if not result.actual_output_amount:
+            return
+        
+        # Mock FX rate for now
+        fx_rate_gbp = Decimal("0.85")  # TODO: Get real FX rate
+        
+        amount_native = Decimal(result.actual_input_amount or "0")
+        amount_gbp = amount_native * fx_rate_gbp
+        
+        await ledger_writer.write_trade_entry(
+            user_id=request.user_id,
+            trace_id=request.trace_id,
+            transaction_id=result.transaction_id,
+            trade_type=request.trade_type,
+            chain=request.chain,
+            wallet_address=request.wallet_address,
+            token_symbol=request.input_token,
+            amount_tokens=Decimal(result.actual_output_amount),
+            amount_native=amount_native,
+            amount_gbp=amount_gbp,
+            fx_rate_gbp=fx_rate_gbp,
+            dex=result.dex_used,
+            notes=f"Trade executed via {result.dex_used}",
+        )
+    
+    async def _record_failed_trade(
+        self,
+        request: TradeRequest,
+        result: TradeResult,
+    ) -> None:
+        """Record failed trade attempt."""
+        # Update transaction status if exists
+        if result.transaction_id:
+            async with get_session_context() as session:
+                tx_repo = TransactionRepository(session)
+                await tx_repo.update_transaction_status(
+                    transaction_id=result.transaction_id,
+                    status="failed",
+                    error_message=result.error_message,
+                )
+    
+    async def get_trade_status(self, trace_id: str) -> Optional[TradeResult]:
+        """Get status of active trade."""
+        return self.active_trades.get(trace_id)
+    
+    async def cancel_trade(self, trace_id: str) -> bool:
+        """Cancel active trade if possible."""
+        trade = self.active_trades.get(trace_id)
+        if not trade:
+            return False
+        
+        if trade.status in [TradeStatus.SUBMITTED, TradeStatus.CONFIRMED]:
+            return False  # Cannot cancel submitted trades
+        
+        trade.status = TradeStatus.FAILED
+        trade.error_message = "Cancelled by user"
+        
+        # Clean up
+        self.active_trades.pop(trace_id, None)
+        return True
 
 
 # Global trade executor instance

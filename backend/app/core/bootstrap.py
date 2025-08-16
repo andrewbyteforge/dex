@@ -196,6 +196,14 @@ def create_app() -> FastAPI:
     from ..api.health import router as health_router  # local import to avoid early imports
     api_router.include_router(health_router, tags=["Health"])
 
+    # Quotes API (Phase 3.1)
+    from ..api.quotes import router as quotes_router
+    api_router.include_router(quotes_router, tags=["Quotes"])
+
+    # Trade API (Phase 3.2)
+    from ..api.trades import router as trades_router
+    api_router.include_router(trades_router, tags=["Trades"])
+
     # Database testing routes (development only)
     if settings.environment == "development":
         from ..api.database import router as database_router
