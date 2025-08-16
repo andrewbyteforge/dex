@@ -18,6 +18,9 @@ from .logging import cleanup_logging, setup_logging
 from .middleware import RequestTracingMiddleware, SecurityHeadersMiddleware
 from .settings import settings
 from ..storage.database import init_database, close_database
+from ..chains.rpc_pool import rpc_pool
+from ..chains.evm_client import evm_client
+from ..chains.solana_client import solana_client
 
 
 # --- Windows event loop compatibility (use selector loop for some libs) ---
@@ -67,9 +70,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     log.info(
         "Starting DEX Sniper Pro",
         extra={
-            "environment": app.state.environment,
-            "service_mode": app.state.service_mode,
-            "debug": settings.debug,
+            "extra_data": {
+                "environment": app.state.environment,
+                "service_mode": app.state.service_mode,
+                "debug": settings.debug,
+            }
         },
     )
 
@@ -81,8 +86,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         log.error(f"Failed to initialize database: {e}")
         raise
 
-    # TODO: Initialize RPC pools (Phase 2.1)
-    # TODO: Start background tasks / schedulers (later phases)
+    # Initialize RPC pools and chain clients (Phase 2.1)
+    try:
+        await rpc_pool.initialize()
+        await evm_client.initialize() 
+        await solana_client.initialize()
+        log.info("RPC pools and chain clients initialized successfully")
+        
+        # Store references in app state for access in endpoints
+        app.state.rpc_pool = rpc_pool
+        app.state.evm_client = evm_client
+        app.state.solana_client = solana_client
+        
+    except Exception as e:
+        log.error(f"Failed to initialize chain clients: {e}")
+        raise
+
+    # TODO: Initialize background tasks / schedulers (later phases)
 
     try:
         yield
@@ -90,8 +110,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         # --- Shutdown ---
         log.info(
             "Shutting down DEX Sniper Pro",
-            extra={"uptime_sec": (datetime.now(timezone.utc) - app.state.started_at).total_seconds()},
+            extra={
+                "extra_data": {
+                    "uptime_sec": (datetime.now(timezone.utc) - app.state.started_at).total_seconds()
+                }
+            },
         )
+
+        # Cleanup RPC connections and chain clients
+        try:
+            await rpc_pool.close()
+            await evm_client.close()
+            await solana_client.close()
+            log.info("RPC connections and chain clients closed")
+        except Exception as e:
+            log.error(f"Error closing RPC connections: {e}")
 
         # Cleanup database connections
         try:
@@ -100,7 +133,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception as e:
             log.error(f"Error closing database: {e}")
 
-        # TODO: Cleanup RPC connections
         # TODO: Stop background tasks
 
         cleanup_logging()

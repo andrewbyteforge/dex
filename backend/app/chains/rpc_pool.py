@@ -1,5 +1,5 @@
 """
-RPC Pool Manager for multi-provider blockchain connections with failover.
+Enhanced RPC Pool Manager with proper circuit breaker integration.
 """
 from __future__ import annotations
 
@@ -8,12 +8,13 @@ import logging
 import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional
 
 import httpx
-from httpx import AsyncClient, ConnectTimeout, ReadTimeout, Response
+from httpx import AsyncClient
 
 from ..core.settings import settings
+from .circuit_breaker import CircuitBreaker, CircuitState
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,7 @@ logger = logging.getLogger(__name__)
 class ProviderStatus(Enum):
     """RPC provider status."""
     HEALTHY = "healthy"
-    DEGRADED = "degraded"
+    DEGRADED = "degraded" 
     FAILED = "failed"
     CIRCUIT_OPEN = "circuit_open"
 
@@ -45,86 +46,13 @@ class ProviderMetrics:
     failed_requests: int = 0
     avg_response_time_ms: float = 0.0
     last_request_time: float = 0.0
-    consecutive_failures: int = 0
+    last_success_time: float = 0.0
     status: ProviderStatus = ProviderStatus.HEALTHY
-    circuit_breaker_until: Optional[float] = None
-
-
-class CircuitBreaker:
-    """Circuit breaker for RPC providers."""
-    
-    def __init__(
-        self,
-        failure_threshold: int = 5,
-        recovery_timeout: int = 60,
-        half_open_max_calls: int = 3,
-    ) -> None:
-        """
-        Initialize circuit breaker.
-        
-        Args:
-            failure_threshold: Number of failures to open circuit
-            recovery_timeout: Seconds to wait before trying half-open
-            half_open_max_calls: Max calls to test in half-open state
-        """
-        self.failure_threshold = failure_threshold
-        self.recovery_timeout = recovery_timeout
-        self.half_open_max_calls = half_open_max_calls
-        self.half_open_calls = 0
-    
-    def should_allow_request(self, metrics: ProviderMetrics) -> bool:
-        """
-        Check if request should be allowed based on circuit state.
-        
-        Args:
-            metrics: Provider metrics
-            
-        Returns:
-            True if request should be allowed
-        """
-        now = time.time()
-        
-        # Circuit is closed (healthy)
-        if metrics.consecutive_failures < self.failure_threshold:
-            return True
-        
-        # Circuit is open - check if we should try half-open
-        if metrics.circuit_breaker_until is None:
-            metrics.circuit_breaker_until = now + self.recovery_timeout
-            metrics.status = ProviderStatus.CIRCUIT_OPEN
-            return False
-        
-        # Still in open state
-        if now < metrics.circuit_breaker_until:
-            return False
-        
-        # Try half-open state
-        if self.half_open_calls < self.half_open_max_calls:
-            self.half_open_calls += 1
-            return True
-        
-        return False
-    
-    def record_success(self, metrics: ProviderMetrics) -> None:
-        """Record successful request."""
-        metrics.consecutive_failures = 0
-        metrics.circuit_breaker_until = None
-        metrics.status = ProviderStatus.HEALTHY
-        self.half_open_calls = 0
-    
-    def record_failure(self, metrics: ProviderMetrics) -> None:
-        """Record failed request."""
-        metrics.consecutive_failures += 1
-        
-        if metrics.consecutive_failures >= self.failure_threshold:
-            metrics.circuit_breaker_until = time.time() + self.recovery_timeout
-            metrics.status = ProviderStatus.CIRCUIT_OPEN
-            self.half_open_calls = 0
 
 
 class RpcPool:
     """
-    RPC connection pool with automatic failover and load balancing.
+    RPC connection pool with circuit breakers and automatic failover.
     
     Manages multiple RPC providers per chain with health monitoring,
     circuit breakers, and performance tracking.
@@ -154,8 +82,11 @@ class RpcPool:
         await self._setup_providers()
         
         self._initialized = True
-        logger.info("RPC Pool initialized with providers for chains: %s", 
-                   list(self.providers.keys()))
+        logger.info(
+            "RPC Pool initialized with providers for chains: %s", 
+            list(self.providers.keys()),
+            extra={'extra_data': {'chains': list(self.providers.keys())}}
+        )
     
     async def close(self) -> None:
         """Close RPC pool and cleanup resources."""
@@ -166,115 +97,60 @@ class RpcPool:
     
     async def _setup_providers(self) -> None:
         """Setup RPC providers from configuration."""
-        # Ethereum providers
-        eth_providers = []
-        if settings.ethereum_rpc_url:
-            eth_providers.append(RpcProvider(
-                name="ethereum_primary",
-                url=settings.ethereum_rpc_url,
-                chain="ethereum",
-                is_primary=True,
-            ))
-        
-        # Add default free providers as fallbacks
-        eth_providers.extend([
-            RpcProvider(
-                name="ankr_eth",
-                url="https://rpc.ankr.com/eth",
-                chain="ethereum",
-                rate_limit_per_minute=50,
-            ),
-            RpcProvider(
-                name="llamarpc_eth", 
-                url="https://eth.llamarpc.com",
-                chain="ethereum",
-                rate_limit_per_minute=30,
-            ),
-        ])
-        
-        # BSC providers
-        bsc_providers = []
-        if settings.bsc_rpc_url:
-            bsc_providers.append(RpcProvider(
-                name="bsc_primary",
-                url=settings.bsc_rpc_url,
-                chain="bsc",
-                is_primary=True,
-            ))
-        
-        bsc_providers.extend([
-            RpcProvider(
-                name="ankr_bsc",
-                url="https://rpc.ankr.com/bsc",
-                chain="bsc",
-                rate_limit_per_minute=50,
-            ),
-            RpcProvider(
-                name="bsc_official",
-                url="https://bsc-dataseed.binance.org/",
-                chain="bsc",
-                rate_limit_per_minute=30,
-            ),
-        ])
-        
-        # Polygon providers
-        polygon_providers = []
-        if settings.polygon_rpc_url:
-            polygon_providers.append(RpcProvider(
-                name="polygon_primary",
-                url=settings.polygon_rpc_url,
-                chain="polygon",
-                is_primary=True,
-            ))
-        
-        polygon_providers.extend([
-            RpcProvider(
-                name="ankr_polygon",
-                url="https://rpc.ankr.com/polygon",
-                chain="polygon",
-                rate_limit_per_minute=50,
-            ),
-            RpcProvider(
-                name="polygon_official",
-                url="https://polygon-rpc.com",
-                chain="polygon",
-                rate_limit_per_minute=30,
-            ),
-        ])
-        
-        # Solana providers
-        solana_providers = []
-        if settings.solana_rpc_url:
-            solana_providers.append(RpcProvider(
-                name="solana_primary",
-                url=settings.solana_rpc_url,
-                chain="solana",
-                is_primary=True,
-            ))
-        
-        solana_providers.extend([
-            RpcProvider(
-                name="ankr_solana",
-                url="https://rpc.ankr.com/solana",
-                chain="solana",
-                rate_limit_per_minute=50,
-            ),
-        ])
-        
-        # Register all providers
-        self.providers = {
-            "ethereum": eth_providers,
-            "bsc": bsc_providers,
-            "polygon": polygon_providers,
-            "solana": solana_providers,
+        # Initialize providers for each chain with fallbacks
+        chain_configs = {
+            "ethereum": [
+                ("ethereum_primary", settings.ethereum_rpc_url, True),
+                ("ankr_eth", "https://rpc.ankr.com/eth", False),
+                ("llamarpc_eth", "https://eth.llamarpc.com", False),
+            ],
+            "bsc": [
+                ("bsc_primary", settings.bsc_rpc_url, True),
+                ("ankr_bsc", "https://rpc.ankr.com/bsc", False),
+                ("bsc_official", "https://bsc-dataseed.binance.org/", False),
+            ],
+            "polygon": [
+                ("polygon_primary", settings.polygon_rpc_url, True),
+                ("ankr_polygon", "https://rpc.ankr.com/polygon", False),
+                ("polygon_official", "https://polygon-rpc.com", False),
+            ],
+            "solana": [
+                ("solana_primary", settings.solana_rpc_url, True),
+                ("ankr_solana", "https://rpc.ankr.com/solana", False),
+            ],
         }
         
-        # Initialize metrics and circuit breakers
-        for chain, providers in self.providers.items():
-            for provider in providers:
-                provider_key = f"{chain}:{provider.name}"
+        for chain, configs in chain_configs.items():
+            chain_providers = []
+            
+            for name, url, is_primary in configs:
+                # Skip if primary URL not configured
+                if is_primary and not url:
+                    continue
+                    
+                # Skip if secondary URL not available
+                if not is_primary and not url:
+                    continue
+                
+                provider = RpcProvider(
+                    name=name,
+                    url=url,
+                    chain=chain,
+                    is_primary=is_primary,
+                    rate_limit_per_minute=50 if not is_primary else 100,
+                )
+                chain_providers.append(provider)
+                
+                # Initialize metrics and circuit breaker
+                provider_key = f"{chain}:{name}"
                 self.metrics[provider_key] = ProviderMetrics()
-                self.circuit_breakers[provider_key] = CircuitBreaker()
+                self.circuit_breakers[provider_key] = CircuitBreaker(
+                    failure_threshold=3,
+                    cooldown_seconds=30.0
+                )
+            
+            if chain_providers:
+                self.providers[chain] = chain_providers
     
     async def get_best_provider(self, chain: str) -> Optional[RpcProvider]:
         """
@@ -291,10 +167,13 @@ class RpcPool:
         
         providers = self.providers.get(chain, [])
         if not providers:
-            logger.warning(f"No providers configured for chain: {chain}")
+            logger.warning(
+                f"No providers configured for chain: {chain}",
+                extra={'extra_data': {'chain': chain}}
+            )
             return None
         
-        # Sort providers by preference (primary first, then by performance)
+        # Sort providers by preference and availability
         available_providers = []
         
         for provider in providers:
@@ -302,33 +181,67 @@ class RpcPool:
             metrics = self.metrics[provider_key]
             circuit_breaker = self.circuit_breakers[provider_key]
             
-            # Check circuit breaker
-            if not circuit_breaker.should_allow_request(metrics):
+            # Check circuit breaker state
+            if not circuit_breaker.can_call():
+                logger.debug(
+                    f"Provider {provider.name} circuit breaker open",
+                    extra={'extra_data': {
+                        'provider': provider.name,
+                        'chain': chain,
+                        'circuit_state': circuit_breaker.state()
+                    }}
+                )
                 continue
             
-            # Calculate score (lower is better)
-            score = 0
-            if provider.is_primary:
-                score -= 1000  # Primary gets huge boost
-            
-            # Factor in performance
-            if metrics.successful_requests > 0:
-                success_rate = metrics.successful_requests / metrics.total_requests
-                score += (1 - success_rate) * 100
-                score += metrics.avg_response_time_ms / 10
-            
+            # Calculate provider score (lower is better)
+            score = self._calculate_provider_score(provider, metrics)
             available_providers.append((score, provider))
         
         if not available_providers:
-            logger.error(f"No healthy providers available for chain: {chain}")
+            logger.error(
+                f"No healthy providers available for chain: {chain}",
+                extra={'extra_data': {'chain': chain}}
+            )
             return None
         
         # Return best provider (lowest score)
         available_providers.sort(key=lambda x: x[0])
         best_provider = available_providers[0][1]
         
-        logger.debug(f"Selected provider {best_provider.name} for {chain}")
+        logger.debug(
+            f"Selected provider {best_provider.name} for {chain}",
+            extra={'extra_data': {
+                'provider': best_provider.name,
+                'chain': chain,
+                'is_primary': best_provider.is_primary
+            }}
+        )
         return best_provider
+    
+    def _calculate_provider_score(self, provider: RpcProvider, metrics: ProviderMetrics) -> float:
+        """Calculate provider priority score (lower is better)."""
+        score = 0.0
+        
+        # Primary providers get huge boost
+        if provider.is_primary:
+            score -= 1000.0
+        
+        # Factor in success rate
+        if metrics.total_requests > 0:
+            success_rate = metrics.successful_requests / metrics.total_requests
+            score += (1 - success_rate) * 100
+        
+        # Factor in average response time
+        score += metrics.avg_response_time_ms / 10
+        
+        # Penalize providers that haven't been successful recently
+        now = time.time()
+        if metrics.last_success_time > 0:
+            time_since_success = now - metrics.last_success_time
+            if time_since_success > 300:  # 5 minutes
+                score += time_since_success / 60  # Add minutes as penalty
+        
+        return score
     
     async def make_request(
         self,
@@ -336,15 +249,17 @@ class RpcPool:
         method: str,
         params: List = None,
         provider: Optional[RpcProvider] = None,
-    ) -> Dict:
+        max_retries: int = 2,
+    ) -> any:
         """
-        Make RPC request with automatic failover.
+        Make RPC request with automatic failover and circuit breaker protection.
         
         Args:
             chain: Blockchain name
             method: RPC method name
             params: RPC parameters
             provider: Specific provider to use (optional)
+            max_retries: Maximum retry attempts across providers
             
         Returns:
             RPC response data
@@ -358,17 +273,92 @@ class RpcPool:
         if params is None:
             params = []
         
-        # Get provider if not specified
-        if provider is None:
-            provider = await self.get_best_provider(chain)
+        last_exception = None
+        attempt = 0
+        
+        while attempt <= max_retries:
+            # Get provider if not specified
             if provider is None:
-                raise Exception(f"No providers available for chain: {chain}")
+                provider = await self.get_best_provider(chain)
+                if provider is None:
+                    raise Exception(f"No providers available for chain: {chain}")
+            
+            provider_key = f"{chain}:{provider.name}"
+            metrics = self.metrics[provider_key]
+            circuit_breaker = self.circuit_breakers[provider_key]
+            
+            # Check circuit breaker
+            if not circuit_breaker.can_call():
+                logger.warning(
+                    f"Circuit breaker open for {provider.name}",
+                    extra={'extra_data': {
+                        'provider': provider.name,
+                        'chain': chain,
+                        'attempt': attempt
+                    }}
+                )
+                provider = None  # Force selection of different provider
+                attempt += 1
+                continue
+            
+            # Record probe attempt if in half-open state
+            if circuit_breaker.state() == CircuitState.HALF_OPEN:
+                circuit_breaker.record_probe_attempt()
+            
+            try:
+                result = await self._execute_request(provider, method, params)
+                
+                # Record success
+                self._record_success(provider_key, metrics, circuit_breaker)
+                
+                logger.debug(
+                    f"RPC request successful: {method} on {provider.name}",
+                    extra={'extra_data': {
+                        'method': method,
+                        'provider': provider.name,
+                        'chain': chain,
+                        'attempt': attempt
+                    }}
+                )
+                
+                return result
+                
+            except Exception as e:
+                last_exception = e
+                
+                # Record failure
+                self._record_failure(provider_key, metrics, circuit_breaker, str(e))
+                
+                logger.warning(
+                    f"RPC request failed: {method} on {provider.name}: {e}",
+                    extra={'extra_data': {
+                        'method': method,
+                        'provider': provider.name,
+                        'chain': chain,
+                        'attempt': attempt,
+                        'error': str(e)
+                    }}
+                )
+                
+                # Try different provider on next attempt
+                provider = None
+                attempt += 1
         
-        provider_key = f"{chain}:{provider.name}"
-        metrics = self.metrics[provider_key]
-        circuit_breaker = self.circuit_breakers[provider_key]
+        # All attempts failed
+        logger.error(
+            f"All RPC providers failed for {chain} after {max_retries + 1} attempts",
+            extra={'extra_data': {
+                'method': method,
+                'chain': chain,
+                'max_retries': max_retries,
+                'last_error': str(last_exception) if last_exception else 'Unknown'
+            }}
+        )
         
-        # Prepare JSON-RPC request
+        raise Exception(f"All providers failed for {chain}: {last_exception}")
+    
+    async def _execute_request(self, provider: RpcProvider, method: str, params: List) -> any:
+        """Execute single RPC request to provider."""
         payload = {
             "jsonrpc": "2.0",
             "method": method,
@@ -378,82 +368,82 @@ class RpcPool:
         
         start_time = time.time()
         
-        try:
-            response = await self.client.post(
-                provider.url,
-                json=payload,
-                timeout=provider.timeout_seconds,
-            )
-            
-            end_time = time.time()
-            response_time_ms = (end_time - start_time) * 1000
-            
-            # Update metrics
-            await self._update_metrics(
-                provider_key, True, response_time_ms, metrics, circuit_breaker
-            )
-            
-            # Parse response
-            if response.status_code != 200:
-                raise Exception(f"HTTP {response.status_code}: {response.text}")
-            
-            data = response.json()
-            
-            if "error" in data:
-                raise Exception(f"RPC Error: {data['error']}")
-            
-            return data.get("result")
+        response = await self.client.post(
+            provider.url,
+            json=payload,
+            timeout=provider.timeout_seconds,
+        )
         
-        except Exception as e:
-            end_time = time.time()
-            response_time_ms = (end_time - start_time) * 1000
-            
-            # Update metrics
-            await self._update_metrics(
-                provider_key, False, response_time_ms, metrics, circuit_breaker
-            )
-            
-            logger.warning(f"RPC request failed for {provider.name}: {e}")
-            
-            # Try fallback provider if available
-            fallback_provider = await self.get_best_provider(chain)
-            if fallback_provider and fallback_provider.name != provider.name:
-                logger.info(f"Retrying with fallback provider: {fallback_provider.name}")
-                return await self.make_request(chain, method, params, fallback_provider)
-            
-            raise
-    
-    async def _update_metrics(
-        self,
-        provider_key: str,
-        success: bool,
-        response_time_ms: float,
-        metrics: ProviderMetrics,
-        circuit_breaker: CircuitBreaker,
-    ) -> None:
-        """Update provider metrics."""
-        metrics.total_requests += 1
-        metrics.last_request_time = time.time()
+        response_time_ms = (time.time() - start_time) * 1000
         
-        if success:
-            metrics.successful_requests += 1
-            circuit_breaker.record_success(metrics)
-            
-            # Update average response time
-            if metrics.avg_response_time_ms == 0:
-                metrics.avg_response_time_ms = response_time_ms
-            else:
-                # Exponential moving average
-                metrics.avg_response_time_ms = (
-                    0.8 * metrics.avg_response_time_ms + 0.2 * response_time_ms
-                )
+        if response.status_code != 200:
+            raise Exception(f"HTTP {response.status_code}: {response.text}")
+        
+        data = response.json()
+        
+        if "error" in data:
+            raise Exception(f"RPC Error: {data['error']}")
+        
+        # Update response time metric
+        provider_key = f"{provider.chain}:{provider.name}"
+        metrics = self.metrics[provider_key]
+        if metrics.avg_response_time_ms == 0:
+            metrics.avg_response_time_ms = response_time_ms
         else:
-            metrics.failed_requests += 1
-            circuit_breaker.record_failure(metrics)
+            # Exponential moving average
+            metrics.avg_response_time_ms = (
+                0.8 * metrics.avg_response_time_ms + 0.2 * response_time_ms
+            )
+        
+        return data.get("result")
     
-    async def get_health_status(self) -> Dict[str, Dict]:
+    def _record_success(
+        self, 
+        provider_key: str, 
+        metrics: ProviderMetrics, 
+        circuit_breaker: CircuitBreaker
+    ) -> None:
+        """Record successful request."""
+        now = time.time()
+        
+        metrics.total_requests += 1
+        metrics.successful_requests += 1
+        metrics.last_request_time = now
+        metrics.last_success_time = now
+        metrics.status = ProviderStatus.HEALTHY
+        
+        circuit_breaker.on_success()
+    
+    def _record_failure(
+        self, 
+        provider_key: str, 
+        metrics: ProviderMetrics, 
+        circuit_breaker: CircuitBreaker,
+        error_message: str
+    ) -> None:
+        """Record failed request."""
+        now = time.time()
+        
+        metrics.total_requests += 1
+        metrics.failed_requests += 1
+        metrics.last_request_time = now
+        
+        # Update status based on circuit breaker state
+        circuit_breaker.on_failure()
+        
+        if circuit_breaker.state() == CircuitState.OPEN:
+            metrics.status = ProviderStatus.CIRCUIT_OPEN
+        else:
+            # Calculate failure rate for status
+            failure_rate = metrics.failed_requests / metrics.total_requests
+            if failure_rate > 0.5:
+                metrics.status = ProviderStatus.FAILED
+            elif failure_rate > 0.2:
+                metrics.status = ProviderStatus.DEGRADED
+    
+    async def get_health_status(self) -> Dict[str, any]:
         """
-        Get health status of all providers.
+        Get comprehensive health status of all providers.
         
         Returns:
             Health status by chain and provider
@@ -464,24 +454,36 @@ class RpcPool:
         health_status = {}
         
         for chain, providers in self.providers.items():
-            health_status[chain] = {}
+            chain_health = {}
             
             for provider in providers:
                 provider_key = f"{chain}:{provider.name}"
                 metrics = self.metrics.get(provider_key, ProviderMetrics())
+                circuit_breaker = self.circuit_breakers.get(provider_key)
                 
                 success_rate = 0.0
                 if metrics.total_requests > 0:
                     success_rate = metrics.successful_requests / metrics.total_requests
                 
-                health_status[chain][provider.name] = {
+                provider_health = {
                     "status": metrics.status.value,
+                    "circuit_state": circuit_breaker.state().value if circuit_breaker else "unknown",
                     "total_requests": metrics.total_requests,
                     "success_rate": round(success_rate, 3),
                     "avg_response_time_ms": round(metrics.avg_response_time_ms, 2),
-                    "consecutive_failures": metrics.consecutive_failures,
                     "is_primary": provider.is_primary,
+                    "last_success_ago_seconds": (
+                        round(time.time() - metrics.last_success_time) 
+                        if metrics.last_success_time > 0 else None
+                    ),
                 }
+                
+                if circuit_breaker:
+                    provider_health.update(circuit_breaker.snapshot())
+                
+                chain_health[provider.name] = provider_health
+            
+            health_status[chain] = chain_health
         
         return health_status
 

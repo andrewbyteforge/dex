@@ -390,3 +390,38 @@
 {"timestamp":"2025-08-16T16:11:17.507201Z","level":"INFO","logger":"app.storage.database","message":"Database initialized successfully with WAL mode","module":"database"}
 {"timestamp":"2025-08-16T16:11:17.512441Z","level":"INFO","logger":"app.storage.database","message":"Database tables created successfully","module":"database"}
 {"timestamp":"2025-08-16T16:11:17.512441Z","level":"INFO","logger":"app.bootstrap","message":"Database initialized successfully with WAL mode","module":"bootstrap"}
+{"timestamp":"2025-08-16T16:15:01.904152Z","level":"INFO","logger":"app.bootstrap","message":"Shutting down DEX Sniper Pro","module":"bootstrap"}
+{"timestamp":"2025-08-16T16:15:01.905207Z","level":"INFO","logger":"app.storage.database","message":"Database connections closed","module":"database"}
+{"timestamp":"2025-08-16T16:15:01.905207Z","level":"INFO","logger":"app.bootstrap","message":"Database connections closed","module":"bootstrap"}
+{"timestamp":"2025-08-16T16:15:02.983252Z","level":"INFO","logger":"root","message":"Logging system initialized","module":"logging","log_level":"INFO","debug":false,"environment":"development"}
+{"timestamp":"2025-08-16T16:15:02.983252Z","level":"INFO","logger":"app.bootstrap","message":"Starting DEX Sniper Pro","module":"bootstrap"}
+{"timestamp":"2025-08-16T16:15:02.983252Z","level":"INFO","logger":"app.storage.database","message":"Initializing database at: data\\app.db","module":"database"}
+{"timestamp":"2025-08-16T16:15:02.996435Z","level":"INFO","logger":"app.storage.database","message":"Database initialized successfully with WAL mode","module":"database"}
+{"timestamp":"2025-08-16T16:15:03.001568Z","level":"INFO","logger":"app.storage.database","message":"Database tables created successfully","module":"database"}
+{"timestamp":"2025-08-16T16:15:03.001568Z","level":"INFO","logger":"app.bootstrap","message":"Database initialized successfully with WAL mode","module":"bootstrap"}
+{"timestamp":"2025-08-16T16:39:36.951214Z","level":"INFO","logger":"app.core.middleware","message":"Request started: GET /docs","module":"middleware","trace_id":"01c85536-91ac-435c-b93e-652c7d2b386f","method":"GET","path":"/docs","query_params":"","client_ip":"127.0.0.1","user_agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:141.0) Gecko/20100101 Firefox/141.0"}
+{"timestamp":"2025-08-16T16:39:36.951214Z","level":"INFO","logger":"app.core.middleware","message":"Request completed: GET /docs","module":"middleware","trace_id":"01c85536-91ac-435c-b93e-652c7d2b386f","status_code":200,"process_time_ms":1.06,"response_size":0}
+{"timestamp":"2025-08-16T16:39:37.162755Z","level":"INFO","logger":"app.core.middleware","message":"Request started: GET /openapi.json","module":"middleware","trace_id":"fdff7231-81ce-496c-a016-a71ca61b60bd","method":"GET","path":"/openapi.json","query_params":"","client_ip":"127.0.0.1","user_agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:141.0) Gecko/20100101 Firefox/141.0"}
+{"timestamp":"2025-08-16T16:39:37.170086Z","level":"INFO","logger":"app.core.middleware","message":"Request completed: GET /openapi.json","module":"middleware","trace_id":"fdff7231-81ce-496c-a016-a71ca61b60bd","status_code":200,"process_time_ms":7.38,"response_size":0}
+{"timestamp":"2025-08-16T16:39:43.177266Z","level":"INFO","logger":"app.core.middleware","message":"Request started: GET /","module":"middleware","trace_id":"87b289ee-a89f-4f3e-8b0e-5502dda464f7","method":"GET","path":"/","query_params":"","client_ip":"127.0.0.1","user_agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:141.0) Gecko/20100101 Firefox/141.0"}
+{"timestamp":"2025-08-16T16:39:43.177266Z","level":"INFO","logger":"app.core.middleware","message":"Request completed: GET /","module":"middleware","trace_id":"87b289ee-a89f-4f3e-8b0e-5502dda464f7","status_code":200,"process_time_ms":1.11,"response_size":0}
+{"timestamp":"2025-08-16T16:39:43.196694Z","level":"INFO","logger":"app.core.middleware","message":"Request started: GET /favicon.ico","module":"middleware","trace_id":"1a1a4484-c0b7-4d5e-99fc-4d6207ee5317","method":"GET","path":"/favicon.ico","query_params":"","client_ip":"127.0.0.1","user_agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:141.0) Gecko/20100101 Firefox/141.0"}
+{"timestamp":"2025-08-16T16:39:43.196694Z","level":"INFO","logger":"app.core.middleware","message":"Request completed: GET /favicon.ico","module":"middleware","trace_id":"1a1a4484-c0b7-4d5e-99fc-4d6207ee5317","status_code":404,"process_time_ms":0.0,"response_size":0}
+{"timestamp":"2025-08-16T16:47:24.312323Z","level":"INFO","logger":"app.bootstrap","message":"Shutting down DEX Sniper Pro","module":"bootstrap"}
+{"timestamp":"2025-08-16T16:47:24.313835Z","level":"INFO","logger":"app.storage.database","message":"Database connections closed","module":"database"}
+{"timestamp":"2025-08-16T16:47:24.313835Z","level":"INFO","logger":"app.bootstrap","message":"Database connections closed","module":"bootstrap"}
+{"timestamp":"2025-08-16T16:53:10.611588Z","level":"INFO","logger":"root","message":"Logging system initialized","module":"logging","log_level":"INFO","debug":false,"environment":"development"}
+{"timestamp":"2025-08-16T16:53:10.611588Z","level":"INFO","logger":"app.bootstrap","message":"Starting DEX Sniper Pro","module":"bootstrap","environment":"development","service_mode":"free","debug":false}
+{"timestamp":"2025-08-16T16:53:10.611588Z","level":"INFO","logger":"app.storage.database","message":"Initializing database at: data\\app.db","module":"database"}
+{"timestamp":"2025-08-16T16:53:10.627101Z","level":"INFO","logger":"app.storage.database","message":"Database initialized successfully with WAL mode","module":"database"}
+{"timestamp":"2025-08-16T16:53:10.633087Z","level":"INFO","logger":"app.storage.database","message":"Database tables created successfully","module":"database"}
+{"timestamp":"2025-08-16T16:53:10.633087Z","level":"INFO","logger":"app.bootstrap","message":"Database initialized successfully with WAL mode","module":"bootstrap"}
+{"timestamp":"2025-08-16T16:53:10.841880Z","level":"INFO","logger":"app.chains.rpc_pool","message":"RPC Pool initialized with providers for chains: ['ethereum', 'bsc', 'polygon', 'solana']","module":"rpc_pool","chains":["ethereum","bsc","polygon","solana"]}
+{"timestamp":"2025-08-16T16:53:10.841880Z","level":"INFO","logger":"app.chains.evm_client","message":"EVM Client initialized","module":"evm_client"}
+{"timestamp":"2025-08-16T16:53:11.020890Z","level":"INFO","logger":"app.chains.solana_client","message":"Solana Client initialized","module":"solana_client"}
+{"timestamp":"2025-08-16T16:53:11.021898Z","level":"INFO","logger":"app.bootstrap","message":"RPC pools and chain clients initialized successfully","module":"bootstrap"}
+{"timestamp":"2025-08-16T16:53:15.863024Z","level":"INFO","logger":"app.bootstrap","message":"Shutting down DEX Sniper Pro","module":"bootstrap","uptime_sec":5.250245}
+{"timestamp":"2025-08-16T16:53:15.877734Z","level":"INFO","logger":"app.chains.rpc_pool","message":"RPC Pool closed","module":"rpc_pool"}
+{"timestamp":"2025-08-16T16:53:15.877734Z","level":"ERROR","logger":"app.bootstrap","message":"Error closing RPC connections: 'EvmClient' object has no attribute 'close'","module":"bootstrap"}
+{"timestamp":"2025-08-16T16:53:15.880371Z","level":"INFO","logger":"app.storage.database","message":"Database connections closed","module":"database"}
+{"timestamp":"2025-08-16T16:53:15.880371Z","level":"INFO","logger":"app.bootstrap","message":"Database connections closed","module":"bootstrap"}
