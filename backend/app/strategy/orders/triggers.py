@@ -10,12 +10,15 @@ from __future__ import annotations
 import asyncio
 import logging
 from decimal import Decimal
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, TYPE_CHECKING
 from datetime import datetime, timezone
 
 from backend.app.storage.models import AdvancedOrder, OrderStatus, OrderType, Position
 from backend.app.storage.repos import AdvancedOrderRepository, PositionRepository
-from backend.app.trading.executor import TradeExecutor
+
+# Use TYPE_CHECKING to avoid circular imports
+if TYPE_CHECKING:
+    from backend.app.trading.protocols import TradeExecutorProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +47,7 @@ class OrderTriggerMonitor:
         self,
         order_repo: AdvancedOrderRepository,
         position_repo: PositionRepository,
-        trade_executor: TradeExecutor,
+        trade_executor: TradeExecutorProtocol,
         check_interval: float = 1.0,
     ) -> None:
         """

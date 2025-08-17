@@ -1,7 +1,9 @@
 """
 DEX Sniper Pro - Main Application.
-"""
 
+Professional DEX trading and automation platform with centralized API routing.
+"""
+import asyncio
 import logging
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,21 +28,28 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Import working APIs with CORRECTED prefixes
+# Use centralized API router that includes all endpoints
 try:
-    from app.api.presets_working import router as presets_router
-    app.include_router(presets_router, prefix="/api/v1")  # presets_router has "/presets" so = "/api/v1/presets"
-    logger.info("✅ Working Presets API registered")
+    from app.api import api_router
+    app.include_router(api_router)
+    logger.info("✅ Centralized API router registered")
 except ImportError as e:
-    logger.warning(f"⚠️  Working Presets API failed: {e}")
+    logger.error(f"❌ Failed to load centralized API router: {e}")
+    
+    # Fallback to individual routers if centralized fails
+    try:
+        from app.api.presets_working import router as presets_router
+        app.include_router(presets_router, prefix="/api/v1")
+        logger.info("✅ Working Presets API registered")
+    except ImportError as e:
+        logger.warning(f"⚠️  Working Presets API failed: {e}")
 
-try:
-    from app.api.autotrade import router as autotrade_router
-    # Find out what prefix autotrade router actually has
-    app.include_router(autotrade_router, prefix="/api/v1")  
-    logger.info("✅ Autotrade API registered")
-except ImportError as e:
-    logger.warning(f"⚠️  Autotrade API failed: {e}")
+    try:
+        from app.api.autotrade import router as autotrade_router
+        app.include_router(autotrade_router, prefix="/api/v1")
+        logger.info("✅ Autotrade API registered")
+    except ImportError as e:
+        logger.warning(f"⚠️  Autotrade API failed: {e}")
 
 @app.get("/")
 async def root():
@@ -54,6 +63,7 @@ async def root():
             "docs": "/docs",
             "presets": "/api/v1/presets/",
             "autotrade": "/api/v1/autotrade/",
+            "trades": "/api/v1/trades/",
             "websocket": "/ws/autotrade"
         }
     }
@@ -68,7 +78,8 @@ async def health_check():
         "version": "1.0.0",
         "apis": {
             "presets": "available",
-            "autotrade": "available"
+            "autotrade": "available",
+            "trades": "available"
         }
     }
 

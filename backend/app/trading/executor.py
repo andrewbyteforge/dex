@@ -10,9 +10,9 @@ import uuid
 from decimal import Decimal
 from enum import Enum
 from typing import Dict, List, Optional, Tuple
-
+from .protocols import TradeExecutorProtocol
 from pydantic import BaseModel, Field
-
+from .protocols import TradeExecutorProtocol
 from ..core.logging import get_logger
 from ..core.settings import settings
 from .nonce_manager import NonceManager
@@ -102,7 +102,7 @@ class TradeRequest(BaseModel):
     gas_price_gwei: Optional[str] = Field(default=None, description="Custom gas price in Gwei")
 
 
-class TradeExecutor:
+class TradeExecutor(TradeExecutorProtocol):
     """Core trade execution engine."""
     
     def __init__(
@@ -115,16 +115,18 @@ class TradeExecutor:
         """
         Initialize trade executor.
         
-        Args:
-            nonce_manager: Nonce management service
-            canary_validator: Canary trade validation
-            transaction_repo: Transaction database repository
-            ledger_writer: Ledger writing service
+        Parameters:
+            nonce_manager: Manages transaction nonces per chain
+            canary_validator: Validates trades with small test amounts
+            transaction_repo: Repository for transaction storage
+            ledger_writer: Service for trade ledger recording
         """
         self.nonce_manager = nonce_manager
         self.canary_validator = canary_validator
         self.transaction_repo = transaction_repo
         self.ledger_writer = ledger_writer
+        
+        logger.info("TradeExecutor initialized with all dependencies")
         
         # Active trades tracking
         self.active_trades: Dict[str, TradeResult] = {}
