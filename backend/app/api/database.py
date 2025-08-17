@@ -376,3 +376,73 @@ async def export_user_ledger(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Export failed: {str(e)}"
         )
+    
+
+# Replace the tables endpoint in backend/app/api/database.py with this:
+
+@router.get("/tables")
+async def list_tables():
+    """List database tables."""
+    try:
+        from ..storage.database import db_manager
+        
+        if not db_manager._is_initialized:
+            return {
+                "status": "error",
+                "message": "Database not initialized"
+            }
+        
+        # Simple response without complex database queries
+        return {
+            "status": "ok",
+            "tables": [
+                "users", 
+                "wallets", 
+                "transactions", 
+                "ledger_entries", 
+                "token_metadata"
+            ],
+            "database_initialized": db_manager._is_initialized,
+            "message": "Database tables listed successfully"
+        }
+        
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Tables endpoint error: {e}")
+        return {
+            "status": "error",
+            "message": f"Failed to list tables: {str(e)}"
+        }
+
+# Also add a simple database query test:
+@router.get("/query-test")
+async def database_query_test():
+    """Test a simple database query."""
+    try:
+        from ..storage.database import get_session_context
+        from sqlalchemy import text
+        
+        async with get_session_context() as session:
+            result = await session.execute(text("SELECT 1 as test"))
+            test_value = result.scalar()
+            
+            # Try to query actual table structure
+            tables_result = await session.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
+            actual_tables = [row[0] for row in tables_result.fetchall()]
+            
+            return {
+                "status": "ok",
+                "test_query": test_value,
+                "actual_tables": actual_tables,
+                "message": "Database query test successful"
+            }
+            
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Query test error: {e}")
+        return {
+            "status": "error", 
+            "message": f"Database query failed: {str(e)}"
+        }

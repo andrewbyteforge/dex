@@ -156,16 +156,24 @@ def create_app() -> FastAPI:
     # Exceptions
     app.add_exception_handler(Exception, exception_handler)
 
-    # Routers (v1) - MINIMAL VERSION
+    # Routers (v1) - TESTING WITH QUOTES
     api_router = APIRouter(prefix="/api/v1")
 
-    # Health ONLY for testing
+    # Health API
     try:
         from ..api.health import router as health_router
         api_router.include_router(health_router, tags=["Health"])
         logging.getLogger("app.bootstrap").info("Health API loaded successfully")
     except Exception as e:
         logging.getLogger("app.bootstrap").error(f"Failed to load health API: {e}")
+
+    # Quotes API (Phase 3.1) - TESTING
+    try:
+        from ..api.quotes import router as quotes_router
+        api_router.include_router(quotes_router, tags=["Quotes"])
+        logging.getLogger("app.bootstrap").info("Quotes API loaded successfully")
+    except Exception as e:
+        logging.getLogger("app.bootstrap").warning(f"Quotes API not available: {e}")
 
     # Database testing routes (development only)
     if settings.environment == "development":
