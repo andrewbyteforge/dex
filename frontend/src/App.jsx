@@ -1,25 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { Container, Row, Col, Navbar, Nav, Card, Alert, Toast, ToastContainer } from 'react-bootstrap';
+import { Container, Row, Col, Navbar, Nav, Card, Alert, Badge } from 'react-bootstrap';
 import { Activity, TrendingUp, Settings, BarChart3 } from 'lucide-react';
-import 'bootstrap/dist/css/bootstrap.min.css';
-
-import TradePanel from './components/TradePanel';
-import WalletConnect from './components/WalletConnect';
 
 function App() {
-  // Application state
-  const [walletAddress, setWalletAddress] = useState(null);
-  const [walletType, setWalletType] = useState(null);
-  const [selectedChain, setSelectedChain] = useState('ethereum');
-  const [activeTab, setActiveTab] = useState('trade');
   const [systemHealth, setSystemHealth] = useState(null);
-  const [recentTrades, setRecentTrades] = useState([]);
-  const [notifications, setNotifications] = useState([]);
+  const [activeTab, setActiveTab] = useState('trade');
 
   // Check system health on component mount
   useEffect(() => {
     checkSystemHealth();
-    const healthInterval = setInterval(checkSystemHealth, 30000); // Check every 30 seconds
+    const healthInterval = setInterval(checkSystemHealth, 30000);
     return () => clearInterval(healthInterval);
   }, []);
 
@@ -36,267 +26,210 @@ function App() {
     }
   };
 
-  const handleWalletConnect = (address, type) => {
-    setWalletAddress(address);
-    setWalletType(type);
-    addNotification(`Connected to ${type}`, 'success');
-  };
-
-  const handleWalletDisconnect = () => {
-    setWalletAddress(null);
-    setWalletType(null);
-    addNotification('Wallet disconnected', 'info');
-  };
-
-  const handleChainChange = (chain) => {
-    setSelectedChain(chain);
-    addNotification(`Switched to ${chain.toUpperCase()}`, 'info');
-  };
-
-  const handleTradeComplete = (tradeResult) => {
-    setRecentTrades(prev => [tradeResult, ...prev.slice(0, 9)]); // Keep last 10 trades
-    addNotification(
-      `Trade completed: ${tradeResult.tx_hash?.substring(0, 16)}...`,
-      tradeResult.status === 'confirmed' ? 'success' : 'danger'
-    );
-  };
-
-  const addNotification = (message, variant = 'info') => {
-    const id = Date.now();
-    setNotifications(prev => [...prev, { id, message, variant }]);
+  const getHealthBadge = () => {
+    if (!systemHealth) return <Badge bg="secondary">Loading...</Badge>;
     
-    // Auto-remove after 5 seconds
-    setTimeout(() => {
-      setNotifications(prev => prev.filter(n => n.id !== id));
-    }, 5000);
-  };
-
-  const removeNotification = (id) => {
-    setNotifications(prev => prev.filter(n => n.id !== id));
-  };
-
-  const getHealthVariant = (status) => {
-    switch (status) {
-      case 'OK': return 'success';
-      case 'DEGRADED': return 'warning';
-      case 'ERROR': return 'danger';
-      default: return 'secondary';
+    switch (systemHealth.status) {
+      case 'OK':
+        return <Badge bg="success">Online</Badge>;
+      case 'DEGRADED':
+        return <Badge bg="warning">Degraded</Badge>;
+      default:
+        return <Badge bg="danger">Error</Badge>;
     }
   };
 
   return (
-    <div className="min-vh-100 bg-light">
+    <div className="App">
       {/* Navigation Bar */}
-      <Navbar bg="dark" variant="dark" expand="lg" className="shadow-sm">
+      <Navbar bg="dark" variant="dark" expand="lg" className="mb-4">
         <Container>
-          <Navbar.Brand href="#" className="fw-bold">
-            <TrendingUp size={24} className="me-2" />
+          <Navbar.Brand href="#home">
+            <TrendingUp className="me-2" size={24} />
             DEX Sniper Pro
           </Navbar.Brand>
-          
-          <Navbar.Toggle />
-          <Navbar.Collapse>
+          <Navbar.Toggle aria-controls="basic-navbar-nav" />
+          <Navbar.Collapse id="basic-navbar-nav">
             <Nav className="me-auto">
               <Nav.Link 
-                active={activeTab === 'trade'} 
+                href="#trade" 
+                active={activeTab === 'trade'}
                 onClick={() => setActiveTab('trade')}
               >
-                <Activity size={16} className="me-1" />
                 Trade
               </Nav.Link>
               <Nav.Link 
-                active={activeTab === 'portfolio'} 
+                href="#portfolio" 
+                active={activeTab === 'portfolio'}
                 onClick={() => setActiveTab('portfolio')}
               >
-                <BarChart3 size={16} className="me-1" />
                 Portfolio
               </Nav.Link>
               <Nav.Link 
-                active={activeTab === 'settings'} 
+                href="#settings" 
+                active={activeTab === 'settings'}
                 onClick={() => setActiveTab('settings')}
               >
-                <Settings size={16} className="me-1" />
                 Settings
               </Nav.Link>
             </Nav>
-            
-            {/* System Health Indicator */}
-            {systemHealth && (
-              <div className="d-flex align-items-center me-3">
-                <div 
-                  className={`bg-${getHealthVariant(systemHealth.status)} rounded-circle me-2`}
-                  style={{ width: '8px', height: '8px' }}
-                />
-                <small className="text-light">
-                  System: {systemHealth.status}
-                </small>
-              </div>
-            )}
+            <Nav>
+              <Nav.Item className="d-flex align-items-center">
+                <Activity className="me-2" size={16} />
+                {getHealthBadge()}
+              </Nav.Item>
+            </Nav>
           </Navbar.Collapse>
         </Container>
       </Navbar>
 
-      {/* System Status Banner */}
-      {systemHealth && systemHealth.status !== 'OK' && (
-        <Alert variant={getHealthVariant(systemHealth.status)} className="mb-0 rounded-0">
-          <Container>
-            <small>
-              <strong>System Status:</strong> {systemHealth.status} - 
-              Some features may be unavailable. Check individual subsystem status for details.
-            </small>
-          </Container>
-        </Alert>
-      )}
-
       {/* Main Content */}
-      <Container className="py-4">
-        {activeTab === 'trade' && (
-          <Row>
-            <Col lg={4} className="mb-4">
-              <WalletConnect
-                selectedChain={selectedChain}
-                onChainChange={handleChainChange}
-                onWalletConnect={handleWalletConnect}
-                onWalletDisconnect={handleWalletDisconnect}
-              />
-            </Col>
-            
-            <Col lg={8}>
-              <TradePanel
-                walletAddress={walletAddress}
-                selectedChain={selectedChain}
-                onTradeComplete={handleTradeComplete}
-              />
-            </Col>
-          </Row>
-        )}
+      <Container>
+        <Row>
+          <Col>
+            {/* System Status */}
+            {systemHealth && (
+              <Alert variant={systemHealth.status === 'OK' ? 'success' : 'warning'} className="mb-4">
+                <div className="d-flex justify-content-between align-items-center">
+                  <div>
+                    <strong>System Status:</strong> {systemHealth.status}
+                    {systemHealth.subsystems && (
+                      <small className="ms-3">
+                        Database: {systemHealth.subsystems.database} | 
+                        Logging: {systemHealth.subsystems.logging}
+                      </small>
+                    )}
+                  </div>
+                  <Badge bg="info">
+                    Uptime: {Math.floor(systemHealth.uptime_seconds || 0)}s
+                  </Badge>
+                </div>
+              </Alert>
+            )}
 
-        {activeTab === 'portfolio' && (
-          <Row>
-            <Col>
-              <Card className="shadow-sm">
+            {/* Trading Interface */}
+            {activeTab === 'trade' && (
+              <Card>
+                <Card.Header>
+                  <h5 className="mb-0">DEX Trading Interface</h5>
+                </Card.Header>
+                <Card.Body>
+                  <Row>
+                    <Col md={6}>
+                      <h6>Quick Tests</h6>
+                      <div className="d-grid gap-2">
+                        <button 
+                          className="btn btn-outline-primary"
+                          onClick={() => testBackendConnection()}
+                        >
+                          Test Backend Connection
+                        </button>
+                        <button 
+                          className="btn btn-outline-success"
+                          onClick={() => testQuoteService()}
+                        >
+                          Test Quote Service
+                        </button>
+                        <button 
+                          className="btn btn-outline-info"
+                          onClick={() => testTradePreview()}
+                        >
+                          Test Trade Preview
+                        </button>
+                      </div>
+                    </Col>
+                    <Col md={6}>
+                      <h6>System Information</h6>
+                      {systemHealth && (
+                        <div>
+                          <p><strong>Version:</strong> {systemHealth.version}</p>
+                          <p><strong>Environment:</strong> {systemHealth.environment}</p>
+                          <p><strong>Platform:</strong> {systemHealth.system_info?.platform}</p>
+                          <p><strong>Python:</strong> {systemHealth.system_info?.python_version}</p>
+                        </div>
+                      )}
+                    </Col>
+                  </Row>
+                </Card.Body>
+              </Card>
+            )}
+
+            {/* Portfolio Tab */}
+            {activeTab === 'portfolio' && (
+              <Card>
                 <Card.Header>
                   <h5 className="mb-0">Portfolio Overview</h5>
                 </Card.Header>
                 <Card.Body>
+                  <p>Portfolio functionality will be implemented here.</p>
                   <Alert variant="info">
-                    Portfolio tracking coming soon! This will show your token balances, 
-                    trade history, and performance analytics across all connected chains.
+                    Backend integration working! Portfolio features coming soon.
                   </Alert>
-                  
-                  {/* Recent Trades Preview */}
-                  {recentTrades.length > 0 && (
-                    <div>
-                      <h6>Recent Trades</h6>
-                      {recentTrades.map((trade, index) => (
-                        <div key={index} className="border-bottom py-2">
-                          <div className="d-flex justify-content-between">
-                            <span>Trade #{trade.trace_id?.substring(0, 8)}</span>
-                            <span className={`badge bg-${trade.status === 'confirmed' ? 'success' : 'danger'}`}>
-                              {trade.status}
-                            </span>
-                          </div>
-                          {trade.tx_hash && (
-                            <small className="text-muted">
-                              TX: {trade.tx_hash.substring(0, 16)}...
-                            </small>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
                 </Card.Body>
               </Card>
-            </Col>
-          </Row>
-        )}
+            )}
 
-        {activeTab === 'settings' && (
-          <Row>
-            <Col lg={8}>
-              <Card className="shadow-sm">
+            {/* Settings Tab */}
+            {activeTab === 'settings' && (
+              <Card>
                 <Card.Header>
                   <h5 className="mb-0">Application Settings</h5>
                 </Card.Header>
                 <Card.Body>
+                  <p>Settings and configuration options will be available here.</p>
                   <Alert variant="info">
-                    Settings panel coming soon! This will include:
-                    <ul className="mb-0 mt-2">
-                      <li>Default slippage tolerance</li>
-                      <li>Gas price preferences</li>
-                      <li>Risk management settings</li>
-                      <li>Notification preferences</li>
-                      <li>Theme selection</li>
-                    </ul>
+                    Full-stack application successfully running!
                   </Alert>
                 </Card.Body>
               </Card>
-            </Col>
-            
-            <Col lg={4}>
-              <Card className="shadow-sm">
-                <Card.Header>
-                  <h6 className="mb-0">System Information</h6>
-                </Card.Header>
-                <Card.Body>
-                  {systemHealth && (
-                    <div>
-                      <div className="mb-2">
-                        <strong>Overall Status:</strong>{' '}
-                        <span className={`badge bg-${getHealthVariant(systemHealth.status)}`}>
-                          {systemHealth.status}
-                        </span>
-                      </div>
-                      
-                      <div className="mb-2">
-                        <strong>Version:</strong> {systemHealth.version}
-                      </div>
-                      
-                      <div className="mb-2">
-                        <strong>Environment:</strong> {systemHealth.environment}
-                      </div>
-                      
-                      <div className="mb-3">
-                        <strong>Uptime:</strong> {Math.round(systemHealth.uptime_seconds / 60)} minutes
-                      </div>
-
-                      <h6>Subsystems:</h6>
-                      {Object.entries(systemHealth.subsystems || {}).map(([subsystem, status]) => (
-                        <div key={subsystem} className="d-flex justify-content-between mb-1">
-                          <span>{subsystem}:</span>
-                          <span className={`badge bg-${getHealthVariant(status)}`}>
-                            {status}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </Card.Body>
-              </Card>
-            </Col>
-          </Row>
-        )}
+            )}
+          </Col>
+        </Row>
       </Container>
-
-      {/* Toast Notifications */}
-      <ToastContainer position="bottom-end" className="m-3">
-        {notifications.map(notification => (
-          <Toast
-            key={notification.id}
-            onClose={() => removeNotification(notification.id)}
-            show={true}
-            delay={5000}
-            autohide
-            bg={notification.variant}
-          >
-            <Toast.Body className="text-white">
-              {notification.message}
-            </Toast.Body>
-          </Toast>
-        ))}
-      </ToastContainer>
     </div>
   );
+
+  // Test functions
+  async function testBackendConnection() {
+    try {
+      const response = await fetch('/api/v1/health/');
+      const data = await response.json();
+      alert(`Backend Status: ${data.status}\nUptime: ${Math.floor(data.uptime_seconds)}s`);
+    } catch (error) {
+      alert(`Backend connection failed: ${error.message}`);
+    }
+  }
+
+  async function testQuoteService() {
+    try {
+      const response = await fetch('/api/v1/quotes/simple-test');
+      const data = await response.json();
+      alert(`Quote Service: ${data.status}\nMock Quote: ${data.mock_quote.input_token} → ${data.mock_quote.output_token}`);
+    } catch (error) {
+      alert(`Quote service failed: ${error.message}`);
+    }
+  }
+
+  async function testTradePreview() {
+    try {
+      const response = await fetch('/api/v1/trades/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          input_token: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+          output_token: "0xA0b86a33E6441e99Ec9e45C9a4F34e77D05E0E67",
+          amount_in: "1000000000000000000",
+          chain: "ethereum",
+          dex: "uniswap_v2",
+          wallet_address: "0x1234567890123456789012345678901234567890"
+        })
+      });
+      const data = await response.json();
+      alert(`Trade Preview: ${data.status ? 'Success' : 'Failed'}\nExpected Output: ${data.expected_output}\nTrace ID: ${data.trace_id}`);
+    } catch (error) {
+      alert(`Trade preview failed: ${error.message}`);
+    }
+  }
 }
 
 export default App;
