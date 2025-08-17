@@ -600,4 +600,406 @@ async def _fetch_trade_results(
                 "module": "analytics_api"
             }
         )
+        raise"""
+DEX Sniper Pro - Analytics API Router.
+
+Performance analytics endpoints for PnL tracking, metrics, and reporting.
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import datetime
+from typing import Dict, List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
+
+from backend.app.analytics.performance import (
+    PerformanceAnalytics,
+    PositionMetrics,
+    PresetPerformance,
+    TradingMetrics,
+)
+from backend.app.core.dependencies import get_transaction_repository
+from backend.app.storage.repositories import TransactionRepository
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/analytics", tags=["analytics"])
+
+
+# Response Models
+class PortfolioOverviewResponse(BaseModel):
+    """Portfolio overview response."""
+    
+    positions: List[PositionMetrics] = Field(..., description="Active positions")
+    metrics: TradingMetrics = Field(..., description="Trading metrics")
+    preset_performance: List[PresetPerformance] = Field(..., description="Preset performance")
+    last_updated: datetime = Field(..., description="Last update timestamp")
+    error: Optional[str] = Field(None, description="Error message if any")
+
+
+class PositionListResponse(BaseModel):
+    """Position list response."""
+    
+    positions: List[PositionMetrics] = Field(..., description="Position metrics")
+    total_positions: int = Field(..., description="Total number of positions")
+    active_positions: int = Field(..., description="Active positions count")
+    closed_positions: int = Field(..., description="Closed positions count")
+
+
+class MetricsResponse(BaseModel):
+    """Metrics response."""
+    
+    metrics: TradingMetrics = Field(..., description="Trading metrics")
+    period_days: int = Field(..., description="Analysis period in days")
+
+
+# Dependency Functions
+async def get_performance_analytics(
+    transaction_repo: TransactionRepository = Depends(get_transaction_repository)
+) -> PerformanceAnalytics:
+    """Get performance analytics instance."""
+    return PerformanceAnalytics(transaction_repo)
+
+
+# API Endpoints
+@router.get("/portfolio/{user_id}", response_model=PortfolioOverviewResponse)
+async def get_portfolio_overview(
+    user_id: int,
+    analytics: PerformanceAnalytics = Depends(get_performance_analytics),
+) -> PortfolioOverviewResponse:
+    """
+    Get comprehensive portfolio overview for a user.
+    
+    Args:
+        user_id: User identifier
+        analytics: Performance analytics service
+        
+    Returns:
+        Complete portfolio overview with positions and metrics
+    """
+    try:
+        overview = await analytics.get_portfolio_overview(user_id)
+        
+        return PortfolioOverviewResponse(
+            positions=overview["positions"],
+            metrics=overview["metrics"],
+            preset_performance=overview["preset_performance"],
+            last_updated=overview["last_updated"],
+            error=overview.get("error")
+        )
+        
+    except Exception as e:
+        logger.error(f"Error getting portfolio overview: {e}", extra={"user_id": user_id})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get portfolio overview: {str(e)}"
+        )
+
+
+@router.get("/positions/{user_id}", response_model=PositionListResponse)
+async def get_user_positions(
+    user_id: int,
+    include_closed: bool = Query(False, description="Include closed positions"),
+    token_address: Optional[str] = Query(None, description="Filter by token address"),
+    analytics: PerformanceAnalytics = Depends(get_performance_analytics),
+    transaction_repo: TransactionRepository = Depends(get_transaction_repository),
+) -> PositionListResponse:
+    """
+    Get user positions with filtering options.
+    
+    Args:
+        user_id: User identifier
+        include_closed: Whether to include closed positions
+        token_address: Optional token address filter
+        analytics: Performance analytics service
+        transaction_repo: Transaction repository
+        
+    Returns:
+        List of position metrics
+    """
+    try:
+        # Get all transactions to find unique tokens
+        transactions = await transaction_repo.get_user_transactions(user_id=user_id)
+        
+        if not transactions:
+            return PositionListResponse(
+                positions=[],
+                total_positions=0,
+                active_positions=0,
+                closed_positions=0
+            )
+        
+        # Get unique token addresses
+        token_addresses = list(set(tx.token_address for tx in transactions))
+        
+        # Filter by token address if specified
+        if token_address:
+            token_addresses = [addr for addr in token_addresses if addr == token_address]
+        
+        # Calculate position metrics for each token
+        positions = []
+        active_count = 0
+        closed_count = 0
+        
+        for addr in token_addresses:
+            position_metrics = await analytics.calculate_position_metrics(user_id, addr)
+            
+            if position_metrics:
+                if position_metrics.quantity > 0:
+                    active_count += 1
+                    positions.append(position_metrics)
+                else:
+                    closed_count += 1
+                    if include_closed:
+                        positions.append(position_metrics)
+        
+        # Sort by total PnL (descending)
+        positions.sort(
+            key=lambda p: p.total_pnl or p.realized_pnl or 0,
+            reverse=True
+        )
+        
+        return PositionListResponse(
+            positions=positions,
+            total_positions=len(token_addresses),
+            active_positions=active_count,
+            closed_positions=closed_count
+        )
+        
+    except Exception as e:
+        logger.error(f"Error getting user positions: {e}", extra={
+            "user_id": user_id,
+            "token_address": token_address
+        })
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get positions: {str(e)}"
+        )
+
+
+@router.get("/position/{user_id}/{token_address}", response_model=PositionMetrics)
+async def get_position_details(
+    user_id: int,
+    token_address: str,
+    current_price: Optional[float] = Query(None, description="Current market price"),
+    analytics: PerformanceAnalytics = Depends(get_performance_analytics),
+) -> PositionMetrics:
+    """
+    Get detailed metrics for a specific position.
+    
+    Args:
+        user_id: User identifier
+        token_address: Token contract address
+        current_price: Current market price for PnL calculation
+        analytics: Performance analytics service
+        
+    Returns:
+        Detailed position metrics
+    """
+    try:
+        from decimal import Decimal
+        
+        current_price_decimal = Decimal(str(current_price)) if current_price else None
+        
+        position_metrics = await analytics.calculate_position_metrics(
+            user_id, token_address, current_price_decimal
+        )
+        
+        if not position_metrics:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Position not found"
+            )
+        
+        return position_metrics
+        
+    except HTTPException:
         raise
+    except Exception as e:
+        logger.error(f"Error getting position details: {e}", extra={
+            "user_id": user_id,
+            "token_address": token_address
+        })
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get position details: {str(e)}"
+        )
+
+
+@router.get("/metrics/{user_id}", response_model=MetricsResponse)
+async def get_trading_metrics(
+    user_id: int,
+    period_days: int = Query(30, ge=1, le=365, description="Analysis period in days"),
+    analytics: PerformanceAnalytics = Depends(get_performance_analytics),
+) -> MetricsResponse:
+    """
+    Get comprehensive trading metrics for a user.
+    
+    Args:
+        user_id: User identifier
+        period_days: Number of days to analyze (1-365)
+        analytics: Performance analytics service
+        
+    Returns:
+        Comprehensive trading metrics
+    """
+    try:
+        metrics = await analytics.calculate_trading_metrics(user_id, period_days)
+        
+        return MetricsResponse(
+            metrics=metrics,
+            period_days=period_days
+        )
+        
+    except Exception as e:
+        logger.error(f"Error getting trading metrics: {e}", extra={
+            "user_id": user_id,
+            "period_days": period_days
+        })
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get trading metrics: {str(e)}"
+        )
+
+
+@router.get("/presets/{user_id}", response_model=List[PresetPerformance])
+async def get_preset_performance(
+    user_id: int,
+    preset_name: Optional[str] = Query(None, description="Filter by preset name"),
+    analytics: PerformanceAnalytics = Depends(get_performance_analytics),
+) -> List[PresetPerformance]:
+    """
+    Get performance metrics by preset.
+    
+    Args:
+        user_id: User identifier
+        preset_name: Optional preset name filter
+        analytics: Performance analytics service
+        
+    Returns:
+        List of preset performance metrics
+    """
+    try:
+        performance = await analytics.get_preset_performance(user_id, preset_name)
+        
+        # Sort by total PnL (descending)
+        performance.sort(key=lambda p: p.total_pnl, reverse=True)
+        
+        return performance
+        
+    except Exception as e:
+        logger.error(f"Error getting preset performance: {e}", extra={
+            "user_id": user_id,
+            "preset_name": preset_name
+        })
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get preset performance: {str(e)}"
+        )
+
+
+@router.get("/summary/{user_id}")
+async def get_analytics_summary(
+    user_id: int,
+    analytics: PerformanceAnalytics = Depends(get_performance_analytics),
+) -> Dict[str, any]:
+    """
+    Get analytics summary with key performance indicators.
+    
+    Args:
+        user_id: User identifier
+        analytics: Performance analytics service
+        
+    Returns:
+        Analytics summary with KPIs
+    """
+    try:
+        # Get recent metrics (30 days)
+        metrics = await analytics.calculate_trading_metrics(user_id, 30)
+        
+        # Get preset performance
+        preset_performance = await analytics.get_preset_performance(user_id)
+        
+        # Calculate summary stats
+        best_preset = None
+        worst_preset = None
+        
+        if preset_performance:
+            best_preset = max(preset_performance, key=lambda p: p.roi_percentage)
+            worst_preset = min(preset_performance, key=lambda p: p.roi_percentage)
+        
+        return {
+            "period": "30 days",
+            "total_trades": metrics.total_trades,
+            "win_rate": float(metrics.win_rate),
+            "total_pnl_usd": float(metrics.total_pnl),
+            "roi_percentage": float(metrics.roi_percentage),
+            "active_positions": metrics.active_positions,
+            "total_presets": len(preset_performance),
+            "best_preset": {
+                "name": best_preset.preset_name,
+                "roi_percentage": float(best_preset.roi_percentage),
+                "trades_count": best_preset.trades_count
+            } if best_preset else None,
+            "worst_preset": {
+                "name": worst_preset.preset_name,
+                "roi_percentage": float(worst_preset.roi_percentage),
+                "trades_count": worst_preset.trades_count
+            } if worst_preset else None,
+            "largest_win": float(metrics.largest_win),
+            "largest_loss": float(metrics.largest_loss),
+            "last_updated": datetime.utcnow()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting analytics summary: {e}", extra={"user_id": user_id})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get analytics summary: {str(e)}"
+        )
+
+
+@router.post("/refresh/{user_id}")
+async def refresh_analytics_cache(
+    user_id: int,
+    analytics: PerformanceAnalytics = Depends(get_performance_analytics),
+) -> Dict[str, str]:
+    """
+    Refresh analytics cache for a user.
+    
+    Args:
+        user_id: User identifier
+        analytics: Performance analytics service
+        
+    Returns:
+        Refresh status
+    """
+    try:
+        # Clear cache for this user
+        cache_keys_to_remove = [
+            key for key in analytics._cache.keys() 
+            if f"_{user_id}_" in key
+        ]
+        
+        for key in cache_keys_to_remove:
+            del analytics._cache[key]
+            if key in analytics._cache_expires:
+                del analytics._cache_expires[key]
+        
+        logger.info(f"Analytics cache refreshed for user {user_id}")
+        
+        return {
+            "status": "success",
+            "message": f"Cache refreshed for user {user_id}",
+            "cleared_entries": len(cache_keys_to_remove)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error refreshing analytics cache: {e}", extra={"user_id": user_id})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to refresh cache: {str(e)}"
+        )
