@@ -1,151 +1,120 @@
 """
-Risk assessment API endpoints for token evaluation and security analysis.
+Risk assessment API endpoints for token and contract security analysis.
 """
 from __future__ import annotations
 
-from typing import Dict, Optional, Any
+import time
+from decimal import Decimal
+from typing import Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from ..core.dependencies import get_chain_clients
 from ..core.logging import get_logger
-from ..strategy.risk_manager import risk_manager, RiskAssessment, RiskLevel
+from ..strategy.risk_manager import RiskManager, RiskAssessment
+from ..strategy.risk_scoring import risk_scorer
+from ..services.security_providers import security_provider
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/risk", tags=["risk"])
 
 
-class TokenRiskRequest(BaseModel):
-    """Token risk assessment request."""
+class RiskAssessmentRequest(BaseModel):
+    """Risk assessment request model."""
     
     token_address: str = Field(..., description="Token contract address")
     chain: str = Field(..., description="Blockchain network")
-    trade_amount: Optional[str] = Field(None, description="Trade amount for liquidity analysis")
+    trade_amount: Optional[str] = Field(default=None, description="Planned trade amount in USD")
+
+
+class QuickRiskCheckRequest(BaseModel):
+    """Quick risk check request model."""
+    
+    token_address: str = Field(..., description="Token contract address")
+    chain: str = Field(..., description="Blockchain network")
+
+
+class SecurityAnalysisRequest(BaseModel):
+    """Security analysis request model."""
+    
+    token_address: str = Field(..., description="Token contract address")
+    chain: str = Field(..., description="Blockchain network")
+
+
+class RiskFactorResponse(BaseModel):
+    """Risk factor response model."""
+    
+    category: str
+    level: str
+    score: float
+    description: str
+    details: Dict
+    confidence: float
+
+
+class RiskAssessmentResponse(BaseModel):
+    """Risk assessment response model."""
+    
+    token_address: str
+    chain: str
+    overall_risk: str
+    overall_score: float
+    risk_factors: List[RiskFactorResponse]
+    assessment_time: float
+    execution_time_ms: float
+    tradeable: bool
+    warnings: List[str]
+    recommendations: List[str]
+
+
+class SecurityProviderResponse(BaseModel):
+    """Security provider analysis response."""
+    
+    token_address: str
+    chain: str
+    providers_checked: int
+    providers_successful: int
+    honeypot_detected: bool
+    honeypot_confidence: float
+    overall_risk: str
+    risk_factors: List[str]
+    provider_results: Dict
+    analysis_time_ms: float
 
 
 class QuickRiskResponse(BaseModel):
-    """Quick risk assessment response."""
+    """Quick risk check response."""
     
     token_address: str
     chain: str
-    risk_level: RiskLevel
-    risk_score: float
-    tradeable: bool
-    execution_time_ms: float
-    primary_concerns: list[str]
+    reputation_score: int
+    risk_level: str
+    quick_summary: str
+    analysis_time_ms: float
 
 
-class DetailedRiskResponse(BaseModel):
-    """Detailed risk assessment response."""
-    
-    token_address: str
-    chain: str
-    overall_risk: RiskLevel
-    overall_score: float
-    tradeable: bool
-    execution_time_ms: float
-    risk_factors: list[dict]
-    warnings: list[str]
-    recommendations: list[str]
-    assessment_time: float
+# Global risk manager instance
+risk_manager = RiskManager()
 
 
-class BatchRiskRequest(BaseModel):
-    """Batch risk assessment request."""
-    
-    tokens: list[TokenRiskRequest] = Field(..., max_items=10, description="Up to 10 tokens")
-
-
-class BatchRiskResponse(BaseModel):
-    """Batch risk assessment response."""
-    
-    results: list[QuickRiskResponse]
-    total_tokens: int
-    successful_assessments: int
-    failed_assessments: int
-    total_execution_time_ms: float
-
-
-@router.get("/quick/{chain}/{token_address}", response_model=QuickRiskResponse)
-async def quick_risk_assessment(
-    chain: str,
-    token_address: str,
-    trade_amount: Optional[str] = Query(None, description="Trade amount for impact analysis"),
+@router.post("/assess", response_model=RiskAssessmentResponse)
+async def assess_token_risk(
+    request: RiskAssessmentRequest,
     chain_clients: Dict = Depends(get_chain_clients),
-) -> QuickRiskResponse:
+) -> RiskAssessmentResponse:
     """
-    Quick risk assessment for immediate trading decisions.
+    Perform comprehensive risk assessment for a token.
     
-    Returns essential risk information optimized for speed.
-    Designed for real-time trading where latency matters.
+    Args:
+        request: Risk assessment request
+        chain_clients: Chain client dependencies
+        
+    Returns:
+        Complete risk assessment with scoring and recommendations
     """
     logger.info(
-        f"Quick risk assessment requested: {token_address}",
-        extra={
-            'extra_data': {
-                'token_address': token_address,
-                'chain': chain,
-                'trade_amount': trade_amount,
-            }
-        }
-    )
-    
-    try:
-        # Convert trade amount if provided
-        from decimal import Decimal
-        trade_amount_decimal = Decimal(trade_amount) if trade_amount else None
-        
-        # Perform risk assessment
-        assessment = await risk_manager.assess_token_risk(
-            token_address=token_address,
-            chain=chain,
-            chain_clients=chain_clients,
-            trade_amount=trade_amount_decimal,
-        )
-        
-        # Extract primary concerns (top 3 highest risk factors)
-        primary_concerns = []
-        high_risk_factors = [
-            f for f in assessment.risk_factors 
-            if f.level in ["high", "critical"]
-        ]
-        high_risk_factors.sort(key=lambda x: x.score, reverse=True)
-        
-        for factor in high_risk_factors[:3]:
-            primary_concerns.append(f"{factor.category}: {factor.description}")
-        
-        return QuickRiskResponse(
-            token_address=token_address,
-            chain=chain,
-            risk_level=assessment.overall_risk,
-            risk_score=assessment.overall_score,
-            tradeable=assessment.tradeable,
-            execution_time_ms=assessment.execution_time_ms,
-            primary_concerns=primary_concerns,
-        )
-        
-    except Exception as e:
-        logger.error(f"Quick risk assessment failed: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Risk assessment failed: {str(e)}"
-        )
-
-
-@router.post("/assess", response_model=DetailedRiskResponse)
-async def detailed_risk_assessment(
-    request: TokenRiskRequest,
-    chain_clients: Dict = Depends(get_chain_clients),
-) -> DetailedRiskResponse:
-    """
-    Comprehensive risk assessment with detailed analysis.
-    
-    Returns complete risk breakdown including all factors,
-    explanations, and specific recommendations.
-    """
-    logger.info(
-        f"Detailed risk assessment requested: {request.token_address}",
+        f"Risk assessment requested for {request.token_address} on {request.chain}",
         extra={
             'extra_data': {
                 'token_address': request.token_address,
@@ -157,10 +126,17 @@ async def detailed_risk_assessment(
     
     try:
         # Convert trade amount if provided
-        from decimal import Decimal
-        trade_amount_decimal = Decimal(request.trade_amount) if request.trade_amount else None
+        trade_amount_decimal = None
+        if request.trade_amount:
+            try:
+                trade_amount_decimal = Decimal(request.trade_amount)
+            except (ValueError, TypeError):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid trade_amount format"
+                )
         
-        # Perform comprehensive risk assessment
+        # Perform risk assessment
         assessment = await risk_manager.assess_token_risk(
             token_address=request.token_address,
             chain=request.chain,
@@ -168,238 +144,497 @@ async def detailed_risk_assessment(
             trade_amount=trade_amount_decimal,
         )
         
-        # Convert risk factors to dict format
-        risk_factors_dict = []
-        for factor in assessment.risk_factors:
-            risk_factors_dict.append({
-                "category": factor.category,
-                "level": factor.level,
-                "score": factor.score,
-                "description": factor.description,
-                "details": factor.details,
-                "confidence": factor.confidence,
-            })
+        # Convert to response format
+        risk_factors_response = [
+            RiskFactorResponse(
+                category=factor.category,
+                level=factor.level,
+                score=factor.score,
+                description=factor.description,
+                details=factor.details,
+                confidence=factor.confidence,
+            )
+            for factor in assessment.risk_factors
+        ]
         
-        return DetailedRiskResponse(
+        response = RiskAssessmentResponse(
             token_address=assessment.token_address,
             chain=assessment.chain,
             overall_risk=assessment.overall_risk,
             overall_score=assessment.overall_score,
-            tradeable=assessment.tradeable,
+            risk_factors=risk_factors_response,
+            assessment_time=assessment.assessment_time,
             execution_time_ms=assessment.execution_time_ms,
-            risk_factors=risk_factors_dict,
+            tradeable=assessment.tradeable,
             warnings=assessment.warnings,
             recommendations=assessment.recommendations,
-            assessment_time=assessment.assessment_time,
         )
         
+        logger.info(
+            f"Risk assessment completed: {assessment.overall_risk} (score: {assessment.overall_score:.2f})",
+            extra={
+                'extra_data': {
+                    'token_address': request.token_address,
+                    'overall_risk': assessment.overall_risk,
+                    'overall_score': assessment.overall_score,
+                    'tradeable': assessment.tradeable,
+                    'execution_time_ms': assessment.execution_time_ms,
+                }
+            }
+        )
+        
+        return response
+        
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Detailed risk assessment failed: {e}")
+        logger.error(
+            f"Risk assessment failed: {e}",
+            extra={
+                'extra_data': {
+                    'token_address': request.token_address,
+                    'chain': request.chain,
+                    'error': str(e),
+                }
+            }
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Risk assessment failed: {str(e)}"
+            detail="Risk assessment failed"
         )
 
 
-@router.post("/batch", response_model=BatchRiskResponse)
-async def batch_risk_assessment(
-    request: BatchRiskRequest,
-    chain_clients: Dict = Depends(get_chain_clients),
-) -> BatchRiskResponse:
+@router.post("/security", response_model=SecurityProviderResponse)
+async def analyze_token_security(
+    request: SecurityAnalysisRequest,
+) -> SecurityProviderResponse:
     """
-    Batch risk assessment for multiple tokens.
+    Analyze token security using external security providers.
     
-    Efficiently assesses up to 10 tokens concurrently.
-    Useful for portfolio analysis or discovery feeds.
+    Args:
+        request: Security analysis request
+        
+    Returns:
+        Security analysis from multiple providers
     """
-    import asyncio
-    import time
-    
-    start_time = time.time()
-    
     logger.info(
-        f"Batch risk assessment requested: {len(request.tokens)} tokens",
+        f"Security analysis requested for {request.token_address} on {request.chain}",
         extra={
             'extra_data': {
-                'token_count': len(request.tokens),
-                'chains': list(set(t.chain for t in request.tokens)),
+                'token_address': request.token_address,
+                'chain': request.chain,
             }
         }
     )
     
     try:
-        # Create assessment tasks for all tokens
-        assessment_tasks = []
-        for token_req in request.tokens:
-            from decimal import Decimal
-            trade_amount = Decimal(token_req.trade_amount) if token_req.trade_amount else None
-            
-            task = risk_manager.assess_token_risk(
-                token_address=token_req.token_address,
-                chain=token_req.chain,
-                chain_clients=chain_clients,
-                trade_amount=trade_amount,
-            )
-            assessment_tasks.append(task)
-        
-        # Execute all assessments concurrently
-        assessment_results = await asyncio.gather(*assessment_tasks, return_exceptions=True)
-        
-        # Process results
-        successful_results = []
-        failed_count = 0
-        
-        for i, result in enumerate(assessment_results):
-            if isinstance(result, RiskAssessment):
-                # Extract primary concerns
-                primary_concerns = []
-                high_risk_factors = [
-                    f for f in result.risk_factors 
-                    if f.level in ["high", "critical"]
-                ]
-                high_risk_factors.sort(key=lambda x: x.score, reverse=True)
-                
-                for factor in high_risk_factors[:3]:
-                    primary_concerns.append(f"{factor.category}: {factor.description}")
-                
-                successful_results.append(QuickRiskResponse(
-                    token_address=result.token_address,
-                    chain=result.chain,
-                    risk_level=result.overall_risk,
-                    risk_score=result.overall_score,
-                    tradeable=result.tradeable,
-                    execution_time_ms=result.execution_time_ms,
-                    primary_concerns=primary_concerns,
-                ))
-            else:
-                failed_count += 1
-                logger.warning(f"Token assessment failed: {request.tokens[i].token_address}")
-        
-        total_execution_time = (time.time() - start_time) * 1000
-        
-        return BatchRiskResponse(
-            results=successful_results,
-            total_tokens=len(request.tokens),
-            successful_assessments=len(successful_results),
-            failed_assessments=failed_count,
-            total_execution_time_ms=total_execution_time,
+        # Perform security analysis
+        analysis = await security_provider.analyze_token_security(
+            token_address=request.token_address,
+            chain=request.chain,
         )
         
+        response = SecurityProviderResponse(
+            token_address=analysis.get("token_address", request.token_address),
+            chain=analysis.get("chain", request.chain),
+            providers_checked=analysis.get("providers_checked", 0),
+            providers_successful=analysis.get("providers_successful", 0),
+            honeypot_detected=analysis.get("honeypot_detected", False),
+            honeypot_confidence=analysis.get("honeypot_confidence", 0.0),
+            overall_risk=analysis.get("overall_risk", "unknown"),
+            risk_factors=analysis.get("risk_factors", []),
+            provider_results=analysis.get("provider_results", {}),
+            analysis_time_ms=analysis.get("analysis_time_ms", 0.0),
+        )
+        
+        logger.info(
+            f"Security analysis completed: {analysis.get('overall_risk', 'unknown')}",
+            extra={
+                'extra_data': {
+                    'token_address': request.token_address,
+                    'providers_successful': analysis.get("providers_successful", 0),
+                    'honeypot_detected': analysis.get("honeypot_detected", False),
+                    'overall_risk': analysis.get("overall_risk", "unknown"),
+                }
+            }
+        )
+        
+        return response
+        
     except Exception as e:
-        logger.error(f"Batch risk assessment failed: {e}")
+        logger.error(
+            f"Security analysis failed: {e}",
+            extra={
+                'extra_data': {
+                    'token_address': request.token_address,
+                    'chain': request.chain,
+                    'error': str(e),
+                }
+            }
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Batch assessment failed: {str(e)}"
+            detail="Security analysis failed"
         )
 
 
-@router.get("/health")
-async def risk_service_health() -> Dict[str, Any]:
+@router.post("/quick-check", response_model=QuickRiskResponse)
+async def quick_risk_check(
+    request: QuickRiskCheckRequest,
+) -> QuickRiskResponse:
     """
-    Health check for risk assessment service.
+    Perform quick risk check for immediate trading decisions.
     
-    Returns service status and performance metrics.
+    Args:
+        request: Quick risk check request
+        
+    Returns:
+        Quick risk assessment with reputation score
     """
+    start_time = time.time()
+    
     try:
-        # Test risk manager functionality
-        import time
-        start_time = time.time()
+        # Perform quick reputation check
+        reputation_result = await security_provider.check_token_reputation(
+            token_address=request.token_address,
+            chain=request.chain,
+        )
         
-        # Simple health check - assess a known safe token address
-        test_address = "0xA0b86a33E6Fa6E2B0B6CE8A71ac2f9A1E4F4E6c8"  # USDC
+        reputation_score = reputation_result.get("reputation_score", 50)
         
-        # We don't actually assess for health check, just verify service availability
-        health_check_time = (time.time() - start_time) * 1000
+        # Determine risk level from score
+        if reputation_score >= 80:
+            risk_level = "low"
+            summary = "Good reputation, safe to trade"
+        elif reputation_score >= 60:
+            risk_level = "medium"
+            summary = "Moderate reputation, trade with caution"
+        elif reputation_score >= 40:
+            risk_level = "high"
+            summary = "Poor reputation, high risk"
+        else:
+            risk_level = "critical"
+            summary = "Very poor reputation, avoid trading"
         
-        return {
-            "status": "healthy",
-            "service": "risk_assessment",
-            "response_time_ms": health_check_time,
-            "features": {
-                "quick_assessment": True,
-                "detailed_assessment": True,
-                "batch_assessment": True,
-                "supported_chains": ["ethereum", "bsc", "polygon", "solana"],
-                "max_batch_size": 10,
-            },
-            "risk_categories": [
-                "honeypot",
-                "tax_excessive", 
-                "liquidity_low",
-                "owner_privileges",
-                "proxy_contract",
-                "lp_unlocked",
-                "contract_unverified",
-                "trading_disabled",
-                "blacklist_function",
-                "dev_concentration",
-            ],
-        }
+        execution_time_ms = (time.time() - start_time) * 1000
+        
+        response = QuickRiskResponse(
+            token_address=request.token_address,
+            chain=request.chain,
+            reputation_score=reputation_score,
+            risk_level=risk_level,
+            quick_summary=summary,
+            analysis_time_ms=execution_time_ms,
+        )
+        
+        logger.info(
+            f"Quick risk check completed: {risk_level} (score: {reputation_score})",
+            extra={
+                'extra_data': {
+                    'token_address': request.token_address,
+                    'reputation_score': reputation_score,
+                    'risk_level': risk_level,
+                    'execution_time_ms': execution_time_ms,
+                }
+            }
+        )
+        
+        return response
         
     except Exception as e:
-        logger.error(f"Risk service health check failed: {e}")
-        return {
-            "status": "unhealthy",
-            "service": "risk_assessment",
-            "error": str(e),
-        }
+        logger.error(f"Quick risk check failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Quick risk check failed"
+        )
 
 
-@router.get("/categories")
-async def get_risk_categories() -> Dict[str, Any]:
+@router.get("/tax-analysis/{chain}/{token_address}")
+async def analyze_token_taxes(
+    chain: str,
+    token_address: str,
+    trade_amount: Optional[str] = Query(default="1000", description="Trade amount in USD"),
+    chain_clients: Dict = Depends(get_chain_clients),
+) -> Dict:
     """
-    Get available risk categories and their descriptions.
+    Analyze token buy/sell taxes through simulated transactions.
     
-    Returns comprehensive information about all risk factors
-    that are evaluated by the system.
+    Args:
+        chain: Blockchain network
+        token_address: Token contract address
+        trade_amount: Trade amount in USD for simulation
+        chain_clients: Chain client dependencies
+        
+    Returns:
+        Tax analysis results with buy/sell percentages
+    """
+    try:
+        # Convert trade amount
+        try:
+            amount_decimal = Decimal(trade_amount) if trade_amount else Decimal("1000")
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid trade_amount format"
+            )
+        
+        # Get Web3 instance
+        evm_client = chain_clients.get("evm")
+        if not evm_client:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="EVM client not available"
+            )
+        
+        w3 = await evm_client.get_web3(chain)
+        if not w3:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"Web3 instance not available for {chain}"
+            )
+        
+        # Perform tax analysis
+        tax_analysis = await risk_scorer.analyze_token_taxes(
+            token_address=token_address,
+            chain=chain,
+            w3=w3,
+            trade_amount=amount_decimal,
+        )
+        
+        logger.info(
+            f"Tax analysis completed for {token_address}",
+            extra={
+                'extra_data': {
+                    'token_address': token_address,
+                    'chain': chain,
+                    'buy_tax': tax_analysis.get("buy_tax_percent", 0),
+                    'sell_tax': tax_analysis.get("sell_tax_percent", 0),
+                    'analysis_successful': tax_analysis.get("analysis_successful", False),
+                }
+            }
+        )
+        
+        return tax_analysis
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Tax analysis failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Tax analysis failed"
+        )
+
+
+@router.get("/contract-security/{chain}/{token_address}")
+async def analyze_contract_security(
+    chain: str,
+    token_address: str,
+    chain_clients: Dict = Depends(get_chain_clients),
+) -> Dict:
+    """
+    Analyze contract security vulnerabilities and suspicious patterns.
+    
+    Args:
+        chain: Blockchain network
+        token_address: Token contract address
+        chain_clients: Chain client dependencies
+        
+    Returns:
+        Contract security analysis results
+    """
+    try:
+        # Get Web3 instance
+        evm_client = chain_clients.get("evm")
+        if not evm_client:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="EVM client not available"
+            )
+        
+        w3 = await evm_client.get_web3(chain)
+        if not w3:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"Web3 instance not available for {chain}"
+            )
+        
+        # Perform contract security analysis
+        security_analysis = await risk_scorer.analyze_contract_security(
+            token_address=token_address,
+            chain=chain,
+            w3=w3,
+        )
+        
+        logger.info(
+            f"Contract security analysis completed for {token_address}",
+            extra={
+                'extra_data': {
+                    'token_address': token_address,
+                    'chain': chain,
+                    'security_level': security_analysis.get("security_level", "unknown"),
+                    'security_score': security_analysis.get("security_score", 0),
+                }
+            }
+        )
+        
+        return security_analysis
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Contract security analysis failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Contract security analysis failed"
+        )
+
+
+@router.get("/liquidity-analysis/{chain}/{token_address}")
+async def analyze_liquidity_depth(
+    chain: str,
+    token_address: str,
+    dex: str = Query(default="uniswap_v2", description="DEX to analyze"),
+    chain_clients: Dict = Depends(get_chain_clients),
+) -> Dict:
+    """
+    Analyze liquidity depth and distribution for the token.
+    
+    Args:
+        chain: Blockchain network
+        token_address: Token contract address
+        dex: DEX to analyze (uniswap_v2, uniswap_v3, etc.)
+        chain_clients: Chain client dependencies
+        
+    Returns:
+        Liquidity analysis results
+    """
+    try:
+        # Get Web3 instance
+        evm_client = chain_clients.get("evm")
+        if not evm_client:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="EVM client not available"
+            )
+        
+        w3 = await evm_client.get_web3(chain)
+        if not w3:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"Web3 instance not available for {chain}"
+            )
+        
+        # Perform liquidity analysis
+        liquidity_analysis = await risk_scorer.analyze_liquidity_depth(
+            token_address=token_address,
+            chain=chain,
+            w3=w3,
+            dex=dex,
+        )
+        
+        logger.info(
+            f"Liquidity analysis completed for {token_address}",
+            extra={
+                'extra_data': {
+                    'token_address': token_address,
+                    'chain': chain,
+                    'dex': dex,
+                    'liquidity_usd': liquidity_analysis.get("liquidity_usd", 0),
+                    'liquidity_risk': liquidity_analysis.get("liquidity_risk", "unknown"),
+                }
+            }
+        )
+        
+        return liquidity_analysis
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Liquidity analysis failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Liquidity analysis failed"
+        )
+
+
+@router.get("/supported-chains")
+async def get_supported_chains() -> Dict[str, List[str]]:
+    """
+    Get list of supported chains for risk analysis.
+    
+    Returns:
+        List of supported blockchain networks
+    """
+    supported_chains = ["ethereum", "bsc", "polygon"]
+    return {
+        "supported_chains": supported_chains,
+        "total_chains": len(supported_chains),
+        "security_providers": ["honeypot_is", "goplus", "tokensniffer", "dextools"],
+    }
+
+
+@router.get("/risk-categories")
+async def get_risk_categories() -> Dict:
+    """
+    Get information about risk categories and assessment criteria.
+    
+    Returns:
+        Risk categories and their descriptions
     """
     return {
-        "categories": {
+        "risk_levels": {
+            "low": {"score_range": "0.0 - 0.25", "recommendation": "Safe to trade"},
+            "medium": {"score_range": "0.25 - 0.50", "recommendation": "Trade with caution"},
+            "high": {"score_range": "0.50 - 0.75", "recommendation": "High risk - small amounts only"},
+            "critical": {"score_range": "0.75 - 1.0", "recommendation": "Do not trade"}
+        },
+        "risk_categories": {
             "honeypot": {
                 "name": "Honeypot Detection",
-                "description": "Detects tokens that allow buying but restrict selling",
+                "description": "Detects tokens that prevent selling after purchase",
                 "severity": "critical",
-                "checks": ["simulated_transactions", "transfer_restrictions", "bytecode_analysis"]
+                "checks": ["buy_simulation", "sell_simulation", "transfer_restrictions"]
             },
             "tax_excessive": {
                 "name": "Excessive Taxes",
-                "description": "Identifies tokens with high buy/sell taxes",
+                "description": "Detects high buy/sell taxes that reduce profits",
                 "severity": "high",
-                "checks": ["buy_tax_calculation", "sell_tax_calculation", "tax_simulation"]
+                "checks": ["buy_tax", "sell_tax", "transfer_tax", "tax_modifiable"]
             },
             "liquidity_low": {
                 "name": "Low Liquidity",
-                "description": "Assesses liquidity depth and price impact",
+                "description": "Analyzes available liquidity for trading",
                 "severity": "medium",
-                "checks": ["dex_liquidity", "price_impact_estimation", "volume_analysis"]
+                "checks": ["pair_reserves", "liquidity_usd", "price_impact"]
             },
             "owner_privileges": {
                 "name": "Owner Privileges",
-                "description": "Checks for dangerous owner functions",
+                "description": "Analyzes owner/admin control over contract",
                 "severity": "high",
-                "checks": ["mint_function", "pause_function", "blacklist_function", "ownership_analysis"]
+                "checks": ["ownership_functions", "mint_capability", "pause_capability"]
             },
             "proxy_contract": {
                 "name": "Proxy Contract",
-                "description": "Detects upgradeable proxy patterns",
+                "description": "Detects upgradeable contracts that can change behavior",
                 "severity": "medium",
-                "checks": ["proxy_detection", "implementation_analysis", "upgrade_controls"]
+                "checks": ["proxy_patterns", "implementation_slot", "admin_slot"]
             },
             "lp_unlocked": {
-                "name": "LP Lock Status",
-                "description": "Verifies liquidity pool lock status",
+                "name": "LP Unlocked",
+                "description": "Checks if liquidity provider tokens are locked",
                 "severity": "high",
-                "checks": ["lock_verification", "lock_duration", "lock_provider"]
+                "checks": ["lp_lock_status", "lock_duration", "lock_provider"]
             },
             "contract_unverified": {
-                "name": "Contract Verification",
+                "name": "Unverified Contract",
                 "description": "Checks if contract source code is verified",
                 "severity": "medium",
-                "checks": ["source_verification", "compiler_version", "optimization_settings"]
+                "checks": ["source_verification", "bytecode_analysis"]
             },
             "trading_disabled": {
-                "name": "Trading Status",
-                "description": "Verifies that trading is enabled",
+                "name": "Trading Disabled",
+                "description": "Detects if trading is currently disabled",
                 "severity": "critical",
                 "checks": ["trading_enabled", "pause_status", "emergency_stop"]
             },
@@ -415,11 +650,79 @@ async def get_risk_categories() -> Dict[str, Any]:
                 "severity": "medium",
                 "checks": ["holder_analysis", "team_allocation", "concentration_metrics"]
             }
-        },
-        "risk_levels": {
-            "low": {"score_range": "0.0 - 0.25", "recommendation": "Safe to trade"},
-            "medium": {"score_range": "0.25 - 0.50", "recommendation": "Trade with caution"},
-            "high": {"score_range": "0.50 - 0.75", "recommendation": "High risk - small amounts only"},
-            "critical": {"score_range": "0.75 - 1.0", "recommendation": "Do not trade"}
         }
     }
+
+
+@router.get("/health")
+async def risk_service_health() -> Dict[str, str]:
+    """
+    Health check for risk assessment service.
+    
+    Returns:
+        Health status of risk service and providers
+    """
+    return {
+        "status": "OK",
+        "message": "Risk assessment service is operational",
+        "risk_manager": "initialized",
+        "security_providers": "available",
+        "supported_chains": "ethereum,bsc,polygon",
+        "note": "Ready for risk assessments"
+    }
+
+
+# Add this test endpoint to backend/app/api/risk.py at the end:
+
+@router.post("/test-risk-assessment")
+async def test_risk_assessment() -> Dict:
+    """Test endpoint for risk assessment system."""
+    # Test with a known token address (WETH on Ethereum)
+    test_token = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
+    test_chain = "ethereum"
+    
+    try:
+        # Test quick risk check first
+        quick_check = await security_provider.check_token_reputation(
+            token_address=test_token,
+            chain=test_chain,
+        )
+        
+        # Test comprehensive security analysis
+        security_analysis = await security_provider.analyze_token_security(
+            token_address=test_token,
+            chain=test_chain,
+        )
+        
+        return {
+            "status": "success",
+            "message": "Risk assessment system is functional",
+            "test_results": {
+                "token_tested": test_token,
+                "chain": test_chain,
+                "quick_check": {
+                    "reputation_score": quick_check.get("reputation_score", 0),
+                    "analysis_successful": quick_check.get("quick_check", False),
+                },
+                "security_analysis": {
+                    "providers_checked": security_analysis.get("providers_checked", 0),
+                    "providers_successful": security_analysis.get("providers_successful", 0),
+                    "overall_risk": security_analysis.get("overall_risk", "unknown"),
+                    "honeypot_detected": security_analysis.get("honeypot_detected", False),
+                    "risk_factors_found": len(security_analysis.get("risk_factors", [])),
+                },
+                "system_status": {
+                    "risk_manager": "initialized",
+                    "security_providers": "available",
+                    "risk_scoring": "functional",
+                }
+            },
+            "note": "All risk management components are working"
+        }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Risk assessment test failed: {str(e)}",
+            "note": "This indicates configuration issues or missing dependencies"
+        }

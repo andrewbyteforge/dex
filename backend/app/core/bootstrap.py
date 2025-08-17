@@ -175,6 +175,22 @@ def create_app() -> FastAPI:
     except Exception as e:
         logging.getLogger("app.bootstrap").warning(f"Quotes API not available: {e}")
 
+    # Risk Management API (Phase 4.1) - NEW
+    try:
+        from ..api.risk import router as risk_router
+        api_router.include_router(risk_router, tags=["Risk"])
+        logging.getLogger("app.bootstrap").info("Risk Management API loaded successfully")
+    except Exception as e:
+        logging.getLogger("app.bootstrap").warning(f"Risk Management API not available: {e}")
+
+    # Trades API (Phase 3.2)
+    try:
+        from ..api.trades import router as trades_router
+        api_router.include_router(trades_router, tags=["Trades"])
+        logging.getLogger("app.bootstrap").info("Trades API loaded successfully")
+    except Exception as e:
+        logging.getLogger("app.bootstrap").warning(f"Trades API not available: {e}")
+
     # Database testing routes (development only)
     if settings.environment == "development":
         try:

@@ -431,3 +431,86 @@
 {"timestamp":"2025-08-17T09:50:54.823812Z","level":"WARNING","logger":"app.api.quotes","message":"Adapter quote failed for uniswap_v2: UniswapV2Adapter.get_quote() got multiple values for argument 'chain'","module":"quotes"}
 {"timestamp":"2025-08-17T09:50:54.824781Z","level":"WARNING","logger":"app.api.quotes","message":"Adapter quote failed for uniswap_v3: UniswapV3Adapter.get_quote() got multiple values for argument 'chain'","module":"quotes"}
 {"timestamp":"2025-08-17T09:50:54.824781Z","level":"INFO","logger":"app.core.middleware","message":"Request completed: POST /api/v1/quotes/test-real-quote","module":"middleware","trace_id":"dd487276-6f96-4d29-9fdf-eaf234e7b73e","status_code":200,"process_time_ms":833.52,"response_size":0}
+{"timestamp":"2025-08-17T09:53:08.976557Z","level":"INFO","logger":"app.bootstrap","message":"Shutting down DEX Sniper Pro - MINIMAL VERSION","module":"bootstrap","uptime_sec":400.577275}
+{"timestamp":"2025-08-17T09:53:08.977613Z","level":"INFO","logger":"app.storage.database","message":"Database connections closed","module":"database"}
+{"timestamp":"2025-08-17T09:53:08.977613Z","level":"INFO","logger":"app.bootstrap","message":"Database connections closed","module":"bootstrap"}
+{"timestamp":"2025-08-17T09:53:11.136241Z","level":"INFO","logger":"root","message":"Logging system initialized","module":"logging","log_level":"INFO","debug":false,"environment":"development"}
+{"timestamp":"2025-08-17T09:53:11.136744Z","level":"INFO","logger":"app.bootstrap","message":"Starting DEX Sniper Pro - MINIMAL VERSION","module":"bootstrap","environment":"development","service_mode":"free","debug":false}
+{"timestamp":"2025-08-17T09:53:11.136744Z","level":"INFO","logger":"app.storage.database","message":"Initializing database at: data\\app.db","module":"database"}
+{"timestamp":"2025-08-17T09:53:11.150762Z","level":"INFO","logger":"app.storage.database","message":"Database initialized successfully with WAL mode","module":"database"}
+{"timestamp":"2025-08-17T09:53:11.156997Z","level":"INFO","logger":"app.storage.database","message":"Database tables created successfully","module":"database"}
+{"timestamp":"2025-08-17T09:53:11.156997Z","level":"INFO","logger":"app.bootstrap","message":"Database initialized successfully with WAL mode","module":"bootstrap"}
+{"timestamp":"2025-08-17T09:53:11.156997Z","level":"INFO","logger":"app.bootstrap","message":"Skipping RPC/chain client initialization for testing","module":"bootstrap"}
+{"timestamp":"2025-08-17T09:58:36.315504Z","level":"INFO","logger":"app.bootstrap","message":"Shutting down DEX Sniper Pro - MINIMAL VERSION","module":"bootstrap","uptime_sec":325.179288}
+{"timestamp":"2025-08-17T09:58:36.315504Z","level":"INFO","logger":"app.storage.database","message":"Database connections closed","module":"database"}
+{"timestamp":"2025-08-17T09:58:36.316503Z","level":"INFO","logger":"app.bootstrap","message":"Database connections closed","module":"bootstrap"}
+{"timestamp":"2025-08-17T09:58:38.115771Z","level":"INFO","logger":"root","message":"Logging system initialized","module":"logging","log_level":"INFO","debug":false,"environment":"development"}
+{"timestamp":"2025-08-17T09:58:38.116793Z","level":"INFO","logger":"app.bootstrap","message":"Starting DEX Sniper Pro - MINIMAL VERSION","module":"bootstrap","environment":"development","service_mode":"free","debug":false}
+{"timestamp":"2025-08-17T09:58:38.116793Z","level":"INFO","logger":"app.storage.database","message":"Initializing database at: data\\app.db","module":"database"}
+{"timestamp":"2025-08-17T09:58:38.128808Z","level":"INFO","logger":"app.storage.database","message":"Database initialized successfully with WAL mode","module":"database"}
+{"timestamp":"2025-08-17T09:58:38.135294Z","level":"INFO","logger":"app.storage.database","message":"Database tables created successfully","module":"database"}
+{"timestamp":"2025-08-17T09:58:38.135294Z","level":"INFO","logger":"app.bootstrap","message":"Database initialized successfully with WAL mode","module":"bootstrap"}
+{"timestamp":"2025-08-17T09:58:38.135294Z","level":"INFO","logger":"app.bootstrap","message":"Skipping RPC/chain client initialization for testing","module":"bootstrap"}
+{"timestamp":"2025-08-17T09:58:51.030872Z","level":"INFO","logger":"app.bootstrap","message":"Shutting down DEX Sniper Pro - MINIMAL VERSION","module":"bootstrap","uptime_sec":12.915101}
+{"timestamp":"2025-08-17T09:58:51.031892Z","level":"INFO","logger":"app.storage.database","message":"Database connections closed","module":"database"}
+{"timestamp":"2025-08-17T09:58:51.031892Z","level":"INFO","logger":"app.bootstrap","message":"Database connections closed","module":"bootstrap"}
+{"timestamp":"2025-08-17T09:58:52.858597Z","level":"INFO","logger":"root","message":"Logging system initialized","module":"logging","log_level":"INFO","debug":false,"environment":"development"}
+{"timestamp":"2025-08-17T09:58:52.859670Z","level":"INFO","logger":"app.bootstrap","message":"Starting DEX Sniper Pro - MINIMAL VERSION","module":"bootstrap","environment":"development","service_mode":"free","debug":false}
+{"timestamp":"2025-08-17T09:58:52.859670Z","level":"INFO","logger":"app.storage.database","message":"Initializing database at: data\\app.db","module":"database"}
+{"timestamp":"2025-08-17T09:58:52.873298Z","level":"INFO","logger":"app.storage.database","message":"Database initialized successfully with WAL mode","module":"database"}
+{"timestamp":"2025-08-17T09:58:52.878859Z","level":"INFO","logger":"app.storage.database","message":"Database tables created successfully","module":"database"}
+{"timestamp":"2025-08-17T09:58:52.878859Z","level":"INFO","logger":"app.bootstrap","message":"Database initialized successfully with WAL mode","module":"bootstrap"}
+{"timestamp":"2025-08-17T09:58:52.878859Z","level":"INFO","logger":"app.bootstrap","message":"Skipping RPC/chain client initialization for testing","module":"bootstrap"}
+{"timestamp":"2025-08-17T09:59:12.199565Z","level":"INFO","logger":"app.bootstrap","message":"Shutting down DEX Sniper Pro - MINIMAL VERSION","module":"bootstrap","uptime_sec":19.340392}
+{"timestamp":"2025-08-17T09:59:12.200491Z","level":"INFO","logger":"app.storage.database","message":"Database connections closed","module":"database"}
+{"timestamp":"2025-08-17T09:59:12.200491Z","level":"INFO","logger":"app.bootstrap","message":"Database connections closed","module":"bootstrap"}
+{"timestamp":"2025-08-17T09:59:14.160471Z","level":"INFO","logger":"root","message":"Logging system initialized","module":"logging","log_level":"INFO","debug":false,"environment":"development"}
+{"timestamp":"2025-08-17T09:59:14.161514Z","level":"INFO","logger":"app.bootstrap","message":"Starting DEX Sniper Pro - MINIMAL VERSION","module":"bootstrap","environment":"development","service_mode":"free","debug":false}
+{"timestamp":"2025-08-17T09:59:14.161514Z","level":"INFO","logger":"app.storage.database","message":"Initializing database at: data\\app.db","module":"database"}
+{"timestamp":"2025-08-17T09:59:14.174146Z","level":"INFO","logger":"app.storage.database","message":"Database initialized successfully with WAL mode","module":"database"}
+{"timestamp":"2025-08-17T09:59:14.179482Z","level":"INFO","logger":"app.storage.database","message":"Database tables created successfully","module":"database"}
+{"timestamp":"2025-08-17T09:59:14.179482Z","level":"INFO","logger":"app.bootstrap","message":"Database initialized successfully with WAL mode","module":"bootstrap"}
+{"timestamp":"2025-08-17T09:59:14.179482Z","level":"INFO","logger":"app.bootstrap","message":"Skipping RPC/chain client initialization for testing","module":"bootstrap"}
+{"timestamp":"2025-08-17T09:59:17.864143Z","level":"INFO","logger":"app.bootstrap","message":"Shutting down DEX Sniper Pro - MINIMAL VERSION","module":"bootstrap","uptime_sec":3.703166}
+{"timestamp":"2025-08-17T09:59:17.864700Z","level":"INFO","logger":"app.storage.database","message":"Database connections closed","module":"database"}
+{"timestamp":"2025-08-17T09:59:17.864700Z","level":"INFO","logger":"app.bootstrap","message":"Database connections closed","module":"bootstrap"}
+{"timestamp":"2025-08-17T09:59:19.768727Z","level":"INFO","logger":"root","message":"Logging system initialized","module":"logging","log_level":"INFO","debug":false,"environment":"development"}
+{"timestamp":"2025-08-17T09:59:19.768727Z","level":"INFO","logger":"app.bootstrap","message":"Starting DEX Sniper Pro - MINIMAL VERSION","module":"bootstrap","environment":"development","service_mode":"free","debug":false}
+{"timestamp":"2025-08-17T09:59:19.768727Z","level":"INFO","logger":"app.storage.database","message":"Initializing database at: data\\app.db","module":"database"}
+{"timestamp":"2025-08-17T09:59:19.781760Z","level":"INFO","logger":"app.storage.database","message":"Database initialized successfully with WAL mode","module":"database"}
+{"timestamp":"2025-08-17T09:59:19.786863Z","level":"INFO","logger":"app.storage.database","message":"Database tables created successfully","module":"database"}
+{"timestamp":"2025-08-17T09:59:19.786863Z","level":"INFO","logger":"app.bootstrap","message":"Database initialized successfully with WAL mode","module":"bootstrap"}
+{"timestamp":"2025-08-17T09:59:19.786863Z","level":"INFO","logger":"app.bootstrap","message":"Skipping RPC/chain client initialization for testing","module":"bootstrap"}
+{"timestamp":"2025-08-17T10:00:20.329135Z","level":"INFO","logger":"app.bootstrap","message":"Shutting down DEX Sniper Pro - MINIMAL VERSION","module":"bootstrap","uptime_sec":60.560249}
+{"timestamp":"2025-08-17T10:00:20.329135Z","level":"INFO","logger":"app.storage.database","message":"Database connections closed","module":"database"}
+{"timestamp":"2025-08-17T10:00:20.330157Z","level":"INFO","logger":"app.bootstrap","message":"Database connections closed","module":"bootstrap"}
+{"timestamp":"2025-08-17T10:00:22.316227Z","level":"INFO","logger":"root","message":"Logging system initialized","module":"logging","log_level":"INFO","debug":false,"environment":"development"}
+{"timestamp":"2025-08-17T10:00:22.317323Z","level":"INFO","logger":"app.bootstrap","message":"Starting DEX Sniper Pro - MINIMAL VERSION","module":"bootstrap","environment":"development","service_mode":"free","debug":false}
+{"timestamp":"2025-08-17T10:00:22.317323Z","level":"INFO","logger":"app.storage.database","message":"Initializing database at: data\\app.db","module":"database"}
+{"timestamp":"2025-08-17T10:00:22.330301Z","level":"INFO","logger":"app.storage.database","message":"Database initialized successfully with WAL mode","module":"database"}
+{"timestamp":"2025-08-17T10:00:22.336793Z","level":"INFO","logger":"app.storage.database","message":"Database tables created successfully","module":"database"}
+{"timestamp":"2025-08-17T10:00:22.336793Z","level":"INFO","logger":"app.bootstrap","message":"Database initialized successfully with WAL mode","module":"bootstrap"}
+{"timestamp":"2025-08-17T10:00:22.336793Z","level":"INFO","logger":"app.bootstrap","message":"Skipping RPC/chain client initialization for testing","module":"bootstrap"}
+{"timestamp":"2025-08-17T10:02:25.203006Z","level":"INFO","logger":"app.bootstrap","message":"Shutting down DEX Sniper Pro - MINIMAL VERSION","module":"bootstrap","uptime_sec":122.886779}
+{"timestamp":"2025-08-17T10:02:25.204530Z","level":"INFO","logger":"app.storage.database","message":"Database connections closed","module":"database"}
+{"timestamp":"2025-08-17T10:02:25.204530Z","level":"INFO","logger":"app.bootstrap","message":"Database connections closed","module":"bootstrap"}
+{"timestamp":"2025-08-17T10:02:27.172916Z","level":"INFO","logger":"root","message":"Logging system initialized","module":"logging","log_level":"INFO","debug":false,"environment":"development"}
+{"timestamp":"2025-08-17T10:02:27.172916Z","level":"INFO","logger":"app.bootstrap","message":"Starting DEX Sniper Pro - MINIMAL VERSION","module":"bootstrap","environment":"development","service_mode":"free","debug":false}
+{"timestamp":"2025-08-17T10:02:27.172916Z","level":"INFO","logger":"app.storage.database","message":"Initializing database at: data\\app.db","module":"database"}
+{"timestamp":"2025-08-17T10:02:27.185133Z","level":"INFO","logger":"app.storage.database","message":"Database initialized successfully with WAL mode","module":"database"}
+{"timestamp":"2025-08-17T10:02:27.191447Z","level":"INFO","logger":"app.storage.database","message":"Database tables created successfully","module":"database"}
+{"timestamp":"2025-08-17T10:02:27.191463Z","level":"INFO","logger":"app.bootstrap","message":"Database initialized successfully with WAL mode","module":"bootstrap"}
+{"timestamp":"2025-08-17T10:02:27.191463Z","level":"INFO","logger":"app.bootstrap","message":"Skipping RPC/chain client initialization for testing","module":"bootstrap"}
+{"timestamp":"2025-08-17T10:02:34.306006Z","level":"INFO","logger":"app.bootstrap","message":"Shutting down DEX Sniper Pro - MINIMAL VERSION","module":"bootstrap","uptime_sec":7.134987}
+{"timestamp":"2025-08-17T10:02:34.308190Z","level":"INFO","logger":"app.storage.database","message":"Database connections closed","module":"database"}
+{"timestamp":"2025-08-17T10:02:34.308190Z","level":"INFO","logger":"app.bootstrap","message":"Database connections closed","module":"bootstrap"}
+{"timestamp":"2025-08-17T10:02:39.164236Z","level":"INFO","logger":"root","message":"Logging system initialized","module":"logging","log_level":"INFO","debug":false,"environment":"development"}
+{"timestamp":"2025-08-17T10:02:39.164236Z","level":"INFO","logger":"app.bootstrap","message":"Starting DEX Sniper Pro - MINIMAL VERSION","module":"bootstrap","environment":"development","service_mode":"free","debug":false}
+{"timestamp":"2025-08-17T10:02:39.164236Z","level":"INFO","logger":"app.storage.database","message":"Initializing database at: data\\app.db","module":"database"}
+{"timestamp":"2025-08-17T10:02:39.177825Z","level":"INFO","logger":"app.storage.database","message":"Database initialized successfully with WAL mode","module":"database"}
+{"timestamp":"2025-08-17T10:02:39.183618Z","level":"INFO","logger":"app.storage.database","message":"Database tables created successfully","module":"database"}
+{"timestamp":"2025-08-17T10:02:39.183618Z","level":"INFO","logger":"app.bootstrap","message":"Database initialized successfully with WAL mode","module":"bootstrap"}
+{"timestamp":"2025-08-17T10:02:39.183618Z","level":"INFO","logger":"app.bootstrap","message":"Skipping RPC/chain client initialization for testing","module":"bootstrap"}
+{"timestamp":"2025-08-17T10:02:55.205141Z","level":"INFO","logger":"app.bootstrap","message":"Shutting down DEX Sniper Pro - MINIMAL VERSION","module":"bootstrap","uptime_sec":16.040905}
+{"timestamp":"2025-08-17T10:02:55.206102Z","level":"INFO","logger":"app.storage.database","message":"Database connections closed","module":"database"}
+{"timestamp":"2025-08-17T10:02:55.206102Z","level":"INFO","logger":"app.bootstrap","message":"Database connections closed","module":"bootstrap"}
