@@ -24,6 +24,7 @@ from ...services.pricing import PricingService
 from ...trading.executor import TradeExecutor
 from ...core.logging import get_logger
 from ...core.retry import retry_with_backoff
+from .triggers import OrderTriggerMonitor
 
 logger = get_logger(__name__)
 
@@ -48,16 +49,26 @@ class AdvancedOrderManager:
     - Dollar-cost averaging (DCA)
     - Bracket orders (combined stop + profit)
     - Trailing stop orders
+    
+    Enhanced with integrated trigger monitoring for real-time execution.
     """
     
     def __init__(self):
-        """Initialize advanced order manager."""
+        """Initialize advanced order manager with trigger monitoring."""
         self.order_repo = AdvancedOrderRepository()
         self.position_repo = PositionRepository()
         self.pricing_service = PricingService()
         self.trade_executor = TradeExecutor()
         
-        # Order monitoring
+        # Initialize integrated trigger monitor
+        self.trigger_monitor = OrderTriggerMonitor(
+            order_repo=self.order_repo,
+            position_repo=self.position_repo,
+            trade_executor=self.trade_executor,
+            check_interval=1.0  # Check triggers every second
+        )
+        
+        # Order monitoring (legacy individual monitoring)
         self._monitoring_tasks: Dict[str, asyncio.Task] = {}
         self._shutdown_event = asyncio.Event()
         
@@ -66,6 +77,29 @@ class AdvancedOrderManager:
         self.min_order_value = Decimal('10')  # $10 minimum
         self.price_check_interval = 30  # seconds
         
+        logger.info("AdvancedOrderManager initialized with integrated trigger monitoring")
+
+    async def start(self) -> None:
+        """Start the order manager and trigger monitoring."""
+        logger.info("Starting AdvancedOrderManager")
+        
+        # Start integrated trigger monitoring
+        await self.trigger_monitor.start()
+        
+        logger.info("AdvancedOrderManager started successfully with trigger monitoring")
+
+    async def stop(self) -> None:
+        """Stop the order manager and trigger monitoring."""
+        logger.info("Stopping AdvancedOrderManager")
+        
+        # Stop integrated trigger monitoring
+        await self.trigger_monitor.stop()
+        
+        # Shutdown legacy monitoring
+        await self.shutdown()
+        
+        logger.info("AdvancedOrderManager stopped successfully")
+
     async def create_stop_loss_order(
         self,
         user_id: int,
@@ -179,8 +213,7 @@ class AdvancedOrderManager:
             
             await self.order_repo.create_order(order)
             
-            # Start monitoring task
-            await self._start_order_monitoring(order_id)
+            # Note: No need to start individual monitoring - integrated trigger monitor handles all orders
             
             logger.info("Successfully created stop-loss order", extra={
                 "trace_id": trace_id,
@@ -290,7 +323,6 @@ class AdvancedOrderManager:
             )
             
             await self.order_repo.create_order(order)
-            await self._start_order_monitoring(order_id)
             
             logger.info("Successfully created take-profit order", extra={
                 "trace_id": trace_id,
@@ -410,7 +442,6 @@ class AdvancedOrderManager:
             )
             
             await self.order_repo.create_order(order)
-            await self._start_order_monitoring(order_id)
             
             logger.info("Successfully created DCA order", extra={
                 "trace_id": trace_id,
@@ -529,7 +560,6 @@ class AdvancedOrderManager:
             )
             
             await self.order_repo.create_order(order)
-            await self._start_order_monitoring(order_id)
             
             logger.info("Successfully created bracket order", extra={
                 "trace_id": trace_id,
@@ -637,7 +667,6 @@ class AdvancedOrderManager:
             )
             
             await self.order_repo.create_order(order)
-            await self._start_order_monitoring(order_id)
             
             logger.info("Successfully created trailing stop order", extra={
                 "trace_id": trace_id,
@@ -654,19 +683,22 @@ class AdvancedOrderManager:
             })
             raise
     
-    async def get_active_orders(self, user_id: int) -> List[AdvancedOrder]:
+    async def get_active_orders(self, user_id: Optional[int] = None) -> List[AdvancedOrder]:
         """
-        Get active orders for user.
+        Get active orders, optionally filtered by user.
         
         Args:
-            user_id: User ID
+            user_id: User ID (optional filter)
             
         Returns:
             List of active orders
         """
-        return await self.order_repo.get_user_orders(
-            user_id, status=OrderStatus.ACTIVE
-        )
+        if user_id:
+            return await self.order_repo.get_user_orders(
+                user_id, status=OrderStatus.ACTIVE
+            )
+        else:
+            return await self.order_repo.get_active_orders()
     
     async def get_user_positions(self, user_id: int) -> List[Position]:
         """
@@ -679,13 +711,52 @@ class AdvancedOrderManager:
             List of user positions
         """
         return await self.position_repo.get_user_positions(user_id)
+
+    async def get_order_by_id(self, order_id: str) -> Optional[AdvancedOrder]:
+        """
+        Get order by ID.
+        
+        Args:
+            order_id: Order ID to retrieve
+            
+        Returns:
+            Order if found, None otherwise
+        """
+        return await self.order_repo.get_order_by_id(order_id)
+
+    async def get_user_orders(
+        self,
+        user_id: int,
+        status: Optional[OrderStatus] = None,
+        order_type: Optional[OrderType] = None,
+        limit: Optional[int] = None
+    ) -> List[AdvancedOrder]:
+        """
+        Get orders for a specific user with optional filtering.
+        
+        Args:
+            user_id: User ID
+            status: Filter by order status (optional)
+            order_type: Filter by order type (optional)
+            limit: Maximum number of orders to return (optional)
+            
+        Returns:
+            List of orders matching criteria
+        """
+        return await self.order_repo.get_user_orders(
+            user_id=user_id,
+            status=status,
+            order_type=order_type,
+            limit=limit
+        )
     
-    async def cancel_order(self, order_id: str, trace_id: Optional[str] = None) -> bool:
+    async def cancel_order(self, order_id: str, user_id: Optional[int] = None, trace_id: Optional[str] = None) -> bool:
         """
         Cancel an active order.
         
         Args:
             order_id: Order ID
+            user_id: User ID (for permission checking)
             trace_id: Request trace ID
             
         Returns:
@@ -698,9 +769,29 @@ class AdvancedOrderManager:
             logger.info("Cancelling order", extra={
                 "trace_id": trace_id,
                 "order_id": order_id,
+                "user_id": user_id,
                 "module": "advanced_order_manager",
                 "action": "cancel_order"
             })
+
+            # Get order for permission checking
+            if user_id:
+                order = await self.order_repo.get_order_by_id(order_id)
+                if not order:
+                    logger.warning("Order not found for cancellation", extra={
+                        "trace_id": trace_id,
+                        "order_id": order_id
+                    })
+                    return False
+                
+                if order.user_id != user_id:
+                    logger.warning("User not authorized to cancel order", extra={
+                        "trace_id": trace_id,
+                        "order_id": order_id,
+                        "user_id": user_id,
+                        "order_user_id": order.user_id
+                    })
+                    return False
             
             # Update order status
             success = await self.order_repo.update_order_status(
@@ -708,7 +799,7 @@ class AdvancedOrderManager:
             )
             
             if success:
-                # Stop monitoring task
+                # Stop legacy monitoring task if exists
                 await self._stop_order_monitoring(order_id)
                 
                 logger.info("Successfully cancelled order", extra={
@@ -726,6 +817,36 @@ class AdvancedOrderManager:
                 "module": "advanced_order_manager"
             })
             return False
+
+    def get_monitoring_stats(self) -> Dict:
+        """
+        Get monitoring statistics from trigger monitor.
+        
+        Returns:
+            Dictionary with monitoring statistics
+        """
+        trigger_stats = self.trigger_monitor.get_monitoring_stats()
+        
+        return {
+            'manager_status': 'running' if not self._shutdown_event.is_set() else 'stopped',
+            'trigger_monitor': trigger_stats,
+            'legacy_monitoring_tasks': len(self._monitoring_tasks),
+            'timestamp': datetime.utcnow().isoformat()
+        }
+
+    async def force_check_triggers(self) -> None:
+        """
+        Force an immediate trigger check for all active orders.
+        
+        This method can be used for testing or manual trigger checks.
+        """
+        logger.info("Forcing trigger check for all active orders")
+        
+        # Load active orders and check triggers immediately
+        await self.trigger_monitor._load_active_orders()
+        await self.trigger_monitor._check_all_triggers()
+        
+        logger.info("Forced trigger check completed")
     
     async def _validate_order_params(
         self,
@@ -751,75 +872,48 @@ class AdvancedOrderManager:
             raise OrderValidationError("Quantity must be positive")
     
     async def _start_order_monitoring(self, order_id: str) -> None:
-        """Start monitoring task for order."""
-        if order_id not in self._monitoring_tasks:
-            task = asyncio.create_task(self._monitor_order(order_id))
-            self._monitoring_tasks[order_id] = task
+        """Start legacy monitoring task for order (deprecated - use trigger monitor)."""
+        logger.debug(f"Legacy monitoring requested for order {order_id} - using integrated trigger monitor instead")
+        # Note: Individual order monitoring is deprecated in favor of integrated trigger monitor
+        pass
     
     async def _stop_order_monitoring(self, order_id: str) -> None:
-        """Stop monitoring task for order."""
+        """Stop legacy monitoring task for order."""
         if order_id in self._monitoring_tasks:
             task = self._monitoring_tasks[order_id]
             task.cancel()
             del self._monitoring_tasks[order_id]
+            logger.debug(f"Stopped legacy monitoring task for order {order_id}")
     
     async def _monitor_order(self, order_id: str) -> None:
-        """Monitor order for execution triggers."""
-        try:
-            while not self._shutdown_event.is_set():
-                order = await self.order_repo.get_order_by_id(order_id)
-                if not order or order.status != OrderStatus.ACTIVE:
-                    break
-                
-                # Check execution conditions based on order type
-                if order.order_type == OrderType.STOP_LOSS:
-                    await self._check_stop_loss_trigger(order)
-                elif order.order_type == OrderType.TAKE_PROFIT:
-                    await self._check_take_profit_trigger(order)
-                elif order.order_type == OrderType.DCA:
-                    await self._check_dca_trigger(order)
-                elif order.order_type == OrderType.BRACKET:
-                    await self._check_bracket_trigger(order)
-                elif order.order_type == OrderType.TRAILING_STOP:
-                    await self._check_trailing_stop_trigger(order)
-                
-                await asyncio.sleep(self.price_check_interval)
-                
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            logger.error("Order monitoring error", extra={
-                "order_id": order_id,
-                "error": str(e),
-                "module": "advanced_order_manager"
-            })
-        finally:
-            if order_id in self._monitoring_tasks:
-                del self._monitoring_tasks[order_id]
+        """Legacy order monitoring (deprecated - use trigger monitor)."""
+        logger.warning(f"Legacy order monitoring called for {order_id} - this is deprecated")
+        # Legacy monitoring logic kept for compatibility but not used
+        pass
     
     async def _check_stop_loss_trigger(self, order: AdvancedOrder) -> None:
-        """Check if stop-loss order should trigger."""
-        # Implementation placeholder - will be completed in next step
+        """Legacy trigger check (deprecated - use trigger monitor)."""
+        logger.debug("Legacy stop-loss trigger check - using integrated trigger monitor instead")
         pass
     
     async def _check_take_profit_trigger(self, order: AdvancedOrder) -> None:
-        """Check if take-profit order should trigger."""
-        # Implementation placeholder - will be completed in next step
+        """Legacy trigger check (deprecated - use trigger monitor)."""
+        logger.debug("Legacy take-profit trigger check - using integrated trigger monitor instead")
         pass
     
     async def _check_dca_trigger(self, order: AdvancedOrder) -> None:
-        """Check if DCA order should execute next purchase."""
-        # Implementation placeholder - will be completed in next step
+        """Legacy trigger check (deprecated - use trigger monitor)."""
+        logger.debug("Legacy DCA trigger check - using integrated trigger monitor instead")
         pass
     
     async def _check_bracket_trigger(self, order: AdvancedOrder) -> None:
-        """Check if bracket order should trigger."""
-        # Implementation placeholder - will be completed in next step
+        """Legacy trigger check (deprecated - use trigger monitor)."""
+        logger.debug("Legacy bracket trigger check - using integrated trigger monitor instead")
         pass
     
     async def _check_trailing_stop_trigger(self, order: AdvancedOrder) -> None:
-        """Check if trailing stop order should trigger."""
-        # Implementation placeholder - will be completed in next step
+        """Legacy trigger check (deprecated - use trigger monitor)."""
+        logger.debug("Legacy trailing stop trigger check - using integrated trigger monitor instead")
         pass
     
     async def shutdown(self) -> None:
@@ -827,11 +921,11 @@ class AdvancedOrderManager:
         logger.info("Shutting down advanced order manager")
         self._shutdown_event.set()
         
-        # Cancel all monitoring tasks
+        # Cancel all legacy monitoring tasks
         for task in self._monitoring_tasks.values():
             task.cancel()
         
-        # Wait for tasks to complete
+        # Wait for legacy tasks to complete
         if self._monitoring_tasks:
             await asyncio.gather(*self._monitoring_tasks.values(), return_exceptions=True)
         
