@@ -1,13 +1,14 @@
 """
-External security provider integrations for honeypot detection and contract analysis.
+Security providers integration for external token validation and honeypot detection.
 """
 from __future__ import annotations
 
 import asyncio
-import logging
 import time
 from decimal import Decimal
+from enum import Enum
 from typing import Dict, List, Optional, Any
+from dataclasses import dataclass
 
 import httpx
 
@@ -16,486 +17,776 @@ from ..core.settings import settings
 
 logger = get_logger(__name__)
 
-# Module-level constants
-REQUEST_TIMEOUT = 10.0  # 10 second timeout
-MAX_RETRIES = 2
-CACHE_TTL_SECONDS = 300  # 5 minute cache
+
+class SecurityProvider(str, Enum):
+    """Supported security provider services."""
+    HONEYPOT_IS = "honeypot_is"
+    TOKEN_SNIFFER = "token_sniffer"
+    RUGDOC = "rugdoc"
+    DEXTOOLS = "dextools"
+    GOPLUSLAB = "gopluslab"
 
 
-class SecurityProvider:
+@dataclass
+class SecurityProviderResult:
+    """Result from a security provider check."""
+    provider: SecurityProvider
+    token_address: str
+    chain: str
+    is_honeypot: bool
+    honeypot_confidence: float  # 0.0 - 1.0
+    risk_score: float  # 0.0 - 1.0
+    risk_factors: List[str]
+    details: Dict[str, Any]
+    response_time_ms: float
+    success: bool
+    error_message: Optional[str] = None
+
+
+@dataclass
+class AggregatedSecurityResult:
+    """Aggregated results from multiple security providers."""
+    token_address: str
+    chain: str
+    providers_checked: int
+    providers_successful: int
+    honeypot_detected: bool
+    honeypot_confidence: float
+    overall_risk_score: float
+    risk_factors: List[str]
+    provider_results: Dict[str, SecurityProviderResult]
+    analysis_time_ms: float
+
+
+class SecurityProviderClient:
     """
-    Integration with external security providers for comprehensive token analysis.
+    Client for integrating with external security providers.
     
-    Provides access to multiple security data sources including honeypot
-    detection services, contract analyzers, and community-driven security feeds.
+    Provides honeypot detection, risk scoring, and token validation
+    from multiple external services with fallback and aggregation.
     """
     
     def __init__(self):
-        """Initialize security provider."""
+        """Initialize security provider client."""
+        self.timeout = httpx.Timeout(5.0, connect=2.0)
+        self.max_retries = 2
+        self.cache_ttl_seconds = 300  # 5 minute cache
         self.session_cache: Dict[str, Dict] = {}
-        self.providers = {
-            "honeypot_is": {
-                "name": "Honeypot.is",
-                "base_url": "https://api.honeypot.is",
-                "enabled": True,
-                "rate_limit": 60,  # requests per minute
+        
+        # Provider endpoints (free tiers)
+        self.provider_endpoints = {
+            SecurityProvider.HONEYPOT_IS: "https://api.honeypot.is/v2/IsHoneypot",
+            SecurityProvider.TOKEN_SNIFFER: "https://tokensniffer.com/api/v2/tokens/{chain}/{address}",
+            SecurityProvider.GOPLUSLAB: "https://api.gopluslabs.io/v1/token_security/{chain}",
+            SecurityProvider.DEXTOOLS: "https://www.dextools.io/shared/data/token",
+            # Add more providers as needed
+        }
+        
+        # Chain mappings for different providers
+        self.chain_mappings = {
+            SecurityProvider.HONEYPOT_IS: {
+                "ethereum": "1",
+                "bsc": "56", 
+                "polygon": "137",
+                "arbitrum": "42161",
+                "base": "8453",
             },
-            "dextools": {
-                "name": "DEXTools",
-                "base_url": "https://www.dextools.io/shared/data",
-                "enabled": True,
-                "rate_limit": 100,
+            SecurityProvider.GOPLUSLAB: {
+                "ethereum": "1",
+                "bsc": "56",
+                "polygon": "137", 
+                "arbitrum": "42161",
+                "base": "8453",
             },
-            "tokensniffer": {
-                "name": "TokenSniffer",
-                "base_url": "https://tokensniffer.com/api",
-                "enabled": True,
-                "rate_limit": 50,
+            SecurityProvider.TOKEN_SNIFFER: {
+                "ethereum": "ethereum",
+                "bsc": "bsc",
+                "polygon": "polygon",
+                "arbitrum": "arbitrum", 
+                "base": "base",
             },
-            "goplus": {
-                "name": "GoPlus Security",
-                "base_url": "https://api.gopluslabs.io",
-                "enabled": True,
-                "rate_limit": 200,
+            SecurityProvider.DEXTOOLS: {
+                "ethereum": "ether",
+                "bsc": "bsc",
+                "polygon": "polygon",
+                "arbitrum": "arbitrum",
+                "base": "base",
             }
         }
     
-    async def analyze_token_security(
+    async def check_token_security(
         self,
         token_address: str,
         chain: str,
-    ) -> Dict[str, Any]:
+        providers: Optional[List[SecurityProvider]] = None,
+    ) -> AggregatedSecurityResult:
         """
-        Perform comprehensive security analysis using multiple providers.
+        Check token security across multiple providers.
+        
+        Args:
+            token_address: Token contract address
+            chain: Blockchain network
+            providers: Specific providers to check (default: all)
+            
+        Returns:
+            AggregatedSecurityResult: Aggregated security assessment
+        """
+        start_time = time.time()
+        
+        if providers is None:
+            providers = [
+                SecurityProvider.HONEYPOT_IS,
+                SecurityProvider.GOPLUSLAB,
+                SecurityProvider.TOKEN_SNIFFER,
+            ]
+        
+        logger.info(
+            f"Starting security provider checks for {token_address} on {chain}",
+            extra={
+                'extra_data': {
+                    'token_address': token_address,
+                    'chain': chain,
+                    'providers': [p.value for p in providers],
+                }
+            }
+        )
+        
+        # Check cache first
+        cache_key = f"security:{chain}:{token_address.lower()}"
+        if cache_key in self.session_cache:
+            cached_result = self.session_cache[cache_key]
+            if time.time() - cached_result["timestamp"] < self.cache_ttl_seconds:
+                logger.debug(f"Using cached security analysis for {token_address}")
+                cached_result["data"].analysis_time_ms = (time.time() - start_time) * 1000
+                return cached_result["data"]
+        
+        # Run provider checks concurrently
+        tasks = [
+            self._check_provider(provider, token_address, chain)
+            for provider in providers
+        ]
+        
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Process results
+        provider_results = {}
+        successful_results = []
+        
+        for i, result in enumerate(results):
+            if isinstance(result, SecurityProviderResult):
+                provider_results[result.provider.value] = result
+                if result.success:
+                    successful_results.append(result)
+            elif isinstance(result, Exception):
+                logger.warning(f"Provider check {i} failed: {result}")
+        
+        # Aggregate results
+        aggregated = self._aggregate_results(
+            token_address, 
+            chain, 
+            successful_results, 
+            provider_results
+        )
+        
+        aggregated.analysis_time_ms = (time.time() - start_time) * 1000
+        
+        # Cache the result
+        self.session_cache[cache_key] = {
+            "data": aggregated,
+            "timestamp": time.time(),
+        }
+        
+        logger.info(
+            f"Security provider analysis completed: {aggregated.providers_successful}/{aggregated.providers_checked} successful",
+            extra={
+                'extra_data': {
+                    'token_address': token_address,
+                    'honeypot_detected': aggregated.honeypot_detected,
+                    'honeypot_confidence': aggregated.honeypot_confidence,
+                    'overall_risk_score': aggregated.overall_risk_score,
+                    'providers_successful': aggregated.providers_successful,
+                    'analysis_time_ms': aggregated.analysis_time_ms,
+                }
+            }
+        )
+        
+        return aggregated
+    
+    async def _check_provider(
+        self,
+        provider: SecurityProvider,
+        token_address: str,
+        chain: str,
+    ) -> SecurityProviderResult:
+        """
+        Check a specific security provider.
+        
+        Args:
+            provider: Security provider to check
+            token_address: Token contract address
+            chain: Blockchain network
+            
+        Returns:
+            SecurityProviderResult: Provider-specific result
+        """
+        start_time = time.time()
+        
+        try:
+            if provider == SecurityProvider.HONEYPOT_IS:
+                result = await self._check_honeypot_is(token_address, chain)
+            elif provider == SecurityProvider.GOPLUSLAB:
+                result = await self._check_gopluslab(token_address, chain)
+            elif provider == SecurityProvider.TOKEN_SNIFFER:
+                result = await self._check_token_sniffer(token_address, chain)
+            elif provider == SecurityProvider.DEXTOOLS:
+                result = await self._check_dextools(token_address, chain)
+            else:
+                raise ValueError(f"Unsupported provider: {provider}")
+            
+            result.response_time_ms = (time.time() - start_time) * 1000
+            return result
+            
+        except Exception as e:
+            logger.error(f"Provider {provider.value} check failed: {e}")
+            return SecurityProviderResult(
+                provider=provider,
+                token_address=token_address,
+                chain=chain,
+                is_honeypot=False,
+                honeypot_confidence=0.0,
+                risk_score=0.5,  # Medium risk on failure
+                risk_factors=["provider_check_failed"],
+                details={"error": str(e)},
+                response_time_ms=(time.time() - start_time) * 1000,
+                success=False,
+                error_message=str(e),
+            )
+    
+    async def _check_honeypot_is(
+        self,
+        token_address: str,
+        chain: str,
+    ) -> SecurityProviderResult:
+        """
+        Check honeypot.is API for honeypot detection.
         
         Args:
             token_address: Token contract address
             chain: Blockchain network
             
         Returns:
-            Aggregated security analysis from all providers
+            SecurityProviderResult: Honeypot.is result
         """
-        start_time = time.time()
+        chain_id = self.chain_mappings[SecurityProvider.HONEYPOT_IS].get(chain)
+        if not chain_id:
+            raise ValueError(f"Chain {chain} not supported by honeypot.is")
+        
+        params = {
+            "address": token_address,
+            "chainID": chain_id,
+        }
+        
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.get(
+                self.provider_endpoints[SecurityProvider.HONEYPOT_IS],
+                params=params
+            )
+            response.raise_for_status()
+            data = response.json()
+        
+        # Parse honeypot.is response
+        is_honeypot = data.get("IsHoneypot", False)
+        honeypot_confidence = 0.9 if is_honeypot else 0.1
+        
+        # Extract risk factors
+        risk_factors = []
+        if data.get("IsHoneypot"):
+            risk_factors.append("honeypot_detected")
+        
+        buy_tax = float(data.get("BuyTax", 0))
+        sell_tax = float(data.get("SellTax", 0))
+        
+        if buy_tax > 10:
+            risk_factors.append("high_buy_tax")
+        if sell_tax > 10:
+            risk_factors.append("high_sell_tax")
+        if sell_tax > 50:
+            risk_factors.append("excessive_sell_tax")
+        
+        # Calculate risk score based on taxes and honeypot status
+        if is_honeypot:
+            risk_score = 0.95
+        else:
+            # Base score on tax levels
+            max_tax = max(buy_tax, sell_tax)
+            if max_tax > 20:
+                risk_score = 0.8
+            elif max_tax > 10:
+                risk_score = 0.6
+            elif max_tax > 5:
+                risk_score = 0.3
+            else:
+                risk_score = 0.1
+        
+        return SecurityProviderResult(
+            provider=SecurityProvider.HONEYPOT_IS,
+            token_address=token_address,
+            chain=chain,
+            is_honeypot=is_honeypot,
+            honeypot_confidence=honeypot_confidence,
+            risk_score=risk_score,
+            risk_factors=risk_factors,
+            details={
+                "buy_tax": buy_tax,
+                "sell_tax": sell_tax,
+                "transfer_tax": float(data.get("TransferTax", 0)),
+                "honeypot_reason": data.get("HoneypotReason", ""),
+                "buy_gas_used": data.get("BuyGasUsed", 0),
+                "sell_gas_used": data.get("SellGasUsed", 0),
+                "max_buy_amount": data.get("MaxBuyAmount", ""),
+                "max_sell_amount": data.get("MaxSellAmount", ""),
+            },
+            response_time_ms=0,  # Will be set by caller
+            success=True,
+        )
+    
+    async def _check_gopluslab(
+        self,
+        token_address: str,
+        chain: str,
+    ) -> SecurityProviderResult:
+        """
+        Check GoPlus Labs API for security analysis.
+        
+        Args:
+            token_address: Token contract address
+            chain: Blockchain network
+            
+        Returns:
+            SecurityProviderResult: GoPlus Labs result
+        """
+        chain_id = self.chain_mappings[SecurityProvider.GOPLUSLAB].get(chain)
+        if not chain_id:
+            raise ValueError(f"Chain {chain} not supported by GoPlus Labs")
+        
+        url = self.provider_endpoints[SecurityProvider.GOPLUSLAB].format(chain=chain_id)
+        params = {"contract_addresses": token_address}
+        
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.get(url, params=params)
+            response.raise_for_status()
+            data = response.json()
+        
+        # Parse GoPlus Labs response
+        token_data = data.get("result", {}).get(token_address.lower(), {})
+        
+        if not token_data:
+            raise ValueError("Token not found in GoPlus Labs response")
+        
+        # Check for honeypot indicators
+        is_honeypot = (
+            token_data.get("is_honeypot") == "1" or
+            token_data.get("cannot_sell_all") == "1" or
+            (token_data.get("sell_tax") and float(token_data["sell_tax"]) > 0.5)
+        )
+        
+        honeypot_confidence = 0.85 if is_honeypot else 0.15
+        
+        # Extract risk factors
+        risk_factors = []
+        if token_data.get("is_honeypot") == "1":
+            risk_factors.append("honeypot_detected")
+        if token_data.get("cannot_sell_all") == "1":
+            risk_factors.append("cannot_sell_all")
+        if token_data.get("is_blacklisted") == "1":
+            risk_factors.append("blacklist_function")
+        if token_data.get("is_proxy") == "1":
+            risk_factors.append("proxy_contract")
+        if token_data.get("is_mintable") == "1":
+            risk_factors.append("mintable")
+        if token_data.get("can_take_back_ownership") == "1":
+            risk_factors.append("ownership_can_be_reclaimed")
+        if token_data.get("hidden_owner") == "1":
+            risk_factors.append("hidden_owner")
+        if token_data.get("selfdestruct") == "1":
+            risk_factors.append("selfdestruct_function")
+        if token_data.get("transfer_pausable") == "1":
+            risk_factors.append("pausable_transfers")
+        
+        # Calculate risk score
+        risk_score = 0.0
+        
+        # Critical risk factors
+        if is_honeypot:
+            risk_score = max(risk_score, 0.9)
+        if token_data.get("selfdestruct") == "1":
+            risk_score = max(risk_score, 0.85)
+        if token_data.get("cannot_sell_all") == "1":
+            risk_score = max(risk_score, 0.8)
+        
+        # High risk factors
+        if token_data.get("hidden_owner") == "1":
+            risk_score = max(risk_score, 0.7)
+        if token_data.get("can_take_back_ownership") == "1":
+            risk_score = max(risk_score, 0.65)
+        if token_data.get("transfer_pausable") == "1":
+            risk_score = max(risk_score, 0.6)
+        
+        # Medium risk factors
+        if token_data.get("is_proxy") == "1":
+            risk_score = max(risk_score, 0.4)
+        if token_data.get("is_mintable") == "1":
+            risk_score = max(risk_score, 0.35)
+        if token_data.get("is_blacklisted") == "1":
+            risk_score = max(risk_score, 0.5)
+        
+        # Tax-based risk
+        buy_tax = float(token_data.get("buy_tax", 0))
+        sell_tax = float(token_data.get("sell_tax", 0))
+        max_tax = max(buy_tax, sell_tax)
+        
+        if max_tax > 0.3:  # >30%
+            risk_score = max(risk_score, 0.8)
+        elif max_tax > 0.15:  # >15%
+            risk_score = max(risk_score, 0.6)
+        elif max_tax > 0.1:  # >10%
+            risk_score = max(risk_score, 0.4)
+        
+        # If no major risks found, set low risk score
+        if risk_score == 0.0:
+            risk_score = 0.1
+        
+        return SecurityProviderResult(
+            provider=SecurityProvider.GOPLUSLAB,
+            token_address=token_address,
+            chain=chain,
+            is_honeypot=is_honeypot,
+            honeypot_confidence=honeypot_confidence,
+            risk_score=risk_score,
+            risk_factors=risk_factors,
+            details={
+                "buy_tax": buy_tax,
+                "sell_tax": sell_tax,
+                "is_open_source": token_data.get("is_open_source") == "1",
+                "is_proxy": token_data.get("is_proxy") == "1",
+                "is_mintable": token_data.get("is_mintable") == "1",
+                "can_take_back_ownership": token_data.get("can_take_back_ownership") == "1",
+                "owner_change_balance": token_data.get("owner_change_balance") == "1",
+                "hidden_owner": token_data.get("hidden_owner") == "1",
+                "selfdestruct": token_data.get("selfdestruct") == "1",
+                "external_call": token_data.get("external_call") == "1",
+                "slippage_modifiable": token_data.get("slippage_modifiable") == "1",
+                "trading_cooldown": token_data.get("trading_cooldown") == "1",
+                "transfer_pausable": token_data.get("transfer_pausable") == "1",
+                "cannot_sell_all": token_data.get("cannot_sell_all") == "1",
+                "holder_count": int(token_data.get("holder_count", "0")),
+                "total_supply": token_data.get("total_supply", "0"),
+            },
+            response_time_ms=0,  # Will be set by caller
+            success=True,
+        )
+    
+    async def _check_token_sniffer(
+        self,
+        token_address: str,
+        chain: str,
+    ) -> SecurityProviderResult:
+        """
+        Check Token Sniffer API for reputation analysis.
+        
+        Args:
+            token_address: Token contract address
+            chain: Blockchain network
+            
+        Returns:
+            SecurityProviderResult: Token Sniffer result
+        """
+        chain_name = self.chain_mappings[SecurityProvider.TOKEN_SNIFFER].get(chain)
+        if not chain_name:
+            raise ValueError(f"Chain {chain} not supported by Token Sniffer")
+        
+        url = self.provider_endpoints[SecurityProvider.TOKEN_SNIFFER].format(
+            chain=chain_name, 
+            address=token_address
+        )
         
         try:
-            # Check cache first
-            cache_key = f"{chain}:{token_address.lower()}"
-            if cache_key in self.session_cache:
-                cached_result = self.session_cache[cache_key]
-                if time.time() - cached_result["timestamp"] < CACHE_TTL_SECONDS:
-                    logger.debug(f"Using cached security analysis for {token_address}")
-                    return cached_result["data"]
-            
-            # Run security checks from multiple providers concurrently
-            security_tasks = [
-                self._check_honeypot_is(token_address, chain),
-                self._check_goplus_security(token_address, chain),
-                self._check_tokensniffer(token_address, chain),
-                self._check_dextools_audit(token_address, chain),
-            ]
-            
-            results = await asyncio.gather(*security_tasks, return_exceptions=True)
-            
-            # Aggregate results from all providers
-            aggregated_result = self._aggregate_security_results(results, token_address, chain)
-            
-            # Cache the result
-            self.session_cache[cache_key] = {
-                "data": aggregated_result,
-                "timestamp": time.time(),
-            }
-            
-            execution_time = (time.time() - start_time) * 1000
-            aggregated_result["analysis_time_ms"] = execution_time
-            
-            logger.info(
-                f"Security analysis completed for {token_address}",
-                extra={
-                    'extra_data': {
-                        'token_address': token_address,
-                        'chain': chain,
-                        'execution_time_ms': execution_time,
-                        'providers_checked': len(security_tasks),
-                        'overall_risk': aggregated_result.get("overall_risk", "unknown"),
-                    }
-                }
-            )
-            
-            return aggregated_result
-            
-        except Exception as e:
-            logger.error(f"Security analysis failed for {token_address}: {e}")
-            return {
-                "error": str(e),
-                "overall_risk": "critical",
-                "analysis_successful": False,
-                "analysis_time_ms": (time.time() - start_time) * 1000,
-            }
-    
-    async def _check_honeypot_is(
-        self,
-        token_address: str,
-        chain: str,
-    ) -> Dict[str, Any]:
-        """Check honeypot status using Honeypot.is API."""
-        try:
-            # Convert chain name to honeypot.is format
-            chain_mapping = {
-                "ethereum": "eth",
-                "bsc": "bsc",
-                "polygon": "polygon",
-            }
-            
-            api_chain = chain_mapping.get(chain.lower())
-            if not api_chain:
-                return {"provider": "honeypot_is", "error": "Chain not supported"}
-            
-            url = f"{self.providers['honeypot_is']['base_url']}/v2/IsHoneypot"
-            params = {
-                "address": token_address,
-                "chainID": api_chain,
-            }
-            
-            async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
-                response = await client.get(url, params=params)
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.get(url)
                 response.raise_for_status()
-                
                 data = response.json()
-                
-                return {
-                    "provider": "honeypot_is",
-                    "is_honeypot": data.get("IsHoneypot", False),
-                    "honeypot_reason": data.get("HoneypotReason", ""),
-                    "buy_tax": float(data.get("BuyTax", 0)),
-                    "sell_tax": float(data.get("SellTax", 0)),
-                    "transfer_tax": float(data.get("TransferTax", 0)),
-                    "buy_gas_used": data.get("BuyGasUsed", 0),
-                    "sell_gas_used": data.get("SellGasUsed", 0),
-                    "max_buy_amount": data.get("MaxBuyAmount", ""),
-                    "max_sell_amount": data.get("MaxSellAmount", ""),
-                    "analysis_successful": True,
-                }
-                
-        except httpx.TimeoutException:
-            logger.warning("Honeypot.is API timeout")
-            return {"provider": "honeypot_is", "error": "timeout", "analysis_successful": False}
         except httpx.HTTPStatusError as e:
-            logger.warning(f"Honeypot.is API error: {e.response.status_code}")
-            return {"provider": "honeypot_is", "error": f"HTTP {e.response.status_code}", "analysis_successful": False}
-        except Exception as e:
-            logger.warning(f"Honeypot.is check failed: {e}")
-            return {"provider": "honeypot_is", "error": str(e), "analysis_successful": False}
+            if e.response.status_code == 404:
+                # Token not found in TokenSniffer - treat as unknown
+                return SecurityProviderResult(
+                    provider=SecurityProvider.TOKEN_SNIFFER,
+                    token_address=token_address,
+                    chain=chain,
+                    is_honeypot=False,
+                    honeypot_confidence=0.5,
+                    risk_score=0.5,
+                    risk_factors=["token_not_found"],
+                    details={"status": "not_found"},
+                    response_time_ms=0,
+                    success=True,
+                )
+            else:
+                raise
+        
+        # Parse Token Sniffer response
+        if data.get("status") != "success":
+            raise ValueError("Token Sniffer API error")
+        
+        token_data = data.get("data", {})
+        score = token_data.get("score", 50)  # 0-100 scale
+        
+        # Convert score to risk assessment
+        risk_score = max(0, (100 - score) / 100)
+        is_honeypot = score < 20  # Very low score indicates potential honeypot
+        honeypot_confidence = 0.7 if is_honeypot else 0.3
+        
+        # Extract risk factors from flags and score
+        risk_factors = []
+        flags = token_data.get("flags", [])
+        
+        for flag in flags:
+            flag_lower = flag.lower()
+            if "honeypot" in flag_lower:
+                risk_factors.append("honeypot_indicator")
+            elif "tax" in flag_lower:
+                risk_factors.append("tax_concern")
+            elif "liquidity" in flag_lower:
+                risk_factors.append("liquidity_concern")
+            elif "ownership" in flag_lower:
+                risk_factors.append("ownership_concern")
+            elif "proxy" in flag_lower:
+                risk_factors.append("proxy_contract")
+        
+        # Score-based risk factors
+        if score < 30:
+            risk_factors.append("very_low_score")
+        elif score < 50:
+            risk_factors.append("low_score")
+        
+        return SecurityProviderResult(
+            provider=SecurityProvider.TOKEN_SNIFFER,
+            token_address=token_address,
+            chain=chain,
+            is_honeypot=is_honeypot,
+            honeypot_confidence=honeypot_confidence,
+            risk_score=risk_score,
+            risk_factors=risk_factors,
+            details={
+                "score": score,
+                "flags": flags,
+                "reputation": token_data.get("reputation", "unknown"),
+                "tests_passed": token_data.get("tests_passed", 0),
+                "tests_failed": token_data.get("tests_failed", 0),
+                "exploits_found": token_data.get("exploits_found", 0),
+            },
+            response_time_ms=0,  # Will be set by caller
+            success=True,
+        )
     
-    async def _check_goplus_security(
+    async def _check_dextools(
         self,
         token_address: str,
         chain: str,
-    ) -> Dict[str, Any]:
-        """Check security using GoPlus Labs API."""
-        try:
-            # GoPlus chain IDs
-            chain_mapping = {
-                "ethereum": "1",
-                "bsc": "56",
-                "polygon": "137",
-            }
+    ) -> SecurityProviderResult:
+        """
+        Check DEXTools for audit and trust information.
+        
+        Args:
+            token_address: Token contract address
+            chain: Blockchain network
             
-            chain_id = chain_mapping.get(chain.lower())
-            if not chain_id:
-                return {"provider": "goplus", "error": "Chain not supported"}
-            
-            url = f"{self.providers['goplus']['base_url']}/v1/token_security/{chain_id}"
-            params = {"contract_addresses": token_address}
-            
-            async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
-                response = await client.get(url, params=params)
-                response.raise_for_status()
-                
-                data = response.json()
-                token_data = data.get("result", {}).get(token_address.lower(), {})
-                
-                if not token_data:
-                    return {"provider": "goplus", "error": "Token not found", "analysis_successful": False}
-                
-                return {
-                    "provider": "goplus",
-                    "is_honeypot": token_data.get("is_honeypot", "0") == "1",
-                    "is_open_source": token_data.get("is_open_source", "0") == "1",
-                    "is_proxy": token_data.get("is_proxy", "0") == "1",
-                    "is_mintable": token_data.get("is_mintable", "0") == "1",
-                    "can_take_back_ownership": token_data.get("can_take_back_ownership", "0") == "1",
-                    "owner_change_balance": token_data.get("owner_change_balance", "0") == "1",
-                    "hidden_owner": token_data.get("hidden_owner", "0") == "1",
-                    "selfdestruct": token_data.get("selfdestruct", "0") == "1",
-                    "external_call": token_data.get("external_call", "0") == "1",
-                    "buy_tax": float(token_data.get("buy_tax", "0")),
-                    "sell_tax": float(token_data.get("sell_tax", "0")),
-                    "slippage_modifiable": token_data.get("slippage_modifiable", "0") == "1",
-                    "trading_cooldown": token_data.get("trading_cooldown", "0") == "1",
-                    "transfer_pausable": token_data.get("transfer_pausable", "0") == "1",
-                    "blacklisted": token_data.get("blacklisted", "0") == "1",
-                    "total_supply": token_data.get("total_supply", "0"),
-                    "holder_count": int(token_data.get("holder_count", "0")),
-                    "analysis_successful": True,
-                }
-                
-        except Exception as e:
-            logger.warning(f"GoPlus security check failed: {e}")
-            return {"provider": "goplus", "error": str(e), "analysis_successful": False}
-    
-    async def _check_tokensniffer(
-        self,
-        token_address: str,
-        chain: str,
-    ) -> Dict[str, Any]:
-        """Check security using TokenSniffer API."""
-        try:
-            # TokenSniffer uses different chain identifiers
-            chain_mapping = {
-                "ethereum": "1",
-                "bsc": "56",
-                "polygon": "137",
-            }
-            
-            chain_id = chain_mapping.get(chain.lower())
-            if not chain_id:
-                return {"provider": "tokensniffer", "error": "Chain not supported"}
-            
-            # Mock TokenSniffer response (API may require authentication)
-            # In production, implement actual API call
-            import random
-            
-            await asyncio.sleep(0.1)  # Simulate API delay
-            
-            return {
-                "provider": "tokensniffer",
-                "score": random.randint(1, 100),
-                "risk_level": random.choice(["low", "medium", "high"]),
-                "tests_passed": random.randint(15, 25),
-                "tests_failed": random.randint(0, 5),
-                "tests_warning": random.randint(0, 3),
-                "exploits_found": random.choice([0, 0, 0, 1]),  # Mostly 0, sometimes 1
-                "analysis_successful": True,
-            }
-            
-        except Exception as e:
-            logger.warning(f"TokenSniffer check failed: {e}")
-            return {"provider": "tokensniffer", "error": str(e), "analysis_successful": False}
-    
-    async def _check_dextools_audit(
-        self,
-        token_address: str,
-        chain: str,
-    ) -> Dict[str, Any]:
-        """Check audit status using DEXTools API."""
-        try:
-            # Mock DEXTools audit response
-            # In production, implement actual API integration
-            import random
-            
-            await asyncio.sleep(0.1)  # Simulate API delay
-            
-            audit_status = random.choice(["verified", "unverified", "warning", "danger"])
-            
-            return {
-                "provider": "dextools",
+        Returns:
+            SecurityProviderResult: DEXTools result
+        """
+        chain_name = self.chain_mappings[SecurityProvider.DEXTOOLS].get(chain)
+        if not chain_name:
+            raise ValueError(f"Chain {chain} not supported by DEXTools")
+        
+        # Note: DEXTools API may require authentication
+        # For now, implement a mock response with realistic data patterns
+        # In production, implement actual API integration
+        
+        await asyncio.sleep(0.1)  # Simulate API delay
+        
+        # Mock realistic DEXTools response
+        import random
+        
+        audit_status = random.choices(
+            ["verified", "unverified", "warning", "danger"],
+            weights=[20, 60, 15, 5]  # Most tokens are unverified
+        )[0]
+        
+        trust_score = (
+            random.randint(80, 99) if audit_status == "verified" else
+            random.randint(30, 70) if audit_status == "unverified" else
+            random.randint(20, 50) if audit_status == "warning" else
+            random.randint(5, 30)  # danger
+        )
+        
+        liquidity_locked = random.choice([True, False])
+        team_tokens_locked = random.choice([True, False])
+        
+        # Determine risk factors based on audit status
+        risk_factors = []
+        if audit_status == "danger":
+            risk_factors.extend(["audit_danger_status", "high_risk_audit"])
+        elif audit_status == "warning":
+            risk_factors.append("audit_warning_status")
+        
+        if not liquidity_locked:
+            risk_factors.append("liquidity_not_locked")
+        if not team_tokens_locked:
+            risk_factors.append("team_tokens_not_locked")
+        
+        if trust_score < 40:
+            risk_factors.append("low_trust_score")
+        elif trust_score < 60:
+            risk_factors.append("medium_trust_score")
+        
+        # Calculate risk score
+        if audit_status == "danger":
+            risk_score = 0.9
+        elif audit_status == "warning":
+            risk_score = 0.6
+        elif not liquidity_locked and not team_tokens_locked:
+            risk_score = 0.7
+        elif not liquidity_locked or not team_tokens_locked:
+            risk_score = 0.4
+        else:
+            risk_score = max(0.1, (100 - trust_score) / 100)
+        
+        is_honeypot = audit_status == "danger" and trust_score < 20
+        honeypot_confidence = 0.6 if is_honeypot else 0.2
+        
+        return SecurityProviderResult(
+            provider=SecurityProvider.DEXTOOLS,
+            token_address=token_address,
+            chain=chain,
+            is_honeypot=is_honeypot,
+            honeypot_confidence=honeypot_confidence,
+            risk_score=risk_score,
+            risk_factors=risk_factors,
+            details={
                 "audit_status": audit_status,
                 "audit_provider": random.choice(["Certik", "PeckShield", "Hacken", None]),
                 "audit_date": "2024-01-15" if audit_status == "verified" else None,
-                "trust_score": random.randint(60, 99) if audit_status == "verified" else random.randint(20, 60),
+                "trust_score": trust_score,
                 "community_trust": random.randint(50, 95),
-                "locks_info": {
-                    "liquidity_locked": random.choice([True, False]),
-                    "team_tokens_locked": random.choice([True, False]),
-                    "lock_duration_days": random.randint(30, 365) if random.choice([True, False]) else 0,
-                },
-                "analysis_successful": True,
-            }
-            
-        except Exception as e:
-            logger.warning(f"DEXTools audit check failed: {e}")
-            return {"provider": "dextools", "error": str(e), "analysis_successful": False}
+                "liquidity_locked": liquidity_locked,
+                "team_tokens_locked": team_tokens_locked,
+                "lock_duration_days": random.randint(30, 365) if liquidity_locked else 0,
+            },
+            response_time_ms=0,  # Will be set by caller
+            success=True,
+        )
     
-    def _aggregate_security_results(
+    def _aggregate_results(
         self,
-        results: List[Any],
         token_address: str,
         chain: str,
-    ) -> Dict[str, Any]:
-        """Aggregate results from multiple security providers."""
-        aggregated = {
-            "token_address": token_address,
-            "chain": chain,
-            "providers_checked": 0,
-            "providers_successful": 0,
-            "honeypot_detected": False,
-            "honeypot_confidence": 0.0,
-            "overall_risk": "unknown",
-            "risk_factors": [],
-            "provider_results": {},
+        successful_results: List[SecurityProviderResult],
+        all_results: Dict[str, SecurityProviderResult],
+    ) -> AggregatedSecurityResult:
+        """
+        Aggregate results from multiple security providers.
+        
+        Args:
+            token_address: Token contract address
+            chain: Blockchain network
+            successful_results: List of successful provider results
+            all_results: All provider results (including failed)
+            
+        Returns:
+            AggregatedSecurityResult: Aggregated assessment
+        """
+        if not successful_results:
+            # No successful results - return conservative assessment
+            return AggregatedSecurityResult(
+                token_address=token_address,
+                chain=chain,
+                providers_checked=len(all_results),
+                providers_successful=0,
+                honeypot_detected=False,
+                honeypot_confidence=0.0,
+                overall_risk_score=0.5,  # Medium risk when unknown
+                risk_factors=["no_provider_data"],
+                provider_results=all_results,
+                analysis_time_ms=0,
+            )
+        
+        # Calculate weighted averages
+        total_weight = 0
+        weighted_honeypot_confidence = 0
+        weighted_risk_score = 0
+        honeypot_votes = 0
+        all_risk_factors = set()
+        
+        # Provider reliability weights
+        provider_weights = {
+            SecurityProvider.HONEYPOT_IS: 1.0,    # Highest weight - specialized
+            SecurityProvider.GOPLUSLAB: 0.9,      # High weight - comprehensive
+            SecurityProvider.TOKEN_SNIFFER: 0.7,  # Medium weight - reputation based
+            SecurityProvider.DEXTOOLS: 0.6,       # Lower weight - general info
         }
         
-        honeypot_votes = 0
-        total_providers = 0
-        risk_scores = []
-        
-        for result in results:
-            if isinstance(result, Exception):
-                logger.warning(f"Provider check failed: {result}")
-                continue
+        for result in successful_results:
+            weight = provider_weights.get(result.provider, 0.5)
             
-            if not isinstance(result, dict):
-                continue
+            weighted_honeypot_confidence += result.honeypot_confidence * weight
+            weighted_risk_score += result.risk_score * weight
+            total_weight += weight
             
-            provider = result.get("provider", "unknown")
-            aggregated["provider_results"][provider] = result
-            aggregated["providers_checked"] += 1
+            if result.is_honeypot:
+                honeypot_votes += 1
             
-            if result.get("analysis_successful", False):
-                aggregated["providers_successful"] += 1
-                total_providers += 1
-                
-                # Aggregate honeypot detection
-                if result.get("is_honeypot", False):
-                    honeypot_votes += 1
-                
-                # Collect risk scores
-                if "score" in result:
-                    risk_scores.append(result["score"])
-                
-                # Collect risk factors
-                risk_factors = self._extract_risk_factors(result)
-                aggregated["risk_factors"].extend(risk_factors)
+            all_risk_factors.update(result.risk_factors)
         
-        # Determine honeypot status
-        if total_providers > 0:
-            honeypot_confidence = honeypot_votes / total_providers
-            aggregated["honeypot_confidence"] = honeypot_confidence
-            aggregated["honeypot_detected"] = honeypot_confidence >= 0.5  # Majority vote
+        # Calculate aggregated values
+        if total_weight > 0:
+            avg_honeypot_confidence = weighted_honeypot_confidence / total_weight
+            avg_risk_score = weighted_risk_score / total_weight
+        else:
+            avg_honeypot_confidence = 0.5
+            avg_risk_score = 0.5
         
-        # Calculate overall risk
-        aggregated["overall_risk"] = self._calculate_overall_risk(
-            aggregated["risk_factors"],
-            honeypot_confidence,
-            risk_scores
+        # Honeypot detection logic - more conservative
+        honeypot_threshold = 0.6
+        vote_threshold = len(successful_results) / 2
+        
+        honeypot_detected = (
+            avg_honeypot_confidence > honeypot_threshold or
+            honeypot_votes > vote_threshold
         )
         
-        return aggregated
+        # Boost confidence if multiple providers agree
+        if honeypot_votes >= 2:
+            avg_honeypot_confidence = min(avg_honeypot_confidence * 1.2, 1.0)
+        
+        return AggregatedSecurityResult(
+            token_address=token_address,
+            chain=chain,
+            providers_checked=len(all_results),
+            providers_successful=len(successful_results),
+            honeypot_detected=honeypot_detected,
+            honeypot_confidence=avg_honeypot_confidence,
+            overall_risk_score=avg_risk_score,
+            risk_factors=list(all_risk_factors),
+            provider_results=all_results,
+            analysis_time_ms=0,
+        )
     
-    def _extract_risk_factors(self, provider_result: Dict[str, Any]) -> List[str]:
-        """Extract risk factors from provider result."""
-        risk_factors = []
-        
-        provider = provider_result.get("provider", "")
-        
-        if provider == "honeypot_is":
-            if provider_result.get("is_honeypot", False):
-                risk_factors.append("Honeypot detected by Honeypot.is")
-            
-            buy_tax = provider_result.get("buy_tax", 0)
-            sell_tax = provider_result.get("sell_tax", 0)
-            
-            if buy_tax > 10:
-                risk_factors.append(f"High buy tax: {buy_tax}%")
-            if sell_tax > 10:
-                risk_factors.append(f"High sell tax: {sell_tax}%")
-        
-        elif provider == "goplus":
-            if provider_result.get("is_honeypot", False):
-                risk_factors.append("Honeypot detected by GoPlus")
-            if provider_result.get("is_proxy", False):
-                risk_factors.append("Proxy contract detected")
-            if provider_result.get("is_mintable", False):
-                risk_factors.append("Token is mintable")
-            if provider_result.get("can_take_back_ownership", False):
-                risk_factors.append("Ownership can be reclaimed")
-            if provider_result.get("hidden_owner", False):
-                risk_factors.append("Hidden owner detected")
-            if provider_result.get("selfdestruct", False):
-                risk_factors.append("Self-destruct capability")
-            if provider_result.get("transfer_pausable", False):
-                risk_factors.append("Transfers can be paused")
-            if provider_result.get("blacklisted", False):
-                risk_factors.append("Token is blacklisted")
-        
-        elif provider == "tokensniffer":
-            score = provider_result.get("score", 100)
-            if score < 50:
-                risk_factors.append(f"Low TokenSniffer score: {score}/100")
-            
-            exploits = provider_result.get("exploits_found", 0)
-            if exploits > 0:
-                risk_factors.append(f"Security exploits found: {exploits}")
-        
-        elif provider == "dextools":
-            audit_status = provider_result.get("audit_status", "")
-            if audit_status in ["warning", "danger"]:
-                risk_factors.append(f"DEXTools audit status: {audit_status}")
-            
-            trust_score = provider_result.get("trust_score", 100)
-            if trust_score < 60:
-                risk_factors.append(f"Low trust score: {trust_score}/100")
-            
-            locks_info = provider_result.get("locks_info", {})
-            if not locks_info.get("liquidity_locked", False):
-                risk_factors.append("Liquidity not locked")
-        
-        return risk_factors
-    
-    def _calculate_overall_risk(
-        self,
-        risk_factors: List[str],
-        honeypot_confidence: float,
-        risk_scores: List[float],
-    ) -> str:
-        """Calculate overall risk level from aggregated data."""
-        # Critical risk indicators
-        if honeypot_confidence >= 0.5:  # Majority honeypot detection
-            return "critical"
-        
-        critical_factors = [
-            "honeypot detected",
-            "self-destruct capability",
-            "security exploits found",
-        ]
-        
-        for factor in risk_factors:
-            if any(critical in factor.lower() for critical in critical_factors):
-                return "critical"
-        
-        # High risk indicators
-        high_risk_count = 0
-        high_risk_factors = [
-            "high buy tax",
-            "high sell tax",
-            "proxy contract",
-            "ownership can be reclaimed",
-            "hidden owner",
-            "transfers can be paused",
-            "blacklisted",
-            "liquidity not locked",
-        ]
-        
-        for factor in risk_factors:
-            if any(high_risk in factor.lower() for high_risk in high_risk_factors):
-                high_risk_count += 1
-        
-        if high_risk_count >= 3:
-            return "high"
-        elif high_risk_count >= 1 or len(risk_factors) >= 5:
-            return "medium"
-        elif len(risk_factors) > 0:
-            return "low"
-        else:
-            return "low"  # No risk factors found
-    
-    async def check_token_reputation(
+    async def quick_reputation_check(
         self,
         token_address: str,
         chain: str,
     ) -> Dict[str, Any]:
         """
-        Quick reputation check for token using cached data and fast APIs.
+        Quick reputation check using fastest provider.
         
         Args:
             token_address: Token contract address
@@ -504,92 +795,124 @@ class SecurityProvider:
         Returns:
             Quick reputation assessment
         """
+        start_time = time.time()
+        
         try:
-            # Check cache first for quick response
-            cache_key = f"reputation:{chain}:{token_address.lower()}"
+            # Check cache first
+            cache_key = f"quick:{chain}:{token_address.lower()}"
             if cache_key in self.session_cache:
                 cached = self.session_cache[cache_key]
-                if time.time() - cached["timestamp"] < 60:  # 1 minute cache for reputation
+                if time.time() - cached["timestamp"] < 60:  # 1 minute cache
                     return cached["data"]
             
-            # Quick check using fastest provider (usually GoPlus)
-            reputation_result = await self._check_goplus_security(token_address, chain)
+            # Use GoPlus as primary quick check (fastest and most comprehensive)
+            try:
+                result = await self._check_gopluslab(token_address, chain)
+                reputation_score = self._calculate_reputation_score(result)
+                risk_level = self._determine_quick_risk_level(result.risk_score)
+            except Exception:
+                # Fallback to conservative assessment
+                reputation_score = 50
+                risk_level = "medium"
+                result = None
             
-            # Simplified reputation score
-            reputation_score = self._calculate_reputation_score(reputation_result)
-            
-            result = {
+            response = {
                 "token_address": token_address,
                 "chain": chain,
                 "reputation_score": reputation_score,
-                "quick_check": True,
-                "provider_used": "goplus",
-                "analysis_time_ms": 0,  # Will be set by caller
+                "risk_level": risk_level,
+                "quick_summary": self._generate_quick_summary(result, reputation_score),
+                "analysis_time_ms": (time.time() - start_time) * 1000,
             }
             
             # Cache the result
             self.session_cache[cache_key] = {
-                "data": result,
+                "data": response,
                 "timestamp": time.time(),
             }
             
-            return result
+            return response
             
         except Exception as e:
-            logger.warning(f"Quick reputation check failed: {e}")
+            logger.error(f"Quick reputation check failed: {e}")
             return {
-                "error": str(e),
-                "reputation_score": 0,  # Conservative score
-                "quick_check": True,
+                "token_address": token_address,
+                "chain": chain,
+                "reputation_score": 0,
+                "risk_level": "critical",
+                "quick_summary": f"Analysis failed: {str(e)}",
+                "analysis_time_ms": (time.time() - start_time) * 1000,
             }
     
-    def _calculate_reputation_score(self, provider_result: Dict[str, Any]) -> int:
-        """Calculate simple reputation score (0-100) from provider result."""
-        if not provider_result.get("analysis_successful", False):
-            return 50  # Neutral score if analysis failed
+    def _calculate_reputation_score(self, result: SecurityProviderResult) -> int:
+        """Calculate reputation score (0-100) from security result."""
+        if not result.success:
+            return 50  # Neutral score on failure
         
-        score = 100  # Start with perfect score
+        # Convert risk score to reputation score (inverted)
+        base_score = int((1.0 - result.risk_score) * 100)
         
-        # Major penalties
-        if provider_result.get("is_honeypot", False):
-            score -= 80
-        if provider_result.get("selfdestruct", False):
-            score -= 60
-        if provider_result.get("hidden_owner", False):
-            score -= 40
+        # Apply penalties for specific risk factors
+        penalties = {
+            "honeypot_detected": 80,
+            "selfdestruct_function": 60,
+            "cannot_sell_all": 70,
+            "hidden_owner": 40,
+            "ownership_can_be_reclaimed": 35,
+            "pausable_transfers": 30,
+            "high_sell_tax": 25,
+            "high_buy_tax": 20,
+            "proxy_contract": 15,
+            "mintable": 10,
+        }
         
-        # Medium penalties
-        if provider_result.get("is_proxy", False):
-            score -= 20
-        if provider_result.get("transfer_pausable", False):
-            score -= 25
-        if provider_result.get("can_take_back_ownership", False):
-            score -= 30
+        total_penalty = 0
+        for factor in result.risk_factors:
+            total_penalty += penalties.get(factor, 5)  # 5 point penalty for unknown factors
         
-        # Tax penalties
-        buy_tax = provider_result.get("buy_tax", 0)
-        sell_tax = provider_result.get("sell_tax", 0)
+        # Apply bonuses
+        bonuses = 0
+        details = result.details
+        if details.get("is_open_source", False):
+            bonuses += 10
+        if details.get("audit_status") == "verified":
+            bonuses += 20
         
-        if buy_tax > 15:
-            score -= 40
-        elif buy_tax > 10:
-            score -= 20
-        elif buy_tax > 5:
-            score -= 10
+        final_score = max(0, min(100, base_score - total_penalty + bonuses))
+        return final_score
+    
+    def _determine_quick_risk_level(self, risk_score: float) -> str:
+        """Determine risk level from risk score."""
+        if risk_score >= 0.8:
+            return "critical"
+        elif risk_score >= 0.6:
+            return "high"
+        elif risk_score >= 0.3:
+            return "medium"
+        else:
+            return "low"
+    
+    def _generate_quick_summary(
+        self, 
+        result: Optional[SecurityProviderResult], 
+        reputation_score: int
+    ) -> str:
+        """Generate quick summary of the security assessment."""
+        if not result or not result.success:
+            return "Unable to perform security analysis"
         
-        if sell_tax > 15:
-            score -= 40
-        elif sell_tax > 10:
-            score -= 20
-        elif sell_tax > 5:
-            score -= 10
+        if result.is_honeypot:
+            return "⚠️ Potential honeypot detected - avoid trading"
         
-        # Small bonuses
-        if provider_result.get("is_open_source", False):
-            score += 5
-        
-        return max(0, min(100, score))
+        if reputation_score >= 80:
+            return "✅ Token appears safe with good reputation"
+        elif reputation_score >= 60:
+            return "⚠️ Token has moderate risk - trade with caution"
+        elif reputation_score >= 40:
+            return "⚠️ Token has elevated risk - high caution recommended"
+        else:
+            return "🚨 Token has high risk - consider avoiding"
 
 
-# Global security provider instance
-security_provider = SecurityProvider()
+# Global security provider client
+security_provider = SecurityProviderClient()
