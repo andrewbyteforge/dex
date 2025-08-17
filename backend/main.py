@@ -1,7 +1,5 @@
 """
-DEX Sniper Pro - Working Main Application.
-
-Simple working application that definitely starts without import issues.
+DEX Sniper Pro - Main Application.
 """
 
 import logging
@@ -28,17 +26,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Import working APIs
+# Import working APIs with CORRECTED prefixes
 try:
     from app.api.presets_working import router as presets_router
-    app.include_router(presets_router, prefix="/api/v1")
+    app.include_router(presets_router, prefix="/api/v1")  # presets_router has "/presets" so = "/api/v1/presets"
     logger.info("✅ Working Presets API registered")
 except ImportError as e:
     logger.warning(f"⚠️  Working Presets API failed: {e}")
 
 try:
     from app.api.autotrade import router as autotrade_router
-    app.include_router(autotrade_router, prefix="/api/v1")
+    # Find out what prefix autotrade router actually has
+    app.include_router(autotrade_router, prefix="/api/v1")  
     logger.info("✅ Autotrade API registered")
 except ImportError as e:
     logger.warning(f"⚠️  Autotrade API failed: {e}")
@@ -81,28 +80,19 @@ async def autotrade_websocket(websocket: WebSocket):
     logger.info("WebSocket client connected")
     
     try:
-        # Send welcome message
         await websocket.send_json({
             "type": "connection_established",
             "data": {
                 "server_time": "2025-08-17T15:00:00Z",
-                "message": "Connected to autotrade WebSocket",
-                "available_events": [
-                    "engine_status",
-                    "metrics_update", 
-                    "opportunity_found",
-                    "trade_executed"
-                ]
+                "message": "Connected to autotrade WebSocket"
             }
         })
         
-        # Keep connection alive and handle messages
         while True:
             try:
                 message = await websocket.receive_text()
                 logger.info(f"Received WebSocket message: {message}")
                 
-                # Echo back for testing
                 await websocket.send_json({
                     "type": "echo",
                     "data": {
@@ -129,7 +119,7 @@ if __name__ == "__main__":
     logger.info("🚀 Starting DEX Sniper Pro server...")
     
     uvicorn.run(
-        "main_working:app",
+        "main:app",
         host="127.0.0.1",
         port=8000,
         reload=True,
