@@ -1,77 +1,60 @@
 """
 Safety control API endpoints for managing trading safety systems.
 
-This module provides REST API endpoints for safety controls, circuit breakers,
-blacklisting, canary testing, and emergency controls with comprehensive
-monitoring and management capabilities.
+Simplified version for initial deployment.
 """
 from __future__ import annotations
 
-import time
-from decimal import Decimal
 from typing import Dict, List, Optional, Any
+from decimal import Decimal
+from datetime import datetime
+from enum import Enum
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field
 
-from ..core.dependencies import get_chain_clients
-from ..core.logging import get_logger
-from ..strategy.safety_controls import (
-    safety_controls, 
-    SafetyLevel, 
-    CanarySize, 
-    CircuitBreakerType,
-    BlacklistReason
-)
-from ..trading.canary import (
-    enhanced_canary_tester,
-    CanaryStrategy,
-    CanaryConfig,
-    CanaryOutcome
+from app.core.dependencies import get_current_user, CurrentUser, get_chain_clients
+from app.storage.repositories import get_safety_repository, SafetyRepository
+
+router = APIRouter(
+    prefix="/api/safety",
+    tags=["safety"],
+    responses={404: {"description": "Not found"}},
 )
 
-logger = get_logger(__name__)
-router = APIRouter(prefix="/safety", tags=["safety"])
+
+class SafetyLevel(str, Enum):
+    """Safety level enumeration."""
+    PERMISSIVE = "permissive"
+    STANDARD = "standard"
+    CONSERVATIVE = "conservative"
+    EMERGENCY = "emergency"
 
 
-# Request Models
+class BlacklistReason(str, Enum):
+    """Blacklist reason enumeration."""
+    HONEYPOT = "honeypot"
+    HIGH_TAX = "high_tax"
+    RUGPULL = "rugpull"
+    SCAM = "scam"
+    MANUAL = "manual"
+    OTHER = "other"
+
 
 class TradeCheckRequest(BaseModel):
     """Request for trade safety check."""
     token_address: str = Field(..., description="Token contract address")
     chain: str = Field(..., description="Blockchain network")
     trade_amount_usd: str = Field(..., description="Trade amount in USD")
-    
-    @validator('trade_amount_usd')
-    def validate_amount(cls, v):
-        try:
-            amount = Decimal(v)
-            if amount <= 0:
-                raise ValueError("Amount must be positive")
-            return v
-        except (ValueError, TypeError):
-            raise ValueError("Invalid amount format")
 
 
-class CanaryTestRequest(BaseModel):
-    """Request for canary testing."""
-    token_address: str = Field(..., description="Token contract address")
-    chain: str = Field(..., description="Blockchain network")
-    dex: str = Field(default="auto", description="DEX to use for testing")
-    strategy: CanaryStrategy = Field(default=CanaryStrategy.INSTANT, description="Testing strategy")
-    size_usd: Optional[str] = Field(default=None, description="Custom test size in USD")
-    
-    @validator('size_usd')
-    def validate_size(cls, v):
-        if v is not None:
-            try:
-                amount = Decimal(v)
-                if amount <= 0 or amount > 1000:
-                    raise ValueError("Size must be between 0 and 1000 USD")
-                return v
-            except (ValueError, TypeError):
-                raise ValueError("Invalid size format")
-        return v
+class TradeCheckResponse(BaseModel):
+    """Response for trade safety check."""
+    is_safe: bool = Field(..., description="Whether the trade is safe")
+    blocking_reasons: List[str] = Field(..., description="Reasons blocking the trade")
+    safety_level: str = Field(..., description="Current safety level")
+    emergency_stop: bool = Field(..., description="Emergency stop status")
+    risk_score: float = Field(..., description="Risk score (0-1)")
 
 
 class BlacklistRequest(BaseModel):
@@ -80,65 +63,7 @@ class BlacklistRequest(BaseModel):
     chain: str = Field(..., description="Blockchain network")
     reason: BlacklistReason = Field(..., description="Reason for blacklisting")
     details: str = Field(..., description="Additional details")
-    expiry_hours: Optional[int] = Field(default=None, description="Hours until expiry (None = permanent)")
-    
-    @validator('expiry_hours')
-    def validate_expiry(cls, v):
-        if v is not None and (v <= 0 or v > 8760):  # Max 1 year
-            raise ValueError("Expiry hours must be between 1 and 8760")
-        return v
-
-
-class EmergencyStopRequest(BaseModel):
-    """Request to change emergency stop status."""
-    enabled: bool = Field(..., description="Enable or disable emergency stop")
-    reason: str = Field(..., description="Reason for change")
-
-
-class SafetyLevelRequest(BaseModel):
-    """Request to change safety level."""
-    level: SafetyLevel = Field(..., description="New safety level")
-
-
-class CircuitBreakerRequest(BaseModel):
-    """Request to trigger circuit breaker."""
-    breaker_type: CircuitBreakerType = Field(..., description="Circuit breaker type")
-    reason: str = Field(..., description="Reason for triggering")
-
-
-class SpendLimitUpdateRequest(BaseModel):
-    """Request to update spend limits."""
-    chain: str = Field(..., description="Blockchain network")
-    per_trade_usd: Optional[str] = Field(default=None, description="Per-trade limit in USD")
-    daily_limit_usd: Optional[str] = Field(default=None, description="Daily limit in USD")
-    weekly_limit_usd: Optional[str] = Field(default=None, description="Weekly limit in USD")
-    cooldown_minutes: Optional[int] = Field(default=None, description="Cooldown period in minutes")
-
-
-# Response Models
-
-class TradeCheckResponse(BaseModel):
-    """Response for trade safety check."""
-    is_safe: bool = Field(..., description="Whether the trade is safe")
-    blocking_reasons: List[str] = Field(..., description="Reasons blocking the trade")
-    safety_level: str = Field(..., description="Current safety level")
-    emergency_stop: bool = Field(..., description="Emergency stop status")
-    check_time_ms: float = Field(..., description="Check execution time in milliseconds")
-
-
-class CanaryTestResponse(BaseModel):
-    """Response for canary testing."""
-    canary_id: str = Field(..., description="Unique canary test ID")
-    token_address: str = Field(..., description="Token tested")
-    chain: str = Field(..., description="Chain tested")
-    outcome: CanaryOutcome = Field(..., description="Test outcome")
-    success: bool = Field(..., description="Whether test passed")
-    stages_completed: int = Field(..., description="Number of stages completed")
-    total_cost_usd: str = Field(..., description="Total testing cost")
-    execution_time_ms: float = Field(..., description="Total execution time")
-    recommendations: List[str] = Field(..., description="Trading recommendations")
-    detected_tax_percent: Optional[float] = Field(default=None, description="Detected tax percentage")
-    average_slippage: Optional[float] = Field(default=None, description="Average slippage percentage")
+    severity: str = Field(default="high", description="Severity level")
 
 
 class SafetyStatusResponse(BaseModel):
@@ -146,33 +71,35 @@ class SafetyStatusResponse(BaseModel):
     safety_level: str = Field(..., description="Current safety level")
     emergency_stop: bool = Field(..., description="Emergency stop status")
     active_circuit_breakers: List[str] = Field(..., description="Triggered circuit breakers")
-    blacklisted_tokens: Dict[str, int] = Field(..., description="Blacklisted token counts by chain")
-    metrics: Dict[str, Any] = Field(..., description="Safety system metrics")
+    blacklisted_tokens_count: int = Field(..., description="Number of blacklisted tokens")
+    recent_events_count: int = Field(..., description="Recent safety events")
 
 
-class BlacklistResponse(BaseModel):
-    """Response for blacklist operations."""
-    success: bool = Field(..., description="Operation success")
-    message: str = Field(..., description="Operation message")
-    blacklisted_tokens: Dict[str, int] = Field(..., description="Updated blacklist counts")
+class SafetyEventResponse(BaseModel):
+    """Safety event response model."""
+    id: int
+    event_type: str
+    severity: str
+    reason: str
+    timestamp: datetime
+    chain: Optional[str]
+    token_address: Optional[str]
+    resolved: bool
 
 
-class CanaryStatsResponse(BaseModel):
-    """Response for canary testing statistics."""
-    total_canaries: int = Field(..., description="Total canary tests executed")
-    successful_canaries: int = Field(..., description="Successful tests")
-    honeypots_detected: int = Field(..., description="Honeypots detected")
-    high_taxes_detected: int = Field(..., description="High-tax tokens detected")
-    success_rate: float = Field(..., description="Success rate percentage")
-    honeypot_detection_rate: float = Field(..., description="Honeypot detection rate")
+# Global safety state (in production, this would be in database)
+_safety_state = {
+    "safety_level": SafetyLevel.STANDARD,
+    "emergency_stop": False,
+    "circuit_breakers": []
+}
 
-
-# API Endpoints
 
 @router.post("/check-trade", response_model=TradeCheckResponse)
 async def check_trade_safety(
     request: TradeCheckRequest,
-    chain_clients: Dict = Depends(get_chain_clients),
+    current_user: CurrentUser = Depends(get_current_user),
+    safety_repo: SafetyRepository = Depends(get_safety_repository)
 ) -> TradeCheckResponse:
     """
     Check if a trade is safe to execute.
@@ -180,551 +107,298 @@ async def check_trade_safety(
     Performs comprehensive safety checks including blacklist verification,
     circuit breaker status, spend limits, and risk assessment.
     """
-    start_time = time.time()
+    blocking_reasons = []
+    risk_score = 0.3  # Mock risk score
     
-    logger.info(
-        f"Trade safety check requested for {request.token_address} on {request.chain}",
-        extra={
-            "module": "safety_api",
-            "token_address": request.token_address,
-            "chain": request.chain,
-            "trade_amount_usd": request.trade_amount_usd
-        }
+    # Check emergency stop
+    if _safety_state["emergency_stop"]:
+        blocking_reasons.append("Emergency stop is active")
+    
+    # Check if token is blacklisted
+    is_blacklisted = await safety_repo.is_blacklisted(
+        token_address=request.token_address,
+        chain=request.chain
     )
     
-    try:
-        trade_amount = Decimal(request.trade_amount_usd)
-        
-        # Perform safety check
-        is_safe, blocking_reasons = await safety_controls.check_trade_safety(
-            token_address=request.token_address,
-            chain=request.chain,
-            trade_amount_usd=trade_amount
-        )
-        
-        # Get current safety status
-        safety_status = await safety_controls.get_safety_status()
-        
-        check_time = (time.time() - start_time) * 1000
-        
-        response = TradeCheckResponse(
-            is_safe=is_safe,
-            blocking_reasons=blocking_reasons,
-            safety_level=safety_status["safety_level"],
-            emergency_stop=safety_status["emergency_stop"],
-            check_time_ms=check_time
-        )
-        
-        logger.info(
-            f"Trade safety check completed: {'SAFE' if is_safe else 'BLOCKED'}",
-            extra={
-                "module": "safety_api",
-                "token_address": request.token_address,
-                "is_safe": is_safe,
-                "blocking_reasons": blocking_reasons,
-                "check_time_ms": check_time
-            }
-        )
-        
-        return response
-        
-    except Exception as e:
-        logger.error(f"Trade safety check failed: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Safety check failed: {str(e)}"
-        )
-
-
-@router.post("/canary-test", response_model=CanaryTestResponse)
-async def execute_canary_test(
-    request: CanaryTestRequest,
-    chain_clients: Dict = Depends(get_chain_clients),
-) -> CanaryTestResponse:
-    """
-    Execute canary test for a token.
+    if is_blacklisted:
+        blocking_reasons.append("Token is blacklisted")
+        risk_score = 1.0
     
-    Performs graduated canary testing to detect honeypots, high taxes,
-    and other trading issues before committing larger amounts.
-    """
-    logger.info(
-        f"Canary test requested for {request.token_address} on {request.chain}",
-        extra={
-            "module": "safety_api",
-            "token_address": request.token_address,
-            "chain": request.chain,
-            "strategy": request.strategy.value,
-            "dex": request.dex
-        }
+    # Check circuit breakers
+    if _safety_state["circuit_breakers"]:
+        blocking_reasons.append(f"Circuit breakers active: {', '.join(_safety_state['circuit_breakers'])}")
+    
+    # Check trade amount limits (mock)
+    trade_amount = Decimal(request.trade_amount_usd)
+    if trade_amount > Decimal("10000"):
+        blocking_reasons.append("Trade amount exceeds limit")
+    
+    # Conservative mode checks
+    if _safety_state["safety_level"] == SafetyLevel.CONSERVATIVE:
+        if risk_score > 0.5:
+            blocking_reasons.append("Risk score too high for conservative mode")
+    
+    is_safe = len(blocking_reasons) == 0
+    
+    return TradeCheckResponse(
+        is_safe=is_safe,
+        blocking_reasons=blocking_reasons,
+        safety_level=_safety_state["safety_level"].value,
+        emergency_stop=_safety_state["emergency_stop"],
+        risk_score=risk_score
     )
-    
-    try:
-        # Create custom config if size specified
-        config = None
-        if request.size_usd:
-            config = CanaryConfig(
-                strategy=request.strategy,
-                initial_size_usd=Decimal(request.size_usd)
-            )
-        
-        # Execute canary test
-        result = await enhanced_canary_tester.execute_canary_test(
-            token_address=request.token_address,
-            chain=request.chain,
-            dex=request.dex,
-            strategy=request.strategy,
-            config=config,
-            chain_clients=chain_clients
-        )
-        
-        response = CanaryTestResponse(
-            canary_id=result.canary_id,
-            token_address=result.token_address,
-            chain=result.chain,
-            outcome=result.outcome,
-            success=result.outcome == CanaryOutcome.SUCCESS,
-            stages_completed=len(result.stages),
-            total_cost_usd=str(result.total_cost_usd),
-            execution_time_ms=result.total_execution_time_ms,
-            recommendations=result.recommendations,
-            detected_tax_percent=result.detected_tax_percent,
-            average_slippage=result.average_slippage
-        )
-        
-        logger.info(
-            f"Canary test completed: {result.outcome.value}",
-            extra={
-                "module": "safety_api",
-                "canary_id": result.canary_id,
-                "token_address": request.token_address,
-                "outcome": result.outcome.value,
-                "execution_time_ms": result.total_execution_time_ms
-            }
-        )
-        
-        return response
-        
-    except Exception as e:
-        logger.error(f"Canary test failed: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Canary test failed: {str(e)}"
-        )
 
 
-@router.post("/blacklist", response_model=BlacklistResponse)
-async def blacklist_token(request: BlacklistRequest) -> BlacklistResponse:
+@router.post("/blacklist", response_model=Dict[str, Any])
+async def blacklist_token(
+    request: BlacklistRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+    safety_repo: SafetyRepository = Depends(get_safety_repository)
+) -> Dict[str, Any]:
     """
     Add a token to the blacklist.
     
-    Prevents future trading of the specified token with reason tracking
-    and optional expiry time.
+    Prevents future trading of the specified token with reason tracking.
     """
-    logger.info(
-        f"Blacklist request for {request.token_address} on {request.chain}",
-        extra={
-            "module": "safety_api",
-            "token_address": request.token_address,
-            "chain": request.chain,
-            "reason": request.reason.value,
-            "expiry_hours": request.expiry_hours
-        }
+    # Add to blacklist
+    blacklisted = await safety_repo.add_to_blacklist(
+        token_address=request.token_address,
+        chain=request.chain,
+        reason=request.reason.value,
+        severity=request.severity,
+        category=request.reason.value,
+        notes=request.details,
+        reported_by=current_user.username
     )
     
-    try:
-        await safety_controls.blacklist_token(
-            token_address=request.token_address,
-            chain=request.chain,
-            reason=request.reason,
-            details=request.details,
-            expiry_hours=request.expiry_hours
-        )
-        
-        # Get updated blacklist counts
-        safety_status = await safety_controls.get_safety_status()
-        
-        response = BlacklistResponse(
-            success=True,
-            message=f"Token {request.token_address} blacklisted successfully",
-            blacklisted_tokens=safety_status["blacklisted_tokens"]
-        )
-        
-        logger.info(
-            f"Token blacklisted successfully: {request.token_address}",
-            extra={
-                "module": "safety_api",
-                "token_address": request.token_address,
-                "reason": request.reason.value
-            }
-        )
-        
-        return response
-        
-    except Exception as e:
-        logger.error(f"Token blacklisting failed: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Blacklisting failed: {str(e)}"
-        )
-
-
-@router.post("/emergency-stop")
-async def set_emergency_stop(request: EmergencyStopRequest) -> Dict[str, Any]:
-    """
-    Enable or disable emergency stop.
-    
-    Emergency stop immediately blocks all trading operations
-    until explicitly disabled.
-    """
-    logger.warning(
-        f"Emergency stop change requested: {request.enabled}",
-        extra={
-            "module": "safety_api",
-            "enabled": request.enabled,
-            "reason": request.reason
-        }
+    # Log safety event
+    await safety_repo.log_safety_event(
+        event_type="blacklist_add",
+        severity=request.severity,
+        reason=f"Token blacklisted: {request.reason.value}",
+        chain=request.chain,
+        token_address=request.token_address,
+        action="blocked",
+        details={"reason": request.reason.value, "details": request.details}
     )
     
-    try:
-        await safety_controls.set_emergency_stop(
-            enabled=request.enabled,
-            reason=request.reason
-        )
-        
-        return {
-            "success": True,
-            "message": f"Emergency stop {'activated' if request.enabled else 'deactivated'}",
-            "enabled": request.enabled,
-            "reason": request.reason
-        }
-        
-    except Exception as e:
-        logger.error(f"Emergency stop change failed: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Emergency stop change failed: {str(e)}"
-        )
-
-
-@router.post("/safety-level")
-async def set_safety_level(request: SafetyLevelRequest) -> Dict[str, Any]:
-    """
-    Change the current safety level.
-    
-    Safety levels control the strictness of safety checks:
-    - PERMISSIVE: Minimal checks
-    - STANDARD: Balanced safety and performance
-    - CONSERVATIVE: Maximum safety
-    - EMERGENCY: Block all trading
-    """
-    logger.info(
-        f"Safety level change requested: {request.level.value}",
-        extra={
-            "module": "safety_api",
-            "new_level": request.level.value
-        }
-    )
-    
-    try:
-        await safety_controls.set_safety_level(request.level)
-        
-        return {
-            "success": True,
-            "message": f"Safety level changed to {request.level.value}",
-            "level": request.level.value
-        }
-        
-    except Exception as e:
-        logger.error(f"Safety level change failed: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Safety level change failed: {str(e)}"
-        )
-
-
-@router.post("/circuit-breaker")
-async def trigger_circuit_breaker(request: CircuitBreakerRequest) -> Dict[str, Any]:
-    """
-    Manually trigger a circuit breaker.
-    
-    Circuit breakers provide automatic protection against various
-    risk scenarios like consecutive failures or excessive losses.
-    """
-    logger.warning(
-        f"Manual circuit breaker trigger: {request.breaker_type.value}",
-        extra={
-            "module": "safety_api",
-            "breaker_type": request.breaker_type.value,
-            "reason": request.reason
-        }
-    )
-    
-    try:
-        await safety_controls.trigger_circuit_breaker(
-            breaker_type=request.breaker_type,
-            reason=request.reason
-        )
-        
-        return {
-            "success": True,
-            "message": f"Circuit breaker {request.breaker_type.value} triggered",
-            "breaker_type": request.breaker_type.value,
-            "reason": request.reason
-        }
-        
-    except Exception as e:
-        logger.error(f"Circuit breaker trigger failed: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Circuit breaker trigger failed: {str(e)}"
-        )
-
-
-@router.get("/status", response_model=SafetyStatusResponse)
-async def get_safety_status() -> SafetyStatusResponse:
-    """
-    Get comprehensive safety system status.
-    
-    Returns current safety level, emergency stop status, active circuit breakers,
-    blacklist statistics, and system metrics.
-    """
-    try:
-        status_data = await safety_controls.get_safety_status()
-        
-        return SafetyStatusResponse(
-            safety_level=status_data["safety_level"],
-            emergency_stop=status_data["emergency_stop"],
-            active_circuit_breakers=status_data["active_circuit_breakers"],
-            blacklisted_tokens=status_data["blacklisted_tokens"],
-            metrics=status_data["metrics"]
-        )
-        
-    except Exception as e:
-        logger.error(f"Safety status retrieval failed: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Status retrieval failed: {str(e)}"
-        )
-
-
-@router.get("/canary-stats", response_model=CanaryStatsResponse)
-async def get_canary_stats() -> CanaryStatsResponse:
-    """
-    Get canary testing statistics.
-    
-    Returns performance metrics for canary testing including
-    success rates and detection statistics.
-    """
-    try:
-        stats = enhanced_canary_tester.get_performance_stats()
-        
-        return CanaryStatsResponse(
-            total_canaries=stats["total_canaries"],
-            successful_canaries=stats["successful_canaries"],
-            honeypots_detected=stats["honeypots_detected"],
-            high_taxes_detected=stats["high_taxes_detected"],
-            success_rate=stats["success_rate"],
-            honeypot_detection_rate=stats["honeypot_detection_rate"]
-        )
-        
-    except Exception as e:
-        logger.error(f"Canary stats retrieval failed: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Stats retrieval failed: {str(e)}"
-        )
-
-
-@router.get("/blacklist/{chain}")
-async def get_blacklisted_tokens(
-    chain: str,
-    limit: int = Query(default=100, ge=1, le=1000, description="Maximum tokens to return"),
-    offset: int = Query(default=0, ge=0, description="Offset for pagination")
-) -> Dict[str, Any]:
-    """
-    Get blacklisted tokens for a specific chain.
-    
-    Returns paginated list of blacklisted tokens with reasons and expiry times.
-    """
-    try:
-        # This would typically query the database through the safety repository
-        # For now, return a placeholder response
-        
-        return {
-            "chain": chain,
-            "tokens": [],  # Would contain actual blacklisted tokens
-            "total_count": 0,
-            "limit": limit,
-            "offset": offset
-        }
-        
-    except Exception as e:
-        logger.error(f"Blacklist retrieval failed: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Blacklist retrieval failed: {str(e)}"
-        )
+    return {
+        "success": True,
+        "message": f"Token {request.token_address} blacklisted successfully",
+        "blacklist_id": blacklisted.id
+    }
 
 
 @router.delete("/blacklist/{chain}/{token_address}")
-async def remove_from_blacklist(chain: str, token_address: str) -> Dict[str, Any]:
-    """
-    Remove a token from the blacklist.
+async def remove_from_blacklist(
+    chain: str,
+    token_address: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    safety_repo: SafetyRepository = Depends(get_safety_repository)
+) -> Dict[str, Any]:
+    """Remove a token from the blacklist."""
+    # This would update the blacklist in database
+    # For now, return success
     
-    Allows trading of previously blacklisted tokens.
-    Manual removal requires admin privileges in production.
-    """
-    logger.info(
-        f"Blacklist removal requested: {token_address} on {chain}",
-        extra={
-            "module": "safety_api",
-            "token_address": token_address,
-            "chain": chain
-        }
+    await safety_repo.log_safety_event(
+        event_type="blacklist_remove",
+        severity="low",
+        reason=f"Token removed from blacklist",
+        chain=chain,
+        token_address=token_address,
+        action="unblocked"
     )
     
-    try:
-        # This would remove from database and update cache
-        # For now, return success response
-        
-        return {
-            "success": True,
-            "message": f"Token {token_address} removed from blacklist",
-            "token_address": token_address,
-            "chain": chain
-        }
-        
-    except Exception as e:
-        logger.error(f"Blacklist removal failed: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Blacklist removal failed: {str(e)}"
-        )
+    return {
+        "success": True,
+        "message": f"Token {token_address} removed from blacklist",
+        "chain": chain
+    }
 
 
-@router.put("/spend-limits")
-async def update_spend_limits(request: SpendLimitUpdateRequest) -> Dict[str, Any]:
-    """
-    Update spend limits for a specific chain.
+@router.post("/emergency-stop")
+async def set_emergency_stop(
+    enabled: bool,
+    reason: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    safety_repo: SafetyRepository = Depends(get_safety_repository)
+) -> Dict[str, Any]:
+    """Enable or disable emergency stop."""
+    _safety_state["emergency_stop"] = enabled
     
-    Allows runtime adjustment of per-trade limits, daily caps,
-    and cooldown periods for risk management.
-    """
-    logger.info(
-        f"Spend limit update requested for {request.chain}",
-        extra={
-            "module": "safety_api",
-            "chain": request.chain,
-            "per_trade_usd": request.per_trade_usd,
-            "daily_limit_usd": request.daily_limit_usd
-        }
+    await safety_repo.log_safety_event(
+        event_type="emergency_stop",
+        severity="critical" if enabled else "low",
+        reason=reason,
+        action="activated" if enabled else "deactivated"
     )
     
-    try:
-        # Update spend limits in safety controls
-        # This would modify the spend_limits configuration
-        
-        return {
-            "success": True,
-            "message": f"Spend limits updated for {request.chain}",
-            "chain": request.chain,
-            "updated_fields": {
-                "per_trade_usd": request.per_trade_usd,
-                "daily_limit_usd": request.daily_limit_usd,
-                "weekly_limit_usd": request.weekly_limit_usd,
-                "cooldown_minutes": request.cooldown_minutes
-            }
-        }
-        
-    except Exception as e:
-        logger.error(f"Spend limit update failed: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Spend limit update failed: {str(e)}"
+    return {
+        "success": True,
+        "message": f"Emergency stop {'activated' if enabled else 'deactivated'}",
+        "enabled": enabled,
+        "reason": reason
+    }
+
+
+@router.post("/safety-level")
+async def set_safety_level(
+    level: SafetyLevel,
+    current_user: CurrentUser = Depends(get_current_user),
+    safety_repo: SafetyRepository = Depends(get_safety_repository)
+) -> Dict[str, Any]:
+    """Change the current safety level."""
+    old_level = _safety_state["safety_level"]
+    _safety_state["safety_level"] = level
+    
+    await safety_repo.log_safety_event(
+        event_type="safety_level_change",
+        severity="medium",
+        reason=f"Safety level changed from {old_level.value} to {level.value}",
+        action="config_change"
+    )
+    
+    return {
+        "success": True,
+        "message": f"Safety level changed to {level.value}",
+        "level": level.value
+    }
+
+
+@router.post("/circuit-breaker/{breaker_type}")
+async def trigger_circuit_breaker(
+    breaker_type: str,
+    reason: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    safety_repo: SafetyRepository = Depends(get_safety_repository)
+) -> Dict[str, Any]:
+    """Manually trigger a circuit breaker."""
+    if breaker_type not in _safety_state["circuit_breakers"]:
+        _safety_state["circuit_breakers"].append(breaker_type)
+    
+    await safety_repo.log_safety_event(
+        event_type="circuit_breaker",
+        severity="high",
+        reason=reason,
+        action="triggered",
+        details={"breaker_type": breaker_type}
+    )
+    
+    return {
+        "success": True,
+        "message": f"Circuit breaker {breaker_type} triggered",
+        "breaker_type": breaker_type,
+        "reason": reason
+    }
+
+
+@router.delete("/circuit-breaker/{breaker_type}")
+async def reset_circuit_breaker(
+    breaker_type: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    safety_repo: SafetyRepository = Depends(get_safety_repository)
+) -> Dict[str, Any]:
+    """Reset a circuit breaker."""
+    if breaker_type in _safety_state["circuit_breakers"]:
+        _safety_state["circuit_breakers"].remove(breaker_type)
+    
+    await safety_repo.log_safety_event(
+        event_type="circuit_breaker_reset",
+        severity="low",
+        reason=f"Circuit breaker {breaker_type} reset",
+        action="reset",
+        details={"breaker_type": breaker_type}
+    )
+    
+    return {
+        "success": True,
+        "message": f"Circuit breaker {breaker_type} reset",
+        "breaker_type": breaker_type
+    }
+
+
+@router.get("/status", response_model=SafetyStatusResponse)
+async def get_safety_status(
+    current_user: CurrentUser = Depends(get_current_user),
+    safety_repo: SafetyRepository = Depends(get_safety_repository)
+) -> SafetyStatusResponse:
+    """Get comprehensive safety system status."""
+    # Get recent events count
+    recent_events = await safety_repo.get_recent_events(limit=100)
+    
+    # Get blacklisted tokens count
+    blacklisted = await safety_repo.get_blacklisted_tokens()
+    
+    return SafetyStatusResponse(
+        safety_level=_safety_state["safety_level"].value,
+        emergency_stop=_safety_state["emergency_stop"],
+        active_circuit_breakers=_safety_state["circuit_breakers"],
+        blacklisted_tokens_count=len(blacklisted),
+        recent_events_count=len(recent_events)
+    )
+
+
+@router.get("/events", response_model=List[SafetyEventResponse])
+async def get_safety_events(
+    limit: int = Query(100, ge=1, le=1000),
+    severity: Optional[str] = None,
+    event_type: Optional[str] = None,
+    resolved: Optional[bool] = None,
+    current_user: CurrentUser = Depends(get_current_user),
+    safety_repo: SafetyRepository = Depends(get_safety_repository)
+) -> List[SafetyEventResponse]:
+    """Get recent safety events."""
+    events = await safety_repo.get_recent_events(
+        limit=limit,
+        severity=severity,
+        event_type=event_type,
+        resolved=resolved
+    )
+    
+    return [
+        SafetyEventResponse(
+            id=event.id,
+            event_type=event.event_type,
+            severity=event.severity,
+            reason=event.reason,
+            timestamp=event.timestamp,
+            chain=event.chain,
+            token_address=event.token_address,
+            resolved=event.resolved
         )
+        for event in events
+    ]
+
+
+@router.put("/events/{event_id}/resolve")
+async def resolve_safety_event(
+    event_id: int,
+    notes: Optional[str] = None,
+    current_user: CurrentUser = Depends(get_current_user),
+    safety_repo: SafetyRepository = Depends(get_safety_repository)
+) -> Dict[str, Any]:
+    """Mark a safety event as resolved."""
+    await safety_repo.resolve_event(event_id, notes)
+    
+    return {
+        "success": True,
+        "message": f"Event {event_id} resolved",
+        "event_id": event_id
+    }
 
 
 @router.get("/health")
 async def safety_system_health() -> Dict[str, Any]:
-    """
-    Health check for safety system components.
-    
-    Returns operational status of safety controls, circuit breakers,
-    blacklist system, and canary testing capabilities.
-    """
-    try:
-        safety_status = await safety_controls.get_safety_status()
-        canary_stats = enhanced_canary_tester.get_performance_stats()
-        
-        return {
-            "status": "healthy",
-            "safety_controls": {
-                "operational": True,
-                "safety_level": safety_status["safety_level"],
-                "emergency_stop": safety_status["emergency_stop"],
-                "checks_performed": safety_status["metrics"]["safety_checks_performed"]
-            },
-            "circuit_breakers": {
-                "operational": True,
-                "active_breakers": len(safety_status["active_circuit_breakers"]),
-                "total_breakers": len(safety_status.get("circuit_breakers", {}))
-            },
-            "blacklist_system": {
-                "operational": True,
-                "total_blacklisted": sum(safety_status["blacklisted_tokens"].values())
-            },
-            "canary_testing": {
-                "operational": True,
-                "total_tests": canary_stats["total_canaries"],
-                "success_rate": canary_stats["success_rate"]
-            },
-            "uptime_seconds": safety_status["metrics"]["uptime_seconds"]
+    """Health check for safety system components."""
+    return {
+        "status": "healthy",
+        "safety_controls": {
+            "operational": True,
+            "safety_level": _safety_state["safety_level"].value,
+            "emergency_stop": _safety_state["emergency_stop"]
+        },
+        "circuit_breakers": {
+            "operational": True,
+            "active_count": len(_safety_state["circuit_breakers"])
         }
-        
-    except Exception as e:
-        logger.error(f"Safety health check failed: {e}")
-        return {
-            "status": "error",
-            "error": str(e)
-        }
-
-
-@router.post("/test-canary-system")
-async def test_canary_system() -> Dict[str, Any]:
-    """
-    Test canary system with a known safe token.
-    
-    Executes a canary test using a well-known token (like WETH)
-    to verify the canary testing system is operational.
-    """
-    try:
-        # Test with WETH on Ethereum (known safe token)
-        test_token = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
-        test_chain = "ethereum"
-        
-        result = await enhanced_canary_tester.execute_canary_test(
-            token_address=test_token,
-            chain=test_chain,
-            strategy=CanaryStrategy.INSTANT,
-            chain_clients={}
-        )
-        
-        return {
-            "success": True,
-            "message": "Canary system test completed",
-            "test_result": {
-                "canary_id": result.canary_id,
-                "outcome": result.outcome.value,
-                "execution_time_ms": result.total_execution_time_ms,
-                "stages_completed": len(result.stages)
-            },
-            "system_operational": result.outcome != CanaryOutcome.EXECUTION_FAILED
-        }
-        
-    except Exception as e:
-        logger.error(f"Canary system test failed: {e}")
-        return {
-            "success": False,
-            "message": f"Canary system test failed: {str(e)}",
-            "system_operational": False
-        }
+    }

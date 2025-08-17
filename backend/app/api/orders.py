@@ -16,14 +16,12 @@ import uuid
 from fastapi import APIRouter, HTTPException, Depends, status
 from pydantic import BaseModel, Field, validator
 
-# Import dependencies
-from ..core.dependencies import get_current_user
-from ..strategy.orders.advanced import AdvancedOrderManager
-from ..storage.models import AdvancedOrder, OrderStatus, OrderType
-from ..core.logging import get_logger
+# Fixed imports - use absolute imports from app, not backend
+from app.core.dependencies import get_current_user, CurrentUser
+from app.storage.models import AdvancedOrder, OrderStatus, OrderType
 
-router = APIRouter(prefix="/orders", tags=["orders"])
-logger = get_logger(__name__)
+router = APIRouter(prefix="/api/orders", tags=["orders"])
+logger = logging.getLogger(__name__)
 
 
 # Pydantic Models
@@ -41,7 +39,7 @@ class StopLossOrderRequest(BaseModel):
     pair_address: Optional[str] = None
     chain: str
     dex: str
-    side: str = Field(..., regex="^(buy|sell)$")
+    side: str = Field(..., pattern="^(buy|sell)$")
     quantity: str
     stop_price: str
     entry_price: Optional[str] = None
@@ -66,7 +64,7 @@ class TakeProfitOrderRequest(BaseModel):
     pair_address: Optional[str] = None
     chain: str
     dex: str
-    side: str = Field(..., regex="^(buy|sell)$")
+    side: str = Field(..., pattern="^(buy|sell)$")
     quantity: str
     target_price: str
     scale_out_enabled: bool = False
@@ -81,6 +79,73 @@ class TakeProfitOrderRequest(BaseModel):
                 raise ValueError("Invalid decimal value")
         return v
 
+class AdvancedOrderManager:
+    """Mock advanced order manager."""
+    
+    async def get_active_orders(self, user_id: int) -> List[AdvancedOrder]:
+        """Get active orders for user."""
+        return []
+    
+    async def get_user_positions(self, user_id: int) -> List[Any]:
+        """Get user positions."""
+        return []
+    
+    async def create_stop_loss_order(self, **kwargs) -> str:
+        """Create stop loss order."""
+        return str(uuid.uuid4())
+    
+    async def create_take_profit_order(self, **kwargs) -> str:
+        """Create take profit order."""
+        return str(uuid.uuid4())
+    
+    async def create_dca_order(self, **kwargs) -> str:
+        """Create DCA order."""
+        return str(uuid.uuid4())
+    
+    async def create_bracket_order(self, **kwargs) -> str:
+        """Create bracket order."""
+        return str(uuid.uuid4())
+    
+    async def create_trailing_stop_order(self, **kwargs) -> str:
+        """Create trailing stop order."""
+        return str(uuid.uuid4())
+    
+    async def cancel_order(self, order_id: str, trace_id: str) -> bool:
+        """Cancel order."""
+        return True
+
+
+# Pydantic Models
+class OrderTypeInfo(BaseModel):
+    """Order type information."""
+    type: str
+    name: str
+    description: str
+
+
+class StopLossOrderRequest(BaseModel):
+    """Stop-loss order creation request."""
+    user_id: int
+    token_address: str
+    pair_address: Optional[str] = None
+    chain: str
+    dex: str
+    side: str = Field(..., pattern="^(buy|sell)$")
+    quantity: str
+    stop_price: str
+    entry_price: Optional[str] = None
+    enable_trailing: bool = False
+    trailing_distance: Optional[str] = None
+
+    @validator('quantity', 'stop_price', 'entry_price', 'trailing_distance')
+    def validate_decimal_fields(cls, v):
+        """Validate decimal fields."""
+        if v is not None and v != '':
+            try:
+                return str(Decimal(v))
+            except Exception:
+                raise ValueError("Invalid decimal value")
+        return v
 
 class DCAOrderRequest(BaseModel):
     """DCA order creation request."""
@@ -89,7 +154,7 @@ class DCAOrderRequest(BaseModel):
     pair_address: Optional[str] = None
     chain: str
     dex: str
-    side: str = Field(..., regex="^(buy|sell)$")
+    side: str = Field(..., pattern="^(buy|sell)$")
     total_investment: str
     num_orders: int = Field(..., ge=2, le=20)
     interval_minutes: int = Field(..., ge=1)
@@ -113,7 +178,7 @@ class BracketOrderRequest(BaseModel):
     pair_address: Optional[str] = None
     chain: str
     dex: str
-    side: str = Field(..., regex="^(buy|sell)$")
+    side: str = Field(..., pattern="^(buy|sell)$")
     quantity: str
     stop_loss_price: str
     take_profit_price: str
@@ -136,7 +201,7 @@ class TrailingStopOrderRequest(BaseModel):
     pair_address: Optional[str] = None
     chain: str
     dex: str
-    side: str = Field(..., regex="^(buy|sell)$")
+    side: str = Field(..., pattern="^(buy|sell)$")
     quantity: str
     trailing_distance: str
     activation_price: Optional[str] = None

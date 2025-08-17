@@ -13,7 +13,7 @@ from typing import Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
-from backend.app.storage.repositories import TransactionRepository
+from app.storage.repositories import TransactionRepository
 
 logger = logging.getLogger(__name__)
 
@@ -543,3 +543,109 @@ class PerformanceAnalytics:
                 "last_updated": datetime.utcnow(),
                 "error": str(e)
             }
+
+# Add these imports at the top of the file after the existing imports
+from fastapi import APIRouter, Depends, HTTPException, Query
+from app.core.dependencies import get_current_user, CurrentUser
+
+# Create the router at the end of the file
+router = APIRouter(
+    prefix="/api/analytics",
+    tags=["analytics"],
+    responses={404: {"description": "Not found"}},
+)
+
+
+@router.get("/portfolio")
+async def get_portfolio_overview(
+    current_user: CurrentUser = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """Get comprehensive portfolio overview."""
+    # Mock implementation for now
+    return {
+        "positions": [],
+        "metrics": {
+            "total_trades": 0,
+            "successful_trades": 0,
+            "failed_trades": 0,
+            "win_rate": "0",
+            "total_invested": "0",
+            "total_pnl": "0",
+            "roi_percentage": "0"
+        },
+        "last_updated": datetime.utcnow().isoformat()
+    }
+
+
+@router.get("/metrics")
+async def get_trading_metrics(
+    period_days: int = Query(30, ge=1, le=365),
+    current_user: CurrentUser = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """Get trading metrics for specified period."""
+    return {
+        "total_trades": 0,
+        "successful_trades": 0,
+        "failed_trades": 0,
+        "win_rate": "0",
+        "total_invested": "0",
+        "total_realized_pnl": "0",
+        "total_unrealized_pnl": "0",
+        "total_pnl": "0",
+        "roi_percentage": "0",
+        "period_days": period_days,
+        "period_start": (datetime.utcnow() - timedelta(days=period_days)).isoformat(),
+        "period_end": datetime.utcnow().isoformat()
+    }
+
+
+@router.get("/positions")
+async def get_positions(
+    current_user: CurrentUser = Depends(get_current_user)
+) -> List[Dict[str, Any]]:
+    """Get all active positions."""
+    return []
+
+
+@router.get("/position/{token_address}")
+async def get_position_metrics(
+    token_address: str,
+    chain: str = Query(..., description="Blockchain network"),
+    current_user: CurrentUser = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """Get metrics for a specific position."""
+    return {
+        "token_address": token_address,
+        "chain": chain,
+        "symbol": "UNKNOWN",
+        "quantity": "0",
+        "entry_price": "0",
+        "current_price": "0",
+        "unrealized_pnl": "0",
+        "realized_pnl": "0",
+        "total_pnl": "0",
+        "pnl_percentage": "0"
+    }
+
+
+@router.get("/preset-performance")
+async def get_preset_performance(
+    preset_name: Optional[str] = None,
+    current_user: CurrentUser = Depends(get_current_user)
+) -> List[Dict[str, Any]]:
+    """Get performance metrics by preset."""
+    return []
+
+
+@router.get("/history")
+async def get_pnl_history(
+    days: int = Query(30, ge=1, le=365),
+    current_user: CurrentUser = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """Get P&L history over time."""
+    return {
+        "dates": [],
+        "pnl_values": [],
+        "cumulative_pnl": [],
+        "period_days": days
+    }
