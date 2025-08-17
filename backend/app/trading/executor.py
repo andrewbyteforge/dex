@@ -20,6 +20,7 @@ from .canary import CanaryTradeValidator
 from ..storage.models import TradeStatus as DBTradeStatus
 from ..storage.repositories import TransactionRepository
 from ..ledger.ledger_writer import LedgerWriter
+from .models import TradeRequest, TradeResult, TradePreview, TradeStatus, TradeType
 
 logger = get_logger(__name__)
 

@@ -36,16 +36,20 @@ def _register_router(module_name: str, router_name: str = "router", description:
         api_router.include_router(router)
         
         logger.info(f"✅ {desc} API router registered")
+        print(f"✅ {desc} API router registered")
         return True
         
-    except ImportError:
-        logger.warning(f"⚠️  {desc} API not available")
+    except ImportError as e:
+        logger.warning(f"⚠️  {desc} API not available: {e}")
+        print(f"⚠️  {desc} API not available: {e}")
         return False
-    except AttributeError:
-        logger.error(f"❌ {desc} API missing router attribute")
+    except AttributeError as e:
+        logger.error(f"❌ {desc} API missing router attribute: {e}")
+        print(f"❌ {desc} API missing router attribute: {e}")
         return False
     except Exception as e:
         logger.error(f"❌ {desc} API registration failed: {e}")
+        print(f"❌ {desc} API registration failed: {e}")
         return False
 
 # **ONLY REGISTER WORKING MODULES** - Disable circular import modules
@@ -56,8 +60,10 @@ try:
     from . import presets_working
     api_router.include_router(presets_working.router)
     logger.info("✅ Presets API (working version) router registered")
-except ImportError:
-    logger.warning("⚠️  Working Presets API not available")
+    print("✅ Presets API (working version) router registered")
+except ImportError as e:
+    logger.warning(f"⚠️  Working Presets API not available: {e}")
+    print(f"⚠️  Working Presets API not available: {e}")
 
 # **COMMENTED OUT BROKEN MODULES UNTIL FIXED**
 # These have circular imports or missing dependencies:
@@ -89,10 +95,12 @@ def setup_websocket_routes(app) -> None:
             await websocket_handler(websocket)
         
         logger.info("✅ Autotrade WebSocket endpoint registered at /ws/autotrade")
+        print("✅ Autotrade WebSocket endpoint registered at /ws/autotrade")
         websocket_count += 1
         
     except ImportError as e:
         logger.warning(f"⚠️  Autotrade WebSocket not available: {e}")
+        print(f"⚠️  Autotrade WebSocket not available: {e}")
     
     logger.info(f"📡 WebSocket setup complete: {websocket_count} endpoints registered")
 

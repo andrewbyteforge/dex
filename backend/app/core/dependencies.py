@@ -44,8 +44,8 @@ async def get_chain_clients() -> Dict[str, Any]:
     }
 
 
-# Import models for proper type returns
-from ..trading.executor import TradePreview, TradeResult, TradeStatus, TradeType
+# Import models from the new location to avoid circular imports
+from ..trading.models import TradePreview, TradeResult, TradeStatus, TradeType
 
 
 # Mock TradeExecutor to avoid circular imports during testing
@@ -72,15 +72,11 @@ class MockTradeExecutor:
         
         return TradePreview(
             trace_id=trace_id,
-            input_token=request.input_token,
-            output_token=request.output_token,
-            input_amount=request.amount_in,
             expected_output="950000000000000000",  # Mock 0.95 output
             minimum_output="900000000000000000",   # Mock minimum
-            price="0.95",
-            price_impact="0.5%",
-            gas_estimate="150000",
-            gas_price="20",
+            price_impact="0.5",
+            estimated_gas="150000",
+            gas_price="20.0",
             total_cost_native="0.003",
             total_cost_usd="7.50",
             route=[request.input_token, request.output_token],
@@ -93,13 +89,14 @@ class MockTradeExecutor:
             execution_time_ms=45.2
         )
     
-    async def execute_trade(self, request, chain_clients) -> TradeResult:
+    async def execute_trade(self, request, chain_clients, preview=None) -> TradeResult:
         """
         Mock trade execution returning proper TradeResult object.
         
         Args:
             request: Trade request object
             chain_clients: Chain client dependencies
+            preview: Optional pre-computed trade preview
             
         Returns:
             TradeResult object with execution status
@@ -108,15 +105,15 @@ class MockTradeExecutor:
         
         result = TradeResult(
             trace_id=trace_id,
-            status=TradeStatus.SUBMITTED,
+            status=TradeStatus.CONFIRMED,
             transaction_id=f"tx_{trace_id[:8]}",
-            tx_hash=f"0x{trace_id.replace('-', '')}",
-            block_number=None,
-            gas_used=None,
-            actual_output=None,
-            actual_price=None,
+            tx_hash=f"0x{'1' * 64}",
+            block_number=18500000,
+            gas_used="145000",
+            actual_output="980000000000000000",  # 0.98 token
+            actual_price="2500.00",
             error_message=None,
-            execution_time_ms=125.7
+            execution_time_ms=2500.0
         )
         
         # Store in active trades (convert to dict for storage)
@@ -133,7 +130,24 @@ class MockTradeExecutor:
             "execution_time_ms": result.execution_time_ms
         }
         
+        # Move to completed
+        self.completed_trades[trace_id] = result.dict()
+        
         return result
+    
+    async def execute_canary(self, request, chain_clients, canary_amount: Decimal) -> TradeResult:
+        """
+        Mock canary execution.
+        
+        Args:
+            request: Base trade request for canary execution
+            chain_clients: Available blockchain client connections
+            canary_amount: Small test amount for validation
+            
+        Returns:
+            TradeResult: Canary execution result
+        """
+        return await self.execute_trade(request, chain_clients)
     
     async def get_trade_status(self, trace_id: str) -> Optional[Dict]:
         """

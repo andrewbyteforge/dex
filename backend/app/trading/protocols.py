@@ -6,9 +6,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Dict, Optional, Any
 from decimal import Decimal
-
-from .executor import TradeRequest, TradeResult, TradePreview
-
+from .models import TradeRequest, TradeResult, TradePreview
 
 class TradeExecutorProtocol(ABC):
     """Protocol interface for trade executor to avoid circular imports."""

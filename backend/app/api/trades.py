@@ -5,13 +5,19 @@ from __future__ import annotations
 
 import logging
 from typing import Dict, List, Optional
-from enum import Enum
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from ..core.dependencies import get_chain_clients, get_trade_executor
 from ..core.logging import get_logger
+from ..trading.models import (
+    TradeRequest, 
+    TradeResult, 
+    TradePreview, 
+    TradeStatus, 
+    TradeType
+)
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/trades", tags=["trades"])
