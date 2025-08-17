@@ -233,11 +233,11 @@ Build automated pair discovery and comprehensive risk assessment systems.
 
 ### 🎯 4.2 Discovery Engine (Week 11) - NEXT STEP
 **Deliverables:**
-- [ ] On-chain event listeners for PairCreated events
-- [ ] First liquidity addition detection
-- [ ] Dexscreener API integration with cross-referencing
-- [ ] V3 fee tier enumeration and ranking
-- [ ] Real-time discovery with WebSocket updates
+- [x] On-chain event listeners for PairCreated events
+- [x] First liquidity addition detection
+- [x] Dexscreener API integration with cross-referencing
+- [x] V3 fee tier enumeration and ranking
+- [x] Real-time discovery with WebSocket updates
 
 **Key Files:**
 - [ ] `backend/app/discovery/chain_watchers.py` - Event listening and processing ⬅️ **IMMEDIATE NEXT STEP**
