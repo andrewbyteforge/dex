@@ -806,3 +806,6 @@
 {"timestamp":"2025-08-17T11:14:00.712530Z","level":"INFO","logger":"app.storage.database","message":"Database tables created successfully","module":"database"}
 {"timestamp":"2025-08-17T11:14:00.712530Z","level":"INFO","logger":"app.bootstrap","message":"Database initialized successfully with WAL mode","module":"bootstrap"}
 {"timestamp":"2025-08-17T11:14:00.712530Z","level":"INFO","logger":"app.bootstrap","message":"Skipping RPC/chain client initialization for testing","module":"bootstrap"}
+{"timestamp":"2025-08-17T11:18:22.449688Z","level":"INFO","logger":"app.bootstrap","message":"Shutting down DEX Sniper Pro - MINIMAL VERSION","module":"bootstrap","uptime_sec":261.757222}
+{"timestamp":"2025-08-17T11:18:22.450235Z","level":"INFO","logger":"app.storage.database","message":"Database connections closed","module":"database"}
+{"timestamp":"2025-08-17T11:18:22.450235Z","level":"INFO","logger":"app.bootstrap","message":"Database connections closed","module":"bootstrap"}
