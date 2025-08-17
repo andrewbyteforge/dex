@@ -11,44 +11,126 @@ from fastapi import APIRouter
 # Create main API router
 api_router = APIRouter(prefix="/api/v1")
 
-# Import and register only existing routers
-# Uncomment lines as you create the corresponding API modules
+# Import and register existing routers
 
-# Your existing presets module
-from backend.app.api import presets
-api_router.include_router(presets.router)
+# Core infrastructure routers
+try:
+    from . import presets
+    api_router.include_router(presets.router)
+except ImportError:
+    pass
 
-# Core infrastructure (uncomment when these modules exist)
-# from backend.app.api import health
-# api_router.include_router(health.router)
+try:
+    from . import health
+    api_router.include_router(health.router)
+except ImportError:
+    pass
 
-# from backend.app.api import wallet
-# api_router.include_router(wallet.router)
+try:
+    from . import wallet
+    api_router.include_router(wallet.router)
+except ImportError:
+    pass
 
-# from backend.app.api import database
-# api_router.include_router(database.router)
+try:
+    from . import database
+    api_router.include_router(database.router)
+except ImportError:
+    pass
 
-# Trading operations (uncomment when these modules exist)
-# from backend.app.api import quotes
-# api_router.include_router(quotes.router)
+# Trading operations routers
+try:
+    from . import quotes
+    api_router.include_router(quotes.router)
+except ImportError:
+    pass
 
-# from backend.app.api import trades
-# api_router.include_router(trades.router)
+try:
+    from . import trades
+    api_router.include_router(trades.router)
+except ImportError:
+    pass
 
-# from backend.app.api import pairs
-# api_router.include_router(pairs.router)
+try:
+    from . import pairs
+    api_router.include_router(pairs.router)
+except ImportError:
+    pass
 
-# from backend.app.api import risk
-# api_router.include_router(risk.router)
+try:
+    from . import risk
+    api_router.include_router(risk.router)
+except ImportError:
+    pass
 
-# Analytics and automation (uncomment when these modules exist)
-# from backend.app.api import analytics
-# api_router.include_router(analytics.router)
+# Analytics and automation routers
+try:
+    from . import analytics
+    api_router.include_router(analytics.router)
+except ImportError:
+    pass
 
-# from backend.app.api import autotrade
-# api_router.include_router(autotrade.router)
+# ✅ Autotrade API - Now available
+try:
+    from . import autotrade
+    api_router.include_router(autotrade.router)
+    print("✅ Autotrade API router registered")
+except ImportError as e:
+    print(f"⚠️  Autotrade API not available: {e}")
 
-# from backend.app.api import advanced_orders
-# api_router.include_router(advanced_orders.router)
+# ✅ Advanced Orders API - Available
+try:
+    from . import orders as advanced_orders
+    api_router.include_router(advanced_orders.router)
+    print("✅ Advanced Orders API router registered")
+except ImportError as e:
+    print(f"⚠️  Advanced Orders API not available: {e}")
 
-__all__ = ["api_router"]
+# Discovery and monitoring
+try:
+    from . import discovery
+    api_router.include_router(discovery.router)
+except ImportError:
+    pass
+
+try:
+    from . import safety
+    api_router.include_router(safety.router)
+except ImportError:
+    pass
+
+# WebSocket endpoints setup
+def setup_websocket_routes(app):
+    """
+    Setup WebSocket routes for real-time communication.
+    
+    Args:
+        app: FastAPI application instance
+    """
+    try:
+        from ..ws.autotrade_hub import websocket_handler
+        
+        @app.websocket("/ws/autotrade")
+        async def autotrade_websocket(websocket):
+            """WebSocket endpoint for autotrade real-time updates."""
+            await websocket_handler(websocket)
+        
+        print("✅ Autotrade WebSocket endpoint registered at /ws/autotrade")
+        
+    except ImportError as e:
+        print(f"⚠️  Autotrade WebSocket not available: {e}")
+    
+    try:
+        from ..ws.discovery_hub import websocket_handler as discovery_ws_handler
+        
+        @app.websocket("/ws/discovery")
+        async def discovery_websocket(websocket):
+            """WebSocket endpoint for discovery real-time updates."""
+            await discovery_ws_handler(websocket)
+        
+        print("✅ Discovery WebSocket endpoint registered at /ws/discovery")
+        
+    except ImportError as e:
+        print(f"⚠️  Discovery WebSocket not available: {e}")
+
+__all__ = ["api_router", "setup_websocket_routes"]

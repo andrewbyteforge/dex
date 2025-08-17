@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Container, Row, Col, Navbar, Nav, Card, Alert, Badge } from 'react-bootstrap';
-import { Activity, TrendingUp, Settings, BarChart3 } from 'lucide-react';
+import { Activity, TrendingUp, Settings, BarChart3, Zap, Bot } from 'lucide-react';
 import Analytics from './components/Analytics.jsx';
+import Autotrade from './components/Autotrade.jsx';
 
 function App() {
   const [systemHealth, setSystemHealth] = useState(null);
@@ -57,7 +58,16 @@ function App() {
                 active={activeTab === 'trade'}
                 onClick={() => setActiveTab('trade')}
               >
+                <Zap className="me-1" size={16} />
                 Trade
+              </Nav.Link>
+              <Nav.Link 
+                href="#autotrade" 
+                active={activeTab === 'autotrade'}
+                onClick={() => setActiveTab('autotrade')}
+              >
+                <Bot className="me-1" size={16} />
+                Autotrade
               </Nav.Link>
               <Nav.Link 
                 href="#analytics" 
@@ -79,6 +89,7 @@ function App() {
                 active={activeTab === 'settings'}
                 onClick={() => setActiveTab('settings')}
               >
+                <Settings className="me-1" size={16} />
                 Settings
               </Nav.Link>
             </Nav>
@@ -93,7 +104,7 @@ function App() {
       </Navbar>
 
       {/* Main Content */}
-      <Container>
+      <Container fluid>
         <Row>
           <Col>
             {/* System Status */}
@@ -120,78 +131,92 @@ function App() {
             {activeTab === 'trade' && (
               <Card>
                 <Card.Header>
-                  <h5 className="mb-0">DEX Trading Interface</h5>
+                  <h5 className="mb-0">
+                    <Zap className="me-2" size={20} />
+                    DEX Trading Interface
+                  </h5>
                 </Card.Header>
                 <Card.Body>
                   <Row>
                     <Col md={6}>
-                      <h6>Quick Tests</h6>
-                      <div className="d-grid gap-2">
-                        <button 
-                          className="btn btn-outline-primary"
-                          onClick={() => testBackendConnection()}
-                        >
-                          Test Backend Connection
-                        </button>
-                        <button 
-                          className="btn btn-outline-success"
-                          onClick={() => testQuoteService()}
-                        >
-                          Test Quote Service
-                        </button>
-                        <button 
-                          className="btn btn-outline-info"
-                          onClick={() => testTradePreview()}
-                        >
-                          Test Trade Preview
-                        </button>
-                      </div>
+                      <h6>Manual Trading</h6>
+                      <p className="text-muted">
+                        Execute trades manually with real-time quotes and risk assessment.
+                      </p>
+                      <Alert variant="info">
+                        Manual trading interface will be displayed here.
+                        <br />
+                        <small>This includes token swaps, quote aggregation, and trade execution.</small>
+                      </Alert>
                     </Col>
                     <Col md={6}>
-                      <h6>System Information</h6>
-                      {systemHealth && (
-                        <div>
-                          <p><strong>Version:</strong> {systemHealth.version}</p>
-                          <p><strong>Environment:</strong> {systemHealth.environment}</p>
-                          <p><strong>Platform:</strong> {systemHealth.system_info?.platform}</p>
-                          <p><strong>Python:</strong> {systemHealth.system_info?.python_version}</p>
-                        </div>
-                      )}
+                      <h6>Discovery</h6>
+                      <p className="text-muted">
+                        Monitor new pairs and trending opportunities across DEXs.
+                      </p>
+                      <Alert variant="secondary">
+                        Pair discovery dashboard will be displayed here.
+                        <br />
+                        <small>Real-time new pair detection and risk analysis.</small>
+                      </Alert>
                     </Col>
                   </Row>
                 </Card.Body>
               </Card>
             )}
 
-            {/* Analytics Dashboard */}
+            {/* Autotrade Interface */}
+            {activeTab === 'autotrade' && <Autotrade />}
+
+            {/* Analytics Interface */}
             {activeTab === 'analytics' && <Analytics />}
 
-            {/* Portfolio Tab */}
+            {/* Portfolio Interface */}
             {activeTab === 'portfolio' && (
               <Card>
                 <Card.Header>
-                  <h5 className="mb-0">Portfolio Overview</h5>
+                  <h5 className="mb-0">Portfolio Management</h5>
                 </Card.Header>
                 <Card.Body>
-                  <p>Portfolio functionality will be implemented here.</p>
                   <Alert variant="info">
-                    Backend integration working! Portfolio features coming soon.
+                    Portfolio management interface will be displayed here.
+                    <br />
+                    <small>
+                      This includes position tracking, PnL calculation, and portfolio analytics.
+                    </small>
                   </Alert>
                 </Card.Body>
               </Card>
             )}
 
-            {/* Settings Tab */}
+            {/* Settings Interface */}
             {activeTab === 'settings' && (
               <Card>
                 <Card.Header>
-                  <h5 className="mb-0">Application Settings</h5>
+                  <h5 className="mb-0">
+                    <Settings className="me-2" size={20} />
+                    Application Settings
+                  </h5>
                 </Card.Header>
                 <Card.Body>
-                  <p>Settings and configuration options will be available here.</p>
-                  <Alert variant="info">
-                    Full-stack application successfully running!
-                  </Alert>
+                  <Row>
+                    <Col md={6}>
+                      <h6>Trading Preferences</h6>
+                      <Alert variant="secondary">
+                        Trading preferences and risk settings will be configured here.
+                        <br />
+                        <small>Includes slippage tolerance, gas settings, and default parameters.</small>
+                      </Alert>
+                    </Col>
+                    <Col md={6}>
+                      <h6>Safety Controls</h6>
+                      <Alert variant="warning">
+                        Safety controls and circuit breakers will be managed here.
+                        <br />
+                        <small>Emergency stops, position limits, and security settings.</small>
+                      </Alert>
+                    </Col>
+                  </Row>
                 </Card.Body>
               </Card>
             )}
@@ -200,48 +225,6 @@ function App() {
       </Container>
     </div>
   );
-
-  // Test functions
-  async function testBackendConnection() {
-    try {
-      const response = await fetch('/api/v1/health/');
-      const data = await response.json();
-      alert(`Backend Status: ${data.status}\nUptime: ${Math.floor(data.uptime_seconds)}s`);
-    } catch (error) {
-      alert(`Backend connection failed: ${error.message}`);
-    }
-  }
-
-  async function testQuoteService() {
-    try {
-      const response = await fetch('/api/v1/quotes/simple-test');
-      const data = await response.json();
-      alert(`Quote Service: ${data.status}\nMock Quote: ${data.mock_quote.input_token} → ${data.mock_quote.output_token}`);
-    } catch (error) {
-      alert(`Quote service failed: ${error.message}`);
-    }
-  }
-
-  async function testTradePreview() {
-    try {
-      const response = await fetch('/api/v1/trades/preview', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          input_token: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
-          output_token: "0xA0b86a33E6441e99Ec9e45C9a4F34e77D05E0E67",
-          amount_in: "1000000000000000000",
-          chain: "ethereum",
-          dex: "uniswap_v2",
-          wallet_address: "0x1234567890123456789012345678901234567890"
-        })
-      });
-      const data = await response.json();
-      alert(`Trade Preview: ${data.status ? 'Success' : 'Failed'}\nExpected Output: ${data.expected_output}\nTrace ID: ${data.trace_id}`);
-    } catch (error) {
-      alert(`Trade preview failed: ${error.message}`);
-    }
-  }
 }
 
 export default App;

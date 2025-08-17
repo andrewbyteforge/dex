@@ -1,11 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { Container, Row, Col, Card, Button, Badge, Alert, Spinner, Nav, Tab, Form, Modal } from 'react-bootstrap';
-import { Play, Pause, Square, Settings, Activity, AlertTriangle, TrendingUp, BarChart3 } from 'lucide-react';
+import { Play, Pause, Square, Settings, Activity, AlertTriangle, TrendingUp, BarChart3, Wifi, WifiOff } from 'lucide-react';
 
 import AutotradeConfig from './AutotradeConfig';
 import AutotradeMonitor from './AutotradeMonitor';
 import AdvancedOrders from './AdvancedOrders';
+import useWebSocket from '../hooks/useWebSocket';
 
+/**
+ * Enhanced Autotrade dashboard component with real-time monitoring and control.
+ * Integrates with the backend autotrade engine via WebSocket for live updates.
+ * Provides comprehensive monitoring, configuration, and emergency controls.
+ */
 const Autotrade = () => {
   // State management
   const [activeTab, setActiveTab] = useState('overview');
@@ -18,101 +24,216 @@ const Autotrade = () => {
   const [engineMode, setEngineMode] = useState('disabled');
   const [isRunning, setIsRunning] = useState(false);
   const [metrics, setMetrics] = useState(null);
+  const [lastUpdate, setLastUpdate] = useState(null);
 
-  // Fetch autotrade status
+  // WebSocket connection for real-time updates
+  const { data: wsData, connected: wsConnected, error: wsError } = useWebSocket('/ws/autotrade');
+
+  // Handle WebSocket updates for real-time data
+  useEffect(() => {
+    if (wsData) {
+      handleWebSocketUpdate(wsData);
+    }
+  }, [wsData]);
+
+  // Handle WebSocket errors
+  useEffect(() => {
+    if (wsError) {
+      setError(`WebSocket error: ${wsError}`);
+    }
+  }, [wsError]);
+
+  /**
+   * Handle real-time WebSocket updates for engine status and metrics
+   */
+  const handleWebSocketUpdate = (data) => {
+    setLastUpdate(new Date());
+    
+    switch (data.type) {
+      case 'engine_status':
+        setAutotradeStatus(prev => ({
+          ...prev,
+          ...data.data
+        }));
+        setEngineMode(data.data.mode || engineMode);
+        setIsRunning(data.data.is_running || false);
+        break;
+        
+      case 'metrics_update':
+        setMetrics(prev => ({
+          ...prev,
+          ...data.data
+        }));
+        break;
+        
+      case 'opportunity_found':
+        // Update opportunity count in real-time
+        setMetrics(prev => prev ? {
+          ...prev,
+          opportunities_found: prev.opportunities_found + 1
+        } : null);
+        break;
+        
+      case 'trade_executed':
+        // Update execution metrics in real-time
+        setMetrics(prev => prev ? {
+          ...prev,
+          opportunities_executed: prev.opportunities_executed + 1,
+          total_profit_usd: prev.total_profit_usd + (data.data.profit || 0)
+        } : null);
+        break;
+        
+      case 'engine_error':
+        setError(`Engine error: ${data.message}`);
+        break;
+        
+      case 'emergency_stop':
+        setIsRunning(false);
+        setEngineMode('disabled');
+        setError('Emergency stop activated');
+        break;
+        
+      default:
+        console.log('Unknown WebSocket message type:', data.type);
+    }
+  };
+
+  // Fetch autotrade status with improved error handling
   const fetchAutotradeStatus = async () => {
     try {
       const response = await fetch('/api/v1/autotrade/status');
-      if (!response.ok) throw new Error('Failed to fetch autotrade status');
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
       
       const data = await response.json();
       setAutotradeStatus(data);
       setEngineMode(data.mode);
       setIsRunning(data.is_running);
       setMetrics(data.metrics);
+      setError(null); // Clear any previous errors on successful fetch
       
     } catch (err) {
-      setError(err.message);
+      const errorMsg = `Failed to fetch autotrade status: ${err.message}`;
+      setError(errorMsg);
+      console.error('Autotrade status fetch error:', err);
     }
   };
 
-  // Start autotrade engine
+  // Start autotrade engine with enhanced feedback
   const startAutotrade = async (mode = 'standard') => {
     setLoading(true);
     setError(null);
     
     try {
       const response = await fetch(`/api/v1/autotrade/start?mode=${mode}`, {
-        method: 'POST'
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        }
       });
       
-      if (!response.ok) throw new Error('Failed to start autotrade');
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || `HTTP ${response.status}: Failed to start autotrade`);
+      }
       
       const data = await response.json();
       setIsRunning(true);
       setEngineMode(mode);
       
-      // Refresh status
-      await fetchAutotradeStatus();
+      // Don't immediately refresh if WebSocket is connected (will get real-time update)
+      if (!wsConnected) {
+        await fetchAutotradeStatus();
+      }
       
     } catch (err) {
-      setError(err.message);
+      const errorMsg = `Failed to start autotrade engine: ${err.message}`;
+      setError(errorMsg);
+      console.error('Autotrade start error:', err);
     } finally {
       setLoading(false);
     }
   };
 
-  // Stop autotrade engine
+  // Stop autotrade engine with enhanced feedback
   const stopAutotrade = async () => {
     setLoading(true);
     setError(null);
     
     try {
       const response = await fetch('/api/v1/autotrade/stop', {
-        method: 'POST'
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        }
       });
       
-      if (!response.ok) throw new Error('Failed to stop autotrade');
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || `HTTP ${response.status}: Failed to stop autotrade`);
+      }
       
       setIsRunning(false);
       setEngineMode('disabled');
       
-      // Refresh status
-      await fetchAutotradeStatus();
+      // Don't immediately refresh if WebSocket is connected (will get real-time update)
+      if (!wsConnected) {
+        await fetchAutotradeStatus();
+      }
       
     } catch (err) {
-      setError(err.message);
+      const errorMsg = `Failed to stop autotrade engine: ${err.message}`;
+      setError(errorMsg);
+      console.error('Autotrade stop error:', err);
     } finally {
       setLoading(false);
     }
   };
 
-  // Emergency stop
+  // Emergency stop with comprehensive shutdown
   const emergencyStop = async () => {
     setLoading(true);
+    setError(null);
     
     try {
-      // Stop autotrade
-      await fetch('/api/v1/autotrade/stop', { method: 'POST' });
+      // Emergency stop endpoint should handle both engine stop and queue clear
+      const response = await fetch('/api/v1/autotrade/emergency-stop', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
       
-      // Cancel all active orders
-      await fetch('/api/v1/autotrade/queue/clear', { method: 'POST' });
+      if (!response.ok) {
+        // Fallback: try individual endpoints
+        await Promise.allSettled([
+          fetch('/api/v1/autotrade/stop', { method: 'POST' }),
+          fetch('/api/v1/autotrade/queue/clear', { method: 'POST' })
+        ]);
+      }
       
       setIsRunning(false);
       setEngineMode('disabled');
       setShowEmergencyModal(false);
       
-      await fetchAutotradeStatus();
+      if (!wsConnected) {
+        await fetchAutotradeStatus();
+      }
       
     } catch (err) {
-      setError(err.message);
+      const errorMsg = `Emergency stop failed: ${err.message}`;
+      setError(errorMsg);
+      console.error('Emergency stop error:', err);
     } finally {
       setLoading(false);
     }
   };
 
-  // Change autotrade mode
+  // Change autotrade mode with validation
   const changeMode = async (newMode) => {
+    if (newMode === engineMode) return; // No change needed
+    
     setLoading(true);
     setError(null);
     
@@ -123,29 +244,41 @@ const Autotrade = () => {
         body: JSON.stringify({ mode: newMode })
       });
       
-      if (!response.ok) throw new Error('Failed to change mode');
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || `HTTP ${response.status}: Failed to change mode`);
+      }
       
       setEngineMode(newMode);
-      await fetchAutotradeStatus();
+      
+      if (!wsConnected) {
+        await fetchAutotradeStatus();
+      }
       
     } catch (err) {
-      setError(err.message);
+      const errorMsg = `Failed to change mode: ${err.message}`;
+      setError(errorMsg);
+      console.error('Mode change error:', err);
     } finally {
       setLoading(false);
     }
   };
 
-  // Initialize component
+  // Initialize component with improved error handling
   useEffect(() => {
     fetchAutotradeStatus();
     
-    // Set up polling for real-time updates
-    const interval = setInterval(fetchAutotradeStatus, 5000); // Every 5 seconds
+    // Set up polling for real-time updates (fallback when WebSocket is not connected)
+    const interval = setInterval(() => {
+      if (!wsConnected) {
+        fetchAutotradeStatus();
+      }
+    }, 5000); // Every 5 seconds
     
     return () => clearInterval(interval);
-  }, []);
+  }, [wsConnected]);
 
-  // Render engine status badge
+  // Render engine status badge with improved styling
   const renderStatusBadge = () => {
     if (!autotradeStatus) return <Badge bg="secondary">Unknown</Badge>;
     
@@ -165,7 +298,31 @@ const Autotrade = () => {
     return <Badge bg={modeColors[mode] || 'secondary'}>{mode.toUpperCase()}</Badge>;
   };
 
-  // Render metrics summary
+  // Render connection status indicator
+  const renderConnectionStatus = () => {
+    return (
+      <div className="d-flex align-items-center gap-2">
+        {wsConnected ? (
+          <>
+            <Wifi size={16} className="text-success" />
+            <small className="text-success">Live</small>
+          </>
+        ) : (
+          <>
+            <WifiOff size={16} className="text-warning" />
+            <small className="text-warning">Polling</small>
+          </>
+        )}
+        {lastUpdate && (
+          <small className="text-muted">
+            Updated: {lastUpdate.toLocaleTimeString()}
+          </small>
+        )}
+      </div>
+    );
+  };
+
+  // Render metrics summary with real-time updates
   const renderMetricsSummary = () => {
     if (!metrics) return null;
     
@@ -176,6 +333,7 @@ const Autotrade = () => {
             <Card.Body>
               <h6 className="text-muted">Opportunities Found</h6>
               <h4>{metrics.opportunities_found}</h4>
+              {wsConnected && <small className="text-success">● Live</small>}
             </Card.Body>
           </Card>
         </Col>
@@ -184,6 +342,7 @@ const Autotrade = () => {
             <Card.Body>
               <h6 className="text-muted">Trades Executed</h6>
               <h4 className="text-success">{metrics.opportunities_executed}</h4>
+              {wsConnected && <small className="text-success">● Live</small>}
             </Card.Body>
           </Card>
         </Col>
@@ -194,6 +353,7 @@ const Autotrade = () => {
               <h4 className={metrics.success_rate >= 70 ? 'text-success' : metrics.success_rate >= 50 ? 'text-warning' : 'text-danger'}>
                 {metrics.success_rate.toFixed(1)}%
               </h4>
+              {wsConnected && <small className="text-success">● Live</small>}
             </Card.Body>
           </Card>
         </Col>
@@ -204,6 +364,7 @@ const Autotrade = () => {
               <h4 className={metrics.total_profit_usd >= 0 ? 'text-success' : 'text-danger'}>
                 ${metrics.total_profit_usd.toFixed(2)}
               </h4>
+              {wsConnected && <small className="text-success">● Live</small>}
             </Card.Body>
           </Card>
         </Col>
@@ -213,7 +374,7 @@ const Autotrade = () => {
 
   return (
     <Container fluid className="mt-4">
-      {/* Header */}
+      {/* Header with connection status */}
       <Row className="mb-4">
         <Col>
           <div className="d-flex justify-content-between align-items-center">
@@ -222,9 +383,12 @@ const Autotrade = () => {
                 <Activity className="me-2" size={28} />
                 Autotrade Engine
               </h2>
-              <p className="text-muted mb-0">
-                Automated trading with intelligent opportunity detection
-              </p>
+              <div className="d-flex align-items-center gap-3">
+                <p className="text-muted mb-0">
+                  Automated trading with intelligent opportunity detection
+                </p>
+                {renderConnectionStatus()}
+              </div>
             </div>
             <div className="d-flex align-items-center gap-3">
               {renderStatusBadge()}
@@ -273,15 +437,38 @@ const Autotrade = () => {
         </Col>
       </Row>
 
-      {/* Error Alert */}
+      {/* Error Alert with improved messaging */}
       {error && (
         <Alert variant="danger" dismissible onClose={() => setError(null)} className="mb-4">
           <AlertTriangle className="me-2" size={16} />
           {error}
+          {!wsConnected && (
+            <div className="mt-2">
+              <small>
+                Real-time updates unavailable. Using polling mode.
+                <Button 
+                  variant="link" 
+                  size="sm" 
+                  className="p-0 ms-2"
+                  onClick={fetchAutotradeStatus}
+                >
+                  Retry connection
+                </Button>
+              </small>
+            </div>
+          )}
         </Alert>
       )}
 
-      {/* Engine Status Card */}
+      {/* WebSocket connection warning */}
+      {!wsConnected && !error && (
+        <Alert variant="warning" className="mb-4">
+          <WifiOff className="me-2" size={16} />
+          Real-time updates unavailable. Data will refresh every 5 seconds.
+        </Alert>
+      )}
+
+      {/* Engine Status Card with enhanced information */}
       {autotradeStatus && (
         <Card className="mb-4">
           <Card.Body>
@@ -305,6 +492,16 @@ const Autotrade = () => {
                     <small className="text-muted">Uptime:</small>
                     <div className="fw-bold">{Math.floor(autotradeStatus.uptime_seconds / 60)}m</div>
                   </div>
+                  <div>
+                    <small className="text-muted">Data Source:</small>
+                    <div className="fw-bold">
+                      {wsConnected ? (
+                        <span className="text-success">Real-time</span>
+                      ) : (
+                        <span className="text-warning">Polling</span>
+                      )}
+                    </div>
+                  </div>
                 </div>
               </Col>
               <Col md={4} className="text-end">
@@ -314,7 +511,7 @@ const Autotrade = () => {
                     size="sm"
                     className="dropdown-toggle"
                     data-bs-toggle="dropdown"
-                    disabled={!isRunning}
+                    disabled={!isRunning || loading}
                   >
                     Change Mode
                   </Button>
@@ -331,7 +528,7 @@ const Autotrade = () => {
         </Card>
       )}
 
-      {/* Metrics Summary */}
+      {/* Metrics Summary with real-time indicators */}
       {renderMetricsSummary()}
 
       {/* Navigation Tabs */}
@@ -347,6 +544,7 @@ const Autotrade = () => {
             <Nav.Link eventKey="monitor">
               <Activity className="me-2" size={16} />
               Monitor
+              {wsConnected && <Badge bg="success" className="ms-2">Live</Badge>}
             </Nav.Link>
           </Nav.Item>
           <Nav.Item>
@@ -416,8 +614,17 @@ const Autotrade = () => {
                     <Button
                       variant="outline-warning"
                       onClick={() => fetch('/api/v1/autotrade/queue/clear', { method: 'POST' })}
+                      disabled={loading}
                     >
                       Clear Queue
+                    </Button>
+                    <Button
+                      variant="outline-secondary"
+                      onClick={fetchAutotradeStatus}
+                      disabled={loading}
+                    >
+                      {loading ? <Spinner animation="border" size="sm" className="me-2" /> : null}
+                      Refresh Status
                     </Button>
                   </Card.Body>
                 </Card>
@@ -425,12 +632,14 @@ const Autotrade = () => {
             </Row>
           </Tab.Pane>
 
-          {/* Monitor Tab */}
+          {/* Monitor Tab with real-time updates */}
           <Tab.Pane eventKey="monitor">
             <AutotradeMonitor 
               autotradeStatus={autotradeStatus}
               isRunning={isRunning}
               onRefresh={fetchAutotradeStatus}
+              wsConnected={wsConnected}
+              metrics={metrics}
             />
           </Tab.Pane>
 
@@ -451,7 +660,7 @@ const Autotrade = () => {
         </Tab.Content>
       </Tab.Container>
 
-      {/* Emergency Stop Modal */}
+      {/* Enhanced Emergency Stop Modal */}
       <Modal show={showEmergencyModal} onHide={() => setShowEmergencyModal(false)}>
         <Modal.Header closeButton>
           <Modal.Title className="text-danger">
@@ -470,6 +679,12 @@ const Autotrade = () => {
             <li>Cancel all active orders</li>
             <li>Switch to manual mode</li>
           </ul>
+          {wsConnected && (
+            <p className="text-info">
+              <Wifi size={16} className="me-1" />
+              Real-time monitoring active - you will see immediate status updates.
+            </p>
+          )}
         </Modal.Body>
         <Modal.Footer>
           <Button variant="secondary" onClick={() => setShowEmergencyModal(false)}>
