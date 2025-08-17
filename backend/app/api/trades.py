@@ -160,7 +160,7 @@ async def preview_trade(
     )
     
     try:
-        # Convert to internal format for mock executor
+        # Create simple request object for mock executor (no imports from trading.executor)
         mock_request = type('MockRequest', (), {
             'input_token': request.input_token,
             'output_token': request.output_token,
@@ -171,22 +171,51 @@ async def preview_trade(
             'slippage_bps': request.slippage_bps,
         })
         
-        # Get preview from executor
+        # Get preview from executor (returns dictionary for now)
         preview_data = await trade_executor.preview_trade(mock_request, chain_clients)
         
+        # Handle both dictionary and object responses
+        if hasattr(preview_data, 'trace_id'):
+            # Object response
+            response = TradePreviewResponse(
+                trace_id=preview_data.trace_id,
+                input_token=preview_data.input_token,
+                output_token=preview_data.output_token,
+                input_amount=preview_data.input_amount,
+                expected_output=preview_data.expected_output,
+                minimum_output=preview_data.minimum_output,
+                price=preview_data.price,
+                price_impact=preview_data.price_impact,
+                gas_estimate=preview_data.gas_estimate,
+                gas_price=preview_data.gas_price,
+                total_cost_native=preview_data.total_cost_native,
+                total_cost_usd=preview_data.total_cost_usd,
+                route=preview_data.route,
+                dex=preview_data.dex,
+                slippage_bps=preview_data.slippage_bps,
+                deadline_seconds=preview_data.deadline_seconds,
+                valid=preview_data.valid,
+                validation_errors=preview_data.validation_errors,
+                warnings=preview_data.warnings,
+                execution_time_ms=preview_data.execution_time_ms,
+            )
+        else:
+            # Dictionary response (current mock executor)
+            response = TradePreviewResponse(**preview_data)
+        
         logger.info(
-            f"Trade preview completed: {preview_data['trace_id']}, valid: {preview_data['valid']}",
+            f"Trade preview completed: {response.trace_id}, valid: {response.valid}",
             extra={
                 'extra_data': {
-                    'trace_id': preview_data['trace_id'],
-                    'valid': preview_data['valid'],
-                    'expected_output': preview_data['expected_output'],
-                    'execution_time_ms': preview_data['execution_time_ms'],
+                    'trace_id': response.trace_id,
+                    'valid': response.valid,
+                    'expected_output': response.expected_output,
+                    'execution_time_ms': response.execution_time_ms,
                 }
             }
         )
         
-        return TradePreviewResponse(**preview_data)
+        return response
         
     except Exception as e:
         logger.error(
@@ -201,7 +230,7 @@ async def preview_trade(
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Trade preview failed"
+            detail=f"Trade preview failed: {str(e)}"
         )
 
 
@@ -236,7 +265,7 @@ async def execute_trade(
     )
     
     try:
-        # Convert to internal format for mock executor
+        # Create simple request object for mock executor
         mock_request = type('MockRequest', (), {
             'input_token': request.input_token,
             'output_token': request.output_token,
@@ -255,19 +284,38 @@ async def execute_trade(
         # Execute trade
         result_data = await trade_executor.execute_trade(mock_request, chain_clients)
         
+        # Handle both dictionary and object responses
+        if hasattr(result_data, 'trace_id'):
+            # Object response
+            response = TradeExecutionResponse(
+                trace_id=result_data.trace_id,
+                status=result_data.status,
+                transaction_id=result_data.transaction_id,
+                tx_hash=result_data.tx_hash,
+                block_number=result_data.block_number,
+                gas_used=result_data.gas_used,
+                actual_output=result_data.actual_output,
+                actual_price=result_data.actual_price,
+                error_message=result_data.error_message,
+                execution_time_ms=result_data.execution_time_ms,
+            )
+        else:
+            # Dictionary response (current mock executor)
+            response = TradeExecutionResponse(**result_data)
+        
         logger.info(
-            f"Trade execution completed: {result_data['trace_id']}, status: {result_data['status']}",
+            f"Trade execution completed: {response.trace_id}, status: {response.status}",
             extra={
                 'extra_data': {
-                    'trace_id': result_data['trace_id'],
-                    'status': result_data['status'],
-                    'tx_hash': result_data['tx_hash'],
-                    'execution_time_ms': result_data['execution_time_ms'],
+                    'trace_id': response.trace_id,
+                    'status': response.status,
+                    'tx_hash': response.tx_hash,
+                    'execution_time_ms': response.execution_time_ms,
                 }
             }
         )
         
-        return TradeExecutionResponse(**result_data)
+        return response
         
     except Exception as e:
         logger.error(
@@ -282,7 +330,7 @@ async def execute_trade(
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Trade execution failed"
+            detail=f"Trade execution failed: {str(e)}"
         )
 
 

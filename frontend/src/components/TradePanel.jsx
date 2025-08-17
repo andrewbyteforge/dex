@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Card, Form, Button, Alert, Badge, Spinner, Row, Col, InputGroup } from 'react-bootstrap';
 import { ArrowDownUp, Zap, AlertTriangle, CheckCircle, XCircle, Shield } from 'lucide-react';
 import RiskDisplay from './RiskDisplay';
+import { api } from '../config/api';
 
 const TradePanel = ({ 
   walletAddress, 
@@ -40,7 +41,7 @@ const TradePanel = ({
       { symbol: 'WETH', address: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2', name: 'Wrapped Ether' },
     ],
     bsc: [
-      { symbol: 'BNB', address: 'native', name: 'BNB' },
+      { symbol: 'BNB', address: 'native', name: 'Binance Coin' },
       { symbol: 'USDT', address: '0x55d398326f99059fF775485246999027B3197955', name: 'Tether USD' },
       { symbol: 'BUSD', address: '0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56', name: 'Binance USD' },
     ],
@@ -50,36 +51,12 @@ const TradePanel = ({
       { symbol: 'USDT', address: '0xc2132D05D31c914a87C6611C10748AEb04B58e8F', name: 'Tether USD' },
     ],
     solana: [
-      { symbol: 'SOL', address: 'So11111111111111111111111111111111111111112', name: 'Solana' },
+      { symbol: 'SOL', address: 'native', name: 'Solana' },
       { symbol: 'USDC', address: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', name: 'USD Coin' },
-      { symbol: 'USDT', address: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', name: 'Tether USD' },
     ],
   };
 
-  // Risk assessment callback
-  const handleRiskAssessed = (riskData) => {
-    setRiskAssessment(riskData);
-    
-    // Update warnings based on risk assessment
-    const newWarnings = [...warnings.filter(w => !w.includes('⛔') && !w.includes('⚠️'))]; // Remove existing risk warnings
-    
-    if (!riskData.tradeable) {
-      newWarnings.push('⛔ Token is not safe to trade based on risk assessment');
-    } else if (riskData.overall_risk === 'high' || riskData.risk_level === 'high') {
-      newWarnings.push('⚠️ High risk token - trade with extreme caution');
-    } else if (riskData.overall_risk === 'medium' || riskData.risk_level === 'medium') {
-      newWarnings.push('⚠️ Medium risk token - use smaller position sizes');
-    }
-    
-    // Add specific warnings from risk assessment
-    if (riskData.warnings) {
-      newWarnings.push(...riskData.warnings);
-    }
-    
-    setWarnings(newWarnings);
-  };
-
-  // Get quote with debouncing
+  // Fetch quote and preview
   const fetchQuote = useCallback(async () => {
     if (!inputToken || !outputToken || !inputAmount || parseFloat(inputAmount) <= 0) {
       setQuoteData(null);
@@ -95,16 +72,12 @@ const TradePanel = ({
       const amountInSmallestUnits = (parseFloat(inputAmount) * Math.pow(10, 18)).toString();
 
       // Get quote
-      const quoteResponse = await fetch('/api/v1/quotes/', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          input_token: inputToken,
-          output_token: outputToken,
-          amount_in: amountInSmallestUnits,
-          chain: selectedChain,
-          slippage_bps: slippageBps,
-        }),
+      const quoteResponse = await api.quotes({
+        input_token: inputToken,
+        output_token: outputToken,
+        amount_in: amountInSmallestUnits,
+        chain: selectedChain,
+        slippage_bps: slippageBps,
       });
 
       if (!quoteResponse.ok) {
@@ -115,32 +88,26 @@ const TradePanel = ({
       setQuoteData(quote);
 
       // Get trade preview
-      const previewResponse = await fetch('/api/v1/trades/preview', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          input_token: inputToken,
-          output_token: outputToken,
-          amount_in: amountInSmallestUnits,
-          chain: selectedChain,
-          slippage_bps: slippageBps,
-          wallet_address: walletAddress,
-        }),
+      const previewResponse = await api.tradePreview({
+        input_token: inputToken,
+        output_token: outputToken,
+        amount_in: amountInSmallestUnits,
+        chain: selectedChain,
+        dex: 'uniswap_v2', // Default DEX
+        wallet_address: walletAddress || '0x1234567890123456789012345678901234567890', // Fallback for preview
+        slippage_bps: slippageBps,
       });
 
       if (previewResponse.ok) {
         const preview = await previewResponse.json();
         setPreviewData(preview);
         
-        // Filter out risk warnings to avoid duplication
-        const nonRiskWarnings = (preview.warnings || []).filter(w => 
-          !w.includes('⛔') && !w.includes('⚠️')
-        );
-        setWarnings(prev => [
-          ...prev.filter(w => w.includes('⛔') || w.includes('⚠️')), // Keep risk warnings
-          ...nonRiskWarnings
-        ]);
-        setErrors(preview.errors || []);
+        // Handle validation errors and warnings
+        setErrors(preview.validation_errors || []);
+        setWarnings(preview.warnings || []);
+      } else {
+        const errorData = await previewResponse.json();
+        throw new Error(`Preview failed: ${errorData.detail || previewResponse.statusText}`);
       }
 
     } catch (error) {
@@ -176,7 +143,7 @@ const TradePanel = ({
 
     const pollStatus = async () => {
       try {
-        const response = await fetch(`/api/v1/trades/status/${activeTraceId}`);
+        const response = await api.tradeStatus(activeTraceId);
         if (response.ok) {
           const status = await response.json();
           setTradeStatus(status);
@@ -223,28 +190,26 @@ const TradePanel = ({
       setErrors([]);
 
       const amountInSmallestUnits = (parseFloat(inputAmount) * Math.pow(10, 18)).toString();
-      const minOutputAmount = previewData.estimated_output ? 
-        (parseFloat(previewData.estimated_output) * 0.95).toString() : '1'; // 5% minimum slippage protection
+      const minOutputAmount = previewData.expected_output ? 
+        (parseFloat(previewData.expected_output) * 0.95).toString() : '1'; // 5% minimum slippage protection
 
-      const response = await fetch('/api/v1/trades/execute', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          user_id: 1, // TODO: Get from user context
-          input_token: inputToken,
-          output_token: outputToken,
-          amount_in: amountInSmallestUnits,
-          min_output_amount: minOutputAmount,
-          chain: selectedChain,
-          wallet_address: walletAddress,
-          slippage_bps: slippageBps,
-          enable_canary: enableCanary,
-          wallet_type: 'external',
-        }),
+      const response = await api.tradeExecute({
+        input_token: inputToken,
+        output_token: outputToken,
+        amount_in: amountInSmallestUnits,
+        minimum_amount_out: minOutputAmount,
+        chain: selectedChain,
+        dex: 'uniswap_v2', // Default DEX
+        route: [inputToken, outputToken],
+        wallet_address: walletAddress,
+        slippage_bps: slippageBps,
+        deadline_seconds: 300,
+        trade_type: 'manual',
       });
 
       if (!response.ok) {
-        throw new Error(`Trade execution failed: ${response.statusText}`);
+        const errorData = await response.json();
+        throw new Error(`Trade execution failed: ${errorData.detail || response.statusText}`);
       }
 
       const result = await response.json();
@@ -401,103 +366,94 @@ const TradePanel = ({
                 onClick={() => setShowRiskPanel(!showRiskPanel)}
               >
                 <Shield size={14} className="me-1" />
-                {showRiskPanel ? 'Hide' : 'Show'} Risk Analysis
+                {showRiskPanel ? 'Hide' : 'Show'} Details
               </Button>
             </div>
-            
-            <div className="mt-2">
-              <RiskDisplay
+            {showRiskPanel && (
+              <RiskDisplay 
                 tokenAddress={outputToken}
                 chain={selectedChain}
-                tradeAmount={inputAmount}
-                autoAssess={true}
-                onRiskAssessed={handleRiskAssessed}
-                compact={!showRiskPanel}
+                onRiskAssessment={setRiskAssessment}
               />
-            </div>
+            )}
           </Form.Group>
         )}
+
+        {/* Slippage Setting */}
+        <Form.Group className="mb-3">
+          <Form.Label>Slippage Tolerance</Form.Label>
+          <InputGroup>
+            <Form.Control
+              type="number"
+              value={slippageBps / 100}
+              onChange={(e) => setSlippageBps(Math.round(parseFloat(e.target.value) * 100))}
+              disabled={isLoading || activeTraceId}
+              step="0.1"
+              min="0.1"
+              max="50"
+            />
+            <InputGroup.Text>%</InputGroup.Text>
+          </InputGroup>
+        </Form.Group>
+
+        {/* Canary Trade Toggle */}
+        <Form.Group className="mb-3">
+          <Form.Check
+            type="switch"
+            id="canary-toggle"
+            label="Enable canary trade (recommended for new tokens)"
+            checked={enableCanary}
+            onChange={(e) => setEnableCanary(e.target.checked)}
+            disabled={isLoading || activeTraceId}
+          />
+        </Form.Group>
 
         {/* Quote Display */}
         {quoteData && (
           <Card className="mb-3 bg-light">
             <Card.Body className="py-2">
-              <Row className="text-sm">
-                <Col xs={6}>
-                  <strong>Best Quote:</strong><br />
-                  <Badge bg="info">{quoteData.best_quote.dex}</Badge>
-                </Col>
-                <Col xs={6} className="text-end">
-                  <strong>Output:</strong><br />
-                  {formatAmount(quoteData.best_quote.output_amount)} {getTokenInfo(outputToken).symbol}
-                </Col>
-              </Row>
-              <Row className="text-sm mt-2">
-                <Col xs={6}>
-                  <strong>Price Impact:</strong><br />
-                  <span className={parseFloat(quoteData.best_quote.price_impact) > 5 ? 'text-danger' : 'text-success'}>
-                    {quoteData.best_quote.price_impact}
-                  </span>
-                </Col>
-                <Col xs={6} className="text-end">
-                  <strong>Route:</strong><br />
-                  <small>{quoteData.best_quote.route?.join(' → ') || quoteData.best_quote.dex}</small>
-                </Col>
-              </Row>
+              <small className="text-muted d-block">Estimated Output:</small>
+              <strong>{formatAmount(quoteData.estimated_output)} {getTokenInfo(outputToken).symbol}</strong>
+              {quoteData.price && (
+                <small className="text-muted d-block">
+                  Price: {parseFloat(quoteData.price).toFixed(6)} {getTokenInfo(outputToken).symbol} per {getTokenInfo(inputToken).symbol}
+                </small>
+              )}
             </Card.Body>
           </Card>
         )}
 
-        {/* Advanced Settings */}
-        <Card className="mb-3">
-          <Card.Body>
-            <h6>Settings</h6>
-            <Row>
-              <Col md={6}>
-                <Form.Group>
-                  <Form.Label>Slippage Tolerance</Form.Label>
-                  <InputGroup>
-                    <Form.Control
-                      type="number"
-                      value={slippageBps / 100}
-                      onChange={(e) => setSlippageBps(parseFloat(e.target.value) * 100)}
-                      step="0.1"
-                      min="0.1"
-                      max="50"
-                      disabled={isLoading || activeTraceId}
-                    />
-                    <InputGroup.Text>%</InputGroup.Text>
-                  </InputGroup>
-                </Form.Group>
-              </Col>
-              <Col md={6}>
-                <Form.Group>
-                  <Form.Label>Safety Features</Form.Label>
-                  <Form.Check
-                    type="checkbox"
-                    label="Enable Canary Trade"
-                    checked={enableCanary}
-                    onChange={(e) => setEnableCanary(e.target.checked)}
-                    disabled={isLoading || activeTraceId}
-                  />
-                </Form.Group>
-              </Col>
-            </Row>
-          </Card.Body>
-        </Card>
+        {/* Preview Display */}
+        {previewData && (
+          <Card className="mb-3 bg-light border">
+            <Card.Body className="py-2">
+              <div className="d-flex justify-content-between align-items-center mb-2">
+                <small className="text-muted">Trade Preview:</small>
+                <Badge bg={previewData.valid ? 'success' : 'danger'}>
+                  {previewData.valid ? <CheckCircle size={12} /> : <XCircle size={12} />}
+                  {' '}{previewData.valid ? 'Valid' : 'Invalid'}
+                </Badge>
+              </div>
+              
+              <div className="small">
+                <div>Expected Output: {formatAmount(previewData.expected_output)} {getTokenInfo(outputToken).symbol}</div>
+                <div>Price Impact: {previewData.price_impact}</div>
+                <div>Gas Estimate: {previewData.gas_estimate} gas</div>
+                <div>Total Cost: {formatAmount(previewData.total_cost_native)} {selectedChain === 'ethereum' ? 'ETH' : 'BNB'}</div>
+                {previewData.trace_id && (
+                  <div className="text-muted">Trace ID: {previewData.trace_id.substring(0, 8)}...</div>
+                )}
+              </div>
+            </Card.Body>
+          </Card>
+        )}
 
         {/* Trade Status */}
         {tradeStatus && (
           <Card className="mb-3">
-            <Card.Body>
-              <h6>Trade Status</h6>
-              <div className="d-flex align-items-center justify-content-between">
-                <span>
-                  {tradeStatus.status === 'confirmed' && <CheckCircle size={16} className="text-success me-2" />}
-                  {tradeStatus.status === 'failed' && <XCircle size={16} className="text-danger me-2" />}
-                  {!['confirmed', 'failed'].includes(tradeStatus.status) && <Spinner size="sm" className="me-2" />}
-                  {tradeStatus.current_step}
-                </span>
+            <Card.Body className="py-2">
+              <div className="d-flex justify-content-between align-items-center">
+                <small>Trade Status:</small>
                 <Badge bg={
                   tradeStatus.status === 'confirmed' ? 'success' :
                   tradeStatus.status === 'failed' ? 'danger' : 'primary'
@@ -534,22 +490,13 @@ const TradePanel = ({
               !inputToken ||
               !outputToken ||
               !inputAmount ||
-              parseFloat(inputAmount) <= 0 ||
-              (riskAssessment && !riskAssessment.tradeable)
+              parseFloat(inputAmount) <= 0
             }
           >
             {isLoading && <Spinner size="sm" className="me-2" />}
             {activeTraceId ? 'Trade in Progress...' : 'Execute Trade'}
           </Button>
         </div>
-
-        {/* Risk-based trade button messaging */}
-        {riskAssessment && !riskAssessment.tradeable && (
-          <Alert variant="danger" className="mt-2 mb-0">
-            <XCircle size={16} className="me-2" />
-            Trading disabled: Token failed risk assessment
-          </Alert>
-        )}
 
         {/* Quick Actions */}
         <Row className="mt-3">
