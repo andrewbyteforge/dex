@@ -1,943 +1,965 @@
 """
-API endpoints for preset management.
+Trading presets API endpoints.
 
-This module provides RESTful endpoints for managing trading presets,
-including CRUD operations, validation, performance tracking,
-and preset recommendations.
+This module provides FastAPI endpoints for managing trading presets
+including built-in and custom presets with validation and recommendations.
 """
 from __future__ import annotations
 
-from decimal import Decimal
+import uuid
 from typing import Dict, List, Optional, Any, Union
-from datetime import datetime, timezone
-
-from fastapi import APIRouter, HTTPException, Query, Body, Depends
-from pydantic import BaseModel, Field, validator
+from decimal import Decimal
 from enum import Enum
 
+from fastapi import APIRouter, HTTPException, status, Depends, Query
+from pydantic import BaseModel, Field, field_validator
+
 from ..core.logging import get_logger
-from ..core.middleware import get_trace_id
-from ..strategy.presets import (
-    preset_manager, PresetCategory, ValidationStatus, StrategyPreset
-)
-from ..strategy.base import StrategyType, TriggerCondition
-from ..strategy.risk_manager import RiskLevel
-from ..strategy.position_sizing import PositionSizingMethod
+from ..core.exceptions import ValidationError, NotFoundError
 
 logger = get_logger(__name__)
 
 # Create router
-router = APIRouter(prefix="/presets", tags=["presets"])
+router = APIRouter(prefix="/presets", tags=["Presets"])
+
+# Enums for preset configuration
+class StrategyType(str, Enum):
+    """Trading strategy types."""
+    NEW_PAIR_SNIPE = "new_pair_snipe"
+    TRENDING_REENTRY = "trending_reentry"
+    ARBITRAGE = "arbitrage"
+    MOMENTUM = "momentum"
 
 
-# Pydantic models for API requests/responses
-class CreatePresetRequest(BaseModel):
-    """Request model for creating custom preset."""
-    name: str = Field(..., min_length=1, max_length=100, description="Preset name")
-    description: str = Field(..., max_length=500, description="Preset description")
-    strategy_type: StrategyType = Field(..., description="Target strategy type")
-    base_preset: Optional[StrategyPreset] = Field(None, description="Base preset to start from")
-    category: PresetCategory = Field(PresetCategory.CUSTOM, description="Preset category")
-    tags: Optional[List[str]] = Field(default_factory=list, description="Tags for organization")
+class PresetType(str, Enum):
+    """Preset classification."""
+    CONSERVATIVE = "conservative"
+    STANDARD = "standard"
+    AGGRESSIVE = "aggressive"
+    CUSTOM = "custom"
+
+
+class PositionSizingMethod(str, Enum):
+    """Position sizing methods."""
+    FIXED = "fixed"
+    PERCENTAGE = "percentage"
+    DYNAMIC = "dynamic"
+    KELLY = "kelly"
+
+
+class TriggerCondition(str, Enum):
+    """Trade trigger conditions."""
+    IMMEDIATE = "immediate"
+    LIQUIDITY_THRESHOLD = "liquidity_threshold"
+    BLOCK_DELAY = "block_delay"
+    TIME_DELAY = "time_delay"
+    VOLUME_SPIKE = "volume_spike"
+    PRICE_MOVEMENT = "price_movement"
+
+
+# Request/Response models
+class PresetConfig(BaseModel):
+    """Trading preset configuration."""
+    name: str = Field(..., description="Preset name")
+    description: str = Field(..., description="Preset description")
+    strategy_type: StrategyType = Field(..., description="Strategy type")
+    preset_type: PresetType = Field(..., description="Preset classification")
     
-    # Configuration parameters
-    max_position_size_usd: Optional[float] = Field(None, gt=0, le=10000, description="Maximum position size in USD")
-    max_daily_trades: Optional[int] = Field(None, ge=1, le=100, description="Maximum daily trades")
-    max_slippage_percent: Optional[float] = Field(None, ge=0.1, le=50, description="Maximum slippage percentage")
-    min_liquidity_usd: Optional[float] = Field(None, gt=0, description="Minimum liquidity in USD")
-    risk_tolerance: Optional[RiskLevel] = Field(None, description="Risk tolerance level")
-    auto_revert_enabled: Optional[bool] = Field(None, description="Enable auto-revert")
-    auto_revert_delay_minutes: Optional[int] = Field(None, ge=1, le=60, description="Auto-revert delay in minutes")
-    position_sizing_method: Optional[str] = Field(None, description="Position sizing method")
-    take_profit_percent: Optional[float] = Field(None, ge=0, le=100, description="Take profit percentage")
-    stop_loss_percent: Optional[float] = Field(None, ge=0, le=50, description="Stop loss percentage")
-    trailing_stop_enabled: Optional[bool] = Field(None, description="Enable trailing stops")
-    trigger_conditions: Optional[List[TriggerCondition]] = Field(None, description="Trigger conditions")
-    custom_parameters: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Custom parameters")
-
-    @validator('position_sizing_method')
-    def validate_position_sizing_method(cls, v):
-        if v is not None:
-            try:
-                PositionSizingMethod(v)
-            except ValueError:
-                raise ValueError(f"Invalid position sizing method: {v}")
-        return v
-
-
-class UpdatePresetRequest(BaseModel):
-    """Request model for updating custom preset."""
-    name: Optional[str] = Field(None, min_length=1, max_length=100)
-    description: Optional[str] = Field(None, max_length=500)
-    is_active: Optional[bool] = None
-    tags: Optional[List[str]] = None
+    # Core trading parameters
+    max_position_size_usd: Decimal = Field(default=Decimal("100"), description="Maximum position size in USD")
+    max_slippage_percent: float = Field(default=5.0, ge=0.1, le=50.0, description="Maximum slippage percentage")
+    min_liquidity_usd: Decimal = Field(default=Decimal("1000"), description="Minimum liquidity in USD")
     
-    # Configuration parameters (same as create, all optional)
-    max_position_size_usd: Optional[float] = Field(None, gt=0, le=10000)
-    max_daily_trades: Optional[int] = Field(None, ge=1, le=100)
-    max_slippage_percent: Optional[float] = Field(None, ge=0.1, le=50)
-    min_liquidity_usd: Optional[float] = Field(None, gt=0)
-    risk_tolerance: Optional[RiskLevel] = None
-    auto_revert_enabled: Optional[bool] = None
-    auto_revert_delay_minutes: Optional[int] = Field(None, ge=1, le=60)
-    position_sizing_method: Optional[str] = None
-    take_profit_percent: Optional[float] = Field(None, ge=0, le=100)
-    stop_loss_percent: Optional[float] = Field(None, ge=0, le=50)
-    trailing_stop_enabled: Optional[bool] = None
-    trigger_conditions: Optional[List[TriggerCondition]] = None
-    custom_parameters: Optional[Dict[str, Any]] = None
+    # Position sizing
+    position_sizing_method: PositionSizingMethod = Field(default=PositionSizingMethod.FIXED)
+    position_size_percent: Optional[float] = Field(default=None, ge=1.0, le=100.0)
+    
+    # Risk management
+    stop_loss_percent: Optional[float] = Field(default=None, ge=1.0, le=90.0)
+    take_profit_percent: Optional[float] = Field(default=None, ge=1.0, le=1000.0)
+    max_daily_trades: int = Field(default=10, ge=1, le=100)
+    
+    # Timing parameters
+    trigger_condition: TriggerCondition = Field(default=TriggerCondition.IMMEDIATE)
+    block_delay: Optional[int] = Field(default=None, ge=1, le=20)
+    time_delay_seconds: Optional[int] = Field(default=None, ge=1, le=3600)
+    
+    # Advanced parameters
+    gas_price_limit_gwei: Optional[float] = Field(default=None, ge=1.0, le=1000.0)
+    revert_on_fail: bool = Field(default=True)
+    use_private_mempool: bool = Field(default=False)
+    
+    # Custom parameters
+    custom_parameters: Dict[str, Any] = Field(default_factory=dict)
 
-    @validator('position_sizing_method')
-    def validate_position_sizing_method(cls, v):
-        if v is not None:
-            try:
-                PositionSizingMethod(v)
-            except ValueError:
-                raise ValueError(f"Invalid position sizing method: {v}")
-        return v
-
-
-class PresetConfigResponse(BaseModel):
-    """Response model for preset configuration."""
-    strategy_type: StrategyType
-    preset: StrategyPreset
-    enabled: bool
-    max_position_size_usd: float
-    max_daily_trades: int
-    max_slippage_percent: float
-    min_liquidity_usd: float
-    risk_tolerance: RiskLevel
-    auto_revert_enabled: bool
-    auto_revert_delay_minutes: int
-    position_sizing_method: str
-    take_profit_percent: Optional[float]
-    stop_loss_percent: Optional[float]
-    trailing_stop_enabled: bool
-    trigger_conditions: List[TriggerCondition]
-    custom_parameters: Dict[str, Any]
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        """Validate preset name."""
+        if len(v.strip()) < 3:
+            raise ValueError("Preset name must be at least 3 characters")
+        if len(v.strip()) > 50:
+            raise ValueError("Preset name must be less than 50 characters")
+        return v.strip()
 
 
-class PresetPerformanceResponse(BaseModel):
-    """Response model for preset performance."""
-    preset_id: str
-    total_trades: int
-    winning_trades: int
-    losing_trades: int
-    win_rate: float
-    total_profit_loss: float
-    max_drawdown: float
-    average_profit_percent: float
-    average_loss_percent: float
-    average_hold_time_minutes: float
-    risk_adjusted_return: float
-    last_updated: datetime
+class PresetSummary(BaseModel):
+    """Preset summary for listing."""
+    id: str = Field(..., description="Preset ID")
+    name: str = Field(..., description="Preset name")
+    strategy_type: StrategyType = Field(..., description="Strategy type")
+    preset_type: PresetType = Field(..., description="Preset classification")
+    risk_score: Optional[float] = Field(default=None, description="Risk score (0-100)")
+    version: int = Field(default=1, description="Preset version")
+    is_built_in: bool = Field(default=False, description="Whether preset is built-in")
+    created_at: Optional[str] = Field(default=None, description="Creation timestamp")
+    updated_at: Optional[str] = Field(default=None, description="Last update timestamp")
 
 
-class ValidationResultResponse(BaseModel):
-    """Response model for preset validation."""
-    status: ValidationStatus
-    warnings: List[str]
-    errors: List[str]
-    suggestions: List[str]
-    risk_score: float
-    expected_performance: Optional[Dict[str, float]]
+class PresetDetail(PresetSummary):
+    """Detailed preset information."""
+    description: str = Field(..., description="Preset description")
+    config: PresetConfig = Field(..., description="Preset configuration")
 
 
-class CustomPresetResponse(BaseModel):
-    """Response model for custom preset."""
-    preset_id: str
-    name: str
-    description: str
-    category: PresetCategory
-    strategy_type: StrategyType
-    config: PresetConfigResponse
-    created_at: datetime
-    created_by: str
-    version: int
-    is_active: bool
-    validation_result: Optional[ValidationResultResponse]
-    performance: Optional[PresetPerformanceResponse]
-    tags: List[str]
-    metadata: Dict[str, Any]
+class PresetValidation(BaseModel):
+    """Preset validation result."""
+    status: str = Field(..., description="Validation status")
+    risk_score: float = Field(..., description="Calculated risk score")
+    warnings: List[str] = Field(default_factory=list, description="Validation warnings")
+    errors: List[str] = Field(default_factory=list, description="Validation errors")
+    warning_count: int = Field(..., description="Number of warnings")
+    error_count: int = Field(..., description="Number of errors")
 
 
-class BuiltinPresetResponse(BaseModel):
-    """Response model for built-in preset."""
-    preset_name: StrategyPreset
-    strategy_type: StrategyType
-    config: PresetConfigResponse
-    description: str
-    recommended_for: List[str]
+class PresetRecommendation(BaseModel):
+    """Preset recommendation."""
+    preset_id: str = Field(..., description="Recommended preset ID")
+    name: str = Field(..., description="Preset name")
+    strategy_type: StrategyType = Field(..., description="Strategy type")
+    match_score: float = Field(..., description="Match score (0-100)")
+    reason: str = Field(..., description="Recommendation reason")
+    is_built_in: bool = Field(default=True, description="Whether preset is built-in")
 
 
-class PresetRecommendationResponse(BaseModel):
-    """Response model for preset recommendations."""
-    type: str  # "builtin" or "custom"
-    preset_name: Optional[str]
-    preset_id: Optional[str]
-    config: PresetConfigResponse
-    score: float
-    reason: str
+class PerformanceSummary(BaseModel):
+    """Preset performance summary."""
+    total_presets: int = Field(..., description="Total number of presets")
+    built_in_presets: int = Field(..., description="Number of built-in presets")
+    custom_presets: int = Field(..., description="Number of custom presets")
+    total_trades: int = Field(..., description="Total trades executed")
+    successful_trades: int = Field(..., description="Number of successful trades")
+    win_rate: float = Field(..., description="Win rate percentage")
+    total_pnl_usd: float = Field(..., description="Total PnL in USD")
 
 
-# Helper functions
-def _convert_config_to_response(config, strategy_type: StrategyType) -> PresetConfigResponse:
-    """Convert StrategyConfig to response model."""
-    return PresetConfigResponse(
-        strategy_type=strategy_type,
-        preset=config.preset,
-        enabled=config.enabled,
-        max_position_size_usd=float(config.max_position_size_usd),
-        max_daily_trades=config.max_daily_trades,
-        max_slippage_percent=config.max_slippage_percent,
-        min_liquidity_usd=float(config.min_liquidity_usd),
-        risk_tolerance=config.risk_tolerance,
-        auto_revert_enabled=config.auto_revert_enabled,
-        auto_revert_delay_minutes=config.auto_revert_delay_minutes,
-        position_sizing_method=config.position_sizing_method,
-        take_profit_percent=config.take_profit_percent,
-        stop_loss_percent=config.stop_loss_percent,
-        trailing_stop_enabled=config.trailing_stop_enabled,
-        trigger_conditions=config.trigger_conditions,
-        custom_parameters=config.custom_parameters
-    )
+# In-memory storage for custom presets (will be replaced with database)
+_custom_presets: Dict[str, PresetDetail] = {}
+_preset_counter = 1
 
 
-def _convert_custom_preset_to_response(preset) -> CustomPresetResponse:
-    """Convert CustomPreset to response model."""
-    validation_response = None
-    if preset.validation_result:
-        validation_response = ValidationResultResponse(
-            status=preset.validation_result.status,
-            warnings=preset.validation_result.warnings,
-            errors=preset.validation_result.errors,
-            suggestions=preset.validation_result.suggestions,
-            risk_score=preset.validation_result.risk_score,
-            expected_performance=preset.validation_result.expected_performance
+# Built-in presets
+def _get_built_in_presets() -> Dict[str, PresetDetail]:
+    """Get built-in preset configurations."""
+    from datetime import datetime, timezone
+    
+    now = datetime.now(timezone.utc).isoformat()
+    
+    return {
+        "conservative_new_pair": PresetDetail(
+            id="conservative_new_pair",
+            name="Conservative New Pair",
+            strategy_type=StrategyType.NEW_PAIR_SNIPE,
+            preset_type=PresetType.CONSERVATIVE,
+            description="Low-risk new pair snipe with minimal position sizes",
+            risk_score=20.0,
+            version=1,
+            is_built_in=True,
+            created_at=now,
+            updated_at=now,
+            config=PresetConfig(
+                name="Conservative New Pair",
+                description="Low-risk new pair snipe with minimal position sizes",
+                strategy_type=StrategyType.NEW_PAIR_SNIPE,
+                preset_type=PresetType.CONSERVATIVE,
+                max_position_size_usd=Decimal("50"),
+                max_slippage_percent=3.0,
+                min_liquidity_usd=Decimal("5000"),
+                position_sizing_method=PositionSizingMethod.FIXED,
+                stop_loss_percent=10.0,
+                take_profit_percent=20.0,
+                max_daily_trades=5,
+                trigger_condition=TriggerCondition.LIQUIDITY_THRESHOLD,
+                block_delay=3,
+                gas_price_limit_gwei=50.0,
+                revert_on_fail=True,
+                use_private_mempool=False
+            )
+        ),
+        "conservative_trending": PresetDetail(
+            id="conservative_trending",
+            name="Conservative Trending",
+            strategy_type=StrategyType.TRENDING_REENTRY,
+            preset_type=PresetType.CONSERVATIVE,
+            description="Conservative re-entry on established trending tokens",
+            risk_score=25.0,
+            version=1,
+            is_built_in=True,
+            created_at=now,
+            updated_at=now,
+            config=PresetConfig(
+                name="Conservative Trending",
+                description="Conservative re-entry on established trending tokens",
+                strategy_type=StrategyType.TRENDING_REENTRY,
+                preset_type=PresetType.CONSERVATIVE,
+                max_position_size_usd=Decimal("100"),
+                max_slippage_percent=5.0,
+                min_liquidity_usd=Decimal("10000"),
+                position_sizing_method=PositionSizingMethod.PERCENTAGE,
+                position_size_percent=2.0,
+                stop_loss_percent=15.0,
+                take_profit_percent=30.0,
+                max_daily_trades=8,
+                trigger_condition=TriggerCondition.VOLUME_SPIKE,
+                gas_price_limit_gwei=75.0,
+                revert_on_fail=True,
+                use_private_mempool=False
+            )
+        ),
+        "standard_new_pair": PresetDetail(
+            id="standard_new_pair",
+            name="Standard New Pair",
+            strategy_type=StrategyType.NEW_PAIR_SNIPE,
+            preset_type=PresetType.STANDARD,
+            description="Balanced new pair snipe with moderate risk",
+            risk_score=50.0,
+            version=1,
+            is_built_in=True,
+            created_at=now,
+            updated_at=now,
+            config=PresetConfig(
+                name="Standard New Pair",
+                description="Balanced new pair snipe with moderate risk",
+                strategy_type=StrategyType.NEW_PAIR_SNIPE,
+                preset_type=PresetType.STANDARD,
+                max_position_size_usd=Decimal("200"),
+                max_slippage_percent=8.0,
+                min_liquidity_usd=Decimal("2000"),
+                position_sizing_method=PositionSizingMethod.DYNAMIC,
+                stop_loss_percent=20.0,
+                take_profit_percent=50.0,
+                max_daily_trades=15,
+                trigger_condition=TriggerCondition.IMMEDIATE,
+                block_delay=1,
+                gas_price_limit_gwei=100.0,
+                revert_on_fail=True,
+                use_private_mempool=True
+            )
+        ),
+        "standard_trending": PresetDetail(
+            id="standard_trending",
+            name="Standard Trending",
+            strategy_type=StrategyType.TRENDING_REENTRY,
+            preset_type=PresetType.STANDARD,
+            description="Balanced trending re-entry with momentum focus",
+            risk_score=45.0,
+            version=1,
+            is_built_in=True,
+            created_at=now,
+            updated_at=now,
+            config=PresetConfig(
+                name="Standard Trending",
+                description="Balanced trending re-entry with momentum focus",
+                strategy_type=StrategyType.TRENDING_REENTRY,
+                preset_type=PresetType.STANDARD,
+                max_position_size_usd=Decimal("300"),
+                max_slippage_percent=10.0,
+                min_liquidity_usd=Decimal("5000"),
+                position_sizing_method=PositionSizingMethod.KELLY,
+                stop_loss_percent=25.0,
+                take_profit_percent=75.0,
+                max_daily_trades=20,
+                trigger_condition=TriggerCondition.PRICE_MOVEMENT,
+                gas_price_limit_gwei=150.0,
+                revert_on_fail=False,
+                use_private_mempool=True
+            )
+        ),
+        "aggressive_new_pair": PresetDetail(
+            id="aggressive_new_pair",
+            name="Aggressive New Pair",
+            strategy_type=StrategyType.NEW_PAIR_SNIPE,
+            preset_type=PresetType.AGGRESSIVE,
+            description="High-risk new pair snipe with large positions",
+            risk_score=80.0,
+            version=1,
+            is_built_in=True,
+            created_at=now,
+            updated_at=now,
+            config=PresetConfig(
+                name="Aggressive New Pair",
+                description="High-risk new pair snipe with large positions",
+                strategy_type=StrategyType.NEW_PAIR_SNIPE,
+                preset_type=PresetType.AGGRESSIVE,
+                max_position_size_usd=Decimal("1000"),
+                max_slippage_percent=20.0,
+                min_liquidity_usd=Decimal("1000"),
+                position_sizing_method=PositionSizingMethod.PERCENTAGE,
+                position_size_percent=10.0,
+                stop_loss_percent=30.0,
+                take_profit_percent=200.0,
+                max_daily_trades=50,
+                trigger_condition=TriggerCondition.IMMEDIATE,
+                gas_price_limit_gwei=500.0,
+                revert_on_fail=False,
+                use_private_mempool=True
+            )
+        ),
+        "aggressive_trending": PresetDetail(
+            id="aggressive_trending",
+            name="Aggressive Trending",
+            strategy_type=StrategyType.TRENDING_REENTRY,
+            preset_type=PresetType.AGGRESSIVE,
+            description="High-risk trending plays with maximum leverage",
+            risk_score=85.0,
+            version=1,
+            is_built_in=True,
+            created_at=now,
+            updated_at=now,
+            config=PresetConfig(
+                name="Aggressive Trending",
+                description="High-risk trending plays with maximum leverage",
+                strategy_type=StrategyType.TRENDING_REENTRY,
+                preset_type=PresetType.AGGRESSIVE,
+                max_position_size_usd=Decimal("2000"),
+                max_slippage_percent=25.0,
+                min_liquidity_usd=Decimal("500"),
+                position_sizing_method=PositionSizingMethod.KELLY,
+                position_size_percent=20.0,
+                stop_loss_percent=40.0,
+                take_profit_percent=500.0,
+                max_daily_trades=100,
+                trigger_condition=TriggerCondition.VOLUME_SPIKE,
+                gas_price_limit_gwei=1000.0,
+                revert_on_fail=False,
+                use_private_mempool=True
+            )
         )
+    }
+
+
+def _calculate_risk_score(config: PresetConfig) -> float:
+    """Calculate risk score for a preset configuration."""
+    risk_score = 0.0
     
-    performance_response = None
-    if preset.performance:
-        performance_response = PresetPerformanceResponse(
-            preset_id=preset.performance.preset_id,
-            total_trades=preset.performance.total_trades,
-            winning_trades=preset.performance.winning_trades,
-            losing_trades=preset.performance.losing_trades,
-            win_rate=preset.performance.win_rate,
-            total_profit_loss=float(preset.performance.total_profit_loss),
-            max_drawdown=float(preset.performance.max_drawdown),
-            average_profit_percent=preset.performance.average_profit_percent,
-            average_loss_percent=preset.performance.average_loss_percent,
-            average_hold_time_minutes=preset.performance.average_hold_time_minutes,
-            risk_adjusted_return=preset.performance.risk_adjusted_return,
-            last_updated=preset.performance.last_updated
-        )
+    # Position size factor (0-25 points)
+    position_usd = float(config.max_position_size_usd)
+    if position_usd <= 50:
+        risk_score += 5.0
+    elif position_usd <= 200:
+        risk_score += 15.0
+    elif position_usd <= 500:
+        risk_score += 20.0
+    else:
+        risk_score += 25.0
     
-    return CustomPresetResponse(
-        preset_id=preset.preset_id,
-        name=preset.name,
-        description=preset.description,
-        category=preset.category,
-        strategy_type=preset.strategy_type,
-        config=_convert_config_to_response(preset.config, preset.strategy_type),
-        created_at=preset.created_at,
-        created_by=preset.created_by,
-        version=preset.version,
-        is_active=preset.is_active,
-        validation_result=validation_response,
-        performance=performance_response,
-        tags=preset.tags,
-        metadata=preset.metadata
+    # Slippage factor (0-20 points)
+    if config.max_slippage_percent <= 5.0:
+        risk_score += 5.0
+    elif config.max_slippage_percent <= 10.0:
+        risk_score += 10.0
+    elif config.max_slippage_percent <= 20.0:
+        risk_score += 15.0
+    else:
+        risk_score += 20.0
+    
+    # Liquidity factor (0-15 points, inverse)
+    liquidity_usd = float(config.min_liquidity_usd)
+    if liquidity_usd >= 10000:
+        risk_score += 0.0
+    elif liquidity_usd >= 5000:
+        risk_score += 5.0
+    elif liquidity_usd >= 1000:
+        risk_score += 10.0
+    else:
+        risk_score += 15.0
+    
+    # Stop loss factor (0-10 points, inverse)
+    if config.stop_loss_percent and config.stop_loss_percent <= 15.0:
+        risk_score += 0.0
+    elif config.stop_loss_percent and config.stop_loss_percent <= 25.0:
+        risk_score += 3.0
+    elif config.stop_loss_percent and config.stop_loss_percent <= 40.0:
+        risk_score += 7.0
+    else:
+        risk_score += 10.0
+    
+    # Trading frequency factor (0-10 points)
+    if config.max_daily_trades <= 10:
+        risk_score += 2.0
+    elif config.max_daily_trades <= 25:
+        risk_score += 5.0
+    elif config.max_daily_trades <= 50:
+        risk_score += 8.0
+    else:
+        risk_score += 10.0
+    
+    # Advanced features factor (0-10 points)
+    if config.use_private_mempool:
+        risk_score += 5.0
+    if not config.revert_on_fail:
+        risk_score += 5.0
+    
+    # Gas price factor (0-10 points)
+    if config.gas_price_limit_gwei and config.gas_price_limit_gwei >= 500.0:
+        risk_score += 10.0
+    elif config.gas_price_limit_gwei and config.gas_price_limit_gwei >= 200.0:
+        risk_score += 5.0
+    
+    return min(risk_score, 100.0)
+
+
+def _validate_preset(config: PresetConfig) -> PresetValidation:
+    """Validate preset configuration."""
+    warnings = []
+    errors = []
+    
+    # Check position sizing
+    if config.max_position_size_usd > Decimal("1000"):
+        warnings.append("Large position size may result in significant losses")
+    
+    # Check slippage
+    if config.max_slippage_percent > 15.0:
+        warnings.append("High slippage tolerance may result in poor fills")
+    
+    # Check liquidity requirements
+    if config.min_liquidity_usd < Decimal("1000"):
+        warnings.append("Low liquidity requirement increases execution risk")
+    
+    # Check stop loss
+    if not config.stop_loss_percent:
+        warnings.append("No stop loss configured - consider adding downside protection")
+    elif config.stop_loss_percent > 50.0:
+        errors.append("Stop loss percentage too high (>50%)")
+    
+    # Check take profit
+    if config.take_profit_percent and config.take_profit_percent > 1000.0:
+        warnings.append("Very high take profit target may be unrealistic")
+    
+    # Check daily trade limits
+    if config.max_daily_trades > 100:
+        warnings.append("High daily trade limit may lead to overtrading")
+    
+    # Check gas limits
+    if config.gas_price_limit_gwei and config.gas_price_limit_gwei > 500.0:
+        warnings.append("High gas price limit may result in expensive transactions")
+    
+    # Calculate risk score
+    risk_score = _calculate_risk_score(config)
+    
+    # Determine validation status
+    if errors:
+        status = "invalid"
+    elif warnings:
+        status = "valid_with_warnings"
+    else:
+        status = "valid"
+    
+    return PresetValidation(
+        status=status,
+        risk_score=risk_score,
+        warnings=warnings,
+        errors=errors,
+        warning_count=len(warnings),
+        error_count=len(errors)
     )
 
 
 # API Endpoints
 
-@router.get("/builtin", response_model=List[BuiltinPresetResponse])
-async def list_builtin_presets(
+@router.get("", response_model=List[PresetSummary])
+async def list_presets(
     strategy_type: Optional[StrategyType] = Query(None, description="Filter by strategy type"),
-    trace_id: str = Depends(get_trace_id)
-) -> List[BuiltinPresetResponse]:
+    preset_type: Optional[PresetType] = Query(None, description="Filter by preset type"),
+    include_built_in: bool = Query(True, description="Include built-in presets")
+) -> List[PresetSummary]:
     """
-    List all available built-in presets.
+    List available trading presets.
     
-    Returns predefined Conservative/Standard/Aggressive presets
-    with descriptions and recommended use cases.
+    Args:
+        strategy_type: Optional strategy type filter
+        preset_type: Optional preset type filter  
+        include_built_in: Whether to include built-in presets
+        
+    Returns:
+        List of preset summaries
     """
-    try:
-        builtin_presets = preset_manager.list_builtin_presets()
-        responses = []
-        
-        preset_descriptions = {
-            StrategyPreset.CONSERVATIVE.value: {
-                "description": "Low-risk preset with smaller positions, tighter stops, and enhanced safety checks",
-                "recommended_for": ["Beginners", "Risk-averse traders", "Bear markets", "Volatile conditions"]
-            },
-            StrategyPreset.STANDARD.value: {
-                "description": "Balanced preset with moderate risk and optimized risk/reward ratios",
-                "recommended_for": ["Intermediate traders", "Balanced portfolios", "Normal market conditions"]
-            },
-            StrategyPreset.AGGRESSIVE.value: {
-                "description": "High-risk preset with larger positions and faster execution for maximum returns",
-                "recommended_for": ["Experienced traders", "Bull markets", "High-confidence setups", "Small allocations"]
-            }
-        }
-        
-        for preset_name, strategy_configs in builtin_presets.items():
-            for strat_type, config in strategy_configs.items():
-                if strategy_type is None or strat_type == strategy_type:
-                    preset_info = preset_descriptions.get(preset_name, {})
-                    
-                    responses.append(BuiltinPresetResponse(
-                        preset_name=StrategyPreset(preset_name),
-                        strategy_type=strat_type,
-                        config=_convert_config_to_response(config, strat_type),
-                        description=preset_info.get("description", "Built-in trading preset"),
-                        recommended_for=preset_info.get("recommended_for", [])
-                    ))
-        
-        logger.info(
-            f"Listed {len(responses)} built-in presets",
-            extra={
-                "module": "presets_api",
-                "trace_id": trace_id,
-                "strategy_type": strategy_type.value if strategy_type else "all",
-                "count": len(responses)
-            }
-        )
-        
-        return responses
-        
-    except Exception as e:
-        logger.error(
-            f"Failed to list built-in presets: {e}",
-            extra={"module": "presets_api", "trace_id": trace_id}
-        )
-        raise HTTPException(status_code=500, detail=f"Failed to list presets: {str(e)}")
-
-
-@router.get("/builtin/{preset_name}/{strategy_type}", response_model=BuiltinPresetResponse)
-async def get_builtin_preset(
-    preset_name: StrategyPreset,
-    strategy_type: StrategyType,
-    trace_id: str = Depends(get_trace_id)
-) -> BuiltinPresetResponse:
-    """Get a specific built-in preset configuration."""
-    try:
-        config = preset_manager.get_builtin_preset(preset_name, strategy_type)
-        if not config:
-            raise HTTPException(
-                status_code=404, 
-                detail=f"Built-in preset not found: {preset_name.value} for {strategy_type.value}"
-            )
-        
-        preset_descriptions = {
-            StrategyPreset.CONSERVATIVE.value: {
-                "description": "Low-risk preset with smaller positions, tighter stops, and enhanced safety checks",
-                "recommended_for": ["Beginners", "Risk-averse traders", "Bear markets", "Volatile conditions"]
-            },
-            StrategyPreset.STANDARD.value: {
-                "description": "Balanced preset with moderate risk and optimized risk/reward ratios",
-                "recommended_for": ["Intermediate traders", "Balanced portfolios", "Normal market conditions"]
-            },
-            StrategyPreset.AGGRESSIVE.value: {
-                "description": "High-risk preset with larger positions and faster execution for maximum returns",
-                "recommended_for": ["Experienced traders", "Bull markets", "High-confidence setups", "Small allocations"]
-            }
-        }
-        
-        preset_info = preset_descriptions.get(preset_name.value, {})
-        
-        logger.info(
-            f"Retrieved built-in preset: {preset_name.value}",
-            extra={
-                "module": "presets_api",
-                "trace_id": trace_id,
-                "preset_name": preset_name.value,
-                "strategy_type": strategy_type.value
-            }
-        )
-        
-        return BuiltinPresetResponse(
-            preset_name=preset_name,
-            strategy_type=strategy_type,
-            config=_convert_config_to_response(config, strategy_type),
-            description=preset_info.get("description", "Built-in trading preset"),
-            recommended_for=preset_info.get("recommended_for", [])
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(
-            f"Failed to get built-in preset: {e}",
-            extra={"module": "presets_api", "trace_id": trace_id}
-        )
-        raise HTTPException(status_code=500, detail=f"Failed to get preset: {str(e)}")
-
-
-@router.post("/custom", response_model=CustomPresetResponse)
-async def create_custom_preset(
-    request: CreatePresetRequest,
-    trace_id: str = Depends(get_trace_id)
-) -> CustomPresetResponse:
-    """Create a new custom preset."""
-    try:
-        # Build custom parameters from request
-        custom_params = request.custom_parameters.copy()
-        
-        # Add configuration parameters to custom_params if provided
-        config_fields = [
-            'max_position_size_usd', 'max_daily_trades', 'max_slippage_percent',
-            'min_liquidity_usd', 'risk_tolerance', 'auto_revert_enabled',
-            'auto_revert_delay_minutes', 'position_sizing_method',
-            'take_profit_percent', 'stop_loss_percent', 'trailing_stop_enabled',
-            'trigger_conditions'
-        ]
-        
-        for field in config_fields:
-            value = getattr(request, field)
-            if value is not None:
-                custom_params[field] = value
-        
-        # Create preset
-        preset = preset_manager.create_custom_preset(
-            name=request.name,
-            description=request.description,
-            strategy_type=request.strategy_type,
-            base_preset=request.base_preset,
-            custom_parameters=custom_params,
-            category=request.category,
-            tags=request.tags
-        )
-        
-        logger.info(
-            f"Created custom preset: {preset.name}",
-            extra={
-                "module": "presets_api",
-                "trace_id": trace_id,
-                "preset_id": preset.preset_id,
-                "strategy_type": request.strategy_type.value
-            }
-        )
-        
-        return _convert_custom_preset_to_response(preset)
-        
-    except ValueError as e:
-        logger.warning(
-            f"Invalid preset creation request: {e}",
-            extra={"module": "presets_api", "trace_id": trace_id}
-        )
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(
-            f"Failed to create custom preset: {e}",
-            extra={"module": "presets_api", "trace_id": trace_id}
-        )
-        raise HTTPException(status_code=500, detail=f"Failed to create preset: {str(e)}")
-
-
-@router.get("/custom", response_model=List[CustomPresetResponse])
-async def list_custom_presets(
-    strategy_type: Optional[StrategyType] = Query(None, description="Filter by strategy type"),
-    category: Optional[PresetCategory] = Query(None, description="Filter by category"),
-    tags: Optional[List[str]] = Query(None, description="Filter by tags"),
-    active_only: bool = Query(True, description="Show only active presets"),
-    trace_id: str = Depends(get_trace_id)
-) -> List[CustomPresetResponse]:
-    """List custom presets with optional filtering."""
-    try:
-        presets = preset_manager.list_custom_presets(
-            strategy_type=strategy_type,
-            category=category,
-            tags=tags
-        )
-        
-        if active_only:
-            presets = [p for p in presets if p.is_active]
-        
-        responses = [_convert_custom_preset_to_response(preset) for preset in presets]
-        
-        logger.info(
-            f"Listed {len(responses)} custom presets",
-            extra={
-                "module": "presets_api",
-                "trace_id": trace_id,
-                "strategy_type": strategy_type.value if strategy_type else "all",
-                "category": category.value if category else "all",
-                "active_only": active_only,
-                "count": len(responses)
-            }
-        )
-        
-        return responses
-        
-    except Exception as e:
-        logger.error(
-            f"Failed to list custom presets: {e}",
-            extra={"module": "presets_api", "trace_id": trace_id}
-        )
-        raise HTTPException(status_code=500, detail=f"Failed to list presets: {str(e)}")
-
-
-@router.get("/custom/{preset_id}", response_model=CustomPresetResponse)
-async def get_custom_preset(
-    preset_id: str,
-    trace_id: str = Depends(get_trace_id)
-) -> CustomPresetResponse:
-    """Get a specific custom preset by ID."""
-    try:
-        preset = preset_manager.get_custom_preset(preset_id)
-        if not preset:
-            raise HTTPException(status_code=404, detail=f"Custom preset not found: {preset_id}")
-        
-        logger.info(
-            f"Retrieved custom preset: {preset.name}",
-            extra={
-                "module": "presets_api",
-                "trace_id": trace_id,
-                "preset_id": preset_id
-            }
-        )
-        
-        return _convert_custom_preset_to_response(preset)
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(
-            f"Failed to get custom preset: {e}",
-            extra={"module": "presets_api", "trace_id": trace_id, "preset_id": preset_id}
-        )
-        raise HTTPException(status_code=500, detail=f"Failed to get preset: {str(e)}")
-
-
-@router.put("/custom/{preset_id}", response_model=CustomPresetResponse)
-async def update_custom_preset(
-    preset_id: str,
-    request: UpdatePresetRequest,
-    trace_id: str = Depends(get_trace_id)
-) -> CustomPresetResponse:
-    """Update a custom preset."""
-    try:
-        preset = preset_manager.get_custom_preset(preset_id)
-        if not preset:
-            raise HTTPException(status_code=404, detail=f"Custom preset not found: {preset_id}")
-        
-        # Update preset fields
-        if request.name is not None:
-            preset.name = request.name
-        if request.description is not None:
-            preset.description = request.description
-        if request.is_active is not None:
-            preset.is_active = request.is_active
-        if request.tags is not None:
-            preset.tags = request.tags
-        
-        # Update configuration
-        config_updates = {}
-        config_fields = [
-            'max_position_size_usd', 'max_daily_trades', 'max_slippage_percent',
-            'min_liquidity_usd', 'risk_tolerance', 'auto_revert_enabled',
-            'auto_revert_delay_minutes', 'position_sizing_method',
-            'take_profit_percent', 'stop_loss_percent', 'trailing_stop_enabled',
-            'trigger_conditions'
-        ]
-        
-        for field in config_fields:
-            value = getattr(request, field)
-            if value is not None:
-                config_updates[field] = value
-        
-        if request.custom_parameters:
-            config_updates.update(request.custom_parameters)
-        
-        # Apply configuration updates
-        for key, value in config_updates.items():
-            if hasattr(preset.config, key):
-                if key in ['max_position_size_usd', 'min_liquidity_usd'] and isinstance(value, (int, float)):
-                    value = Decimal(str(value))
-                setattr(preset.config, key, value)
-            else:
-                preset.config.custom_parameters[key] = value
-        
-        # Increment version and re-validate
-        preset.version += 1
-        preset.validation_result = preset_manager.validate_preset(preset)
-        
-        logger.info(
-            f"Updated custom preset: {preset.name}",
-            extra={
-                "module": "presets_api",
-                "trace_id": trace_id,
-                "preset_id": preset_id,
-                "version": preset.version
-            }
-        )
-        
-        return _convert_custom_preset_to_response(preset)
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(
-            f"Failed to update custom preset: {e}",
-            extra={"module": "presets_api", "trace_id": trace_id, "preset_id": preset_id}
-        )
-        raise HTTPException(status_code=500, detail=f"Failed to update preset: {str(e)}")
-
-
-@router.delete("/custom/{preset_id}")
-async def delete_custom_preset(
-    preset_id: str,
-    trace_id: str = Depends(get_trace_id)
-) -> Dict[str, str]:
-    """Delete a custom preset."""
-    try:
-        success = preset_manager.delete_custom_preset(preset_id)
-        if not success:
-            raise HTTPException(status_code=404, detail=f"Custom preset not found: {preset_id}")
-        
-        logger.info(
-            f"Deleted custom preset: {preset_id}",
-            extra={"module": "presets_api", "trace_id": trace_id, "preset_id": preset_id}
-        )
-        
-        return {"message": f"Preset {preset_id} deleted successfully"}
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(
-            f"Failed to delete custom preset: {e}",
-            extra={"module": "presets_api", "trace_id": trace_id, "preset_id": preset_id}
-        )
-        raise HTTPException(status_code=500, detail=f"Failed to delete preset: {str(e)}")
-
-
-@router.post("/custom/{preset_id}/clone", response_model=CustomPresetResponse)
-async def clone_custom_preset(
-    preset_id: str,
-    new_name: str = Body(..., description="Name for the cloned preset"),
-    modifications: Optional[Dict[str, Any]] = Body(None, description="Modifications to apply"),
-    trace_id: str = Depends(get_trace_id)
-) -> CustomPresetResponse:
-    """Clone an existing custom preset with optional modifications."""
-    try:
-        cloned_preset = preset_manager.clone_preset(preset_id, new_name, modifications)
-        if not cloned_preset:
-            raise HTTPException(status_code=404, detail=f"Source preset not found: {preset_id}")
-        
-        logger.info(
-            f"Cloned preset: {preset_id} -> {cloned_preset.preset_id}",
-            extra={
-                "module": "presets_api",
-                "trace_id": trace_id,
-                "source_preset_id": preset_id,
-                "new_preset_id": cloned_preset.preset_id
-            }
-        )
-        
-        return _convert_custom_preset_to_response(cloned_preset)
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(
-            f"Failed to clone preset: {e}",
-            extra={"module": "presets_api", "trace_id": trace_id, "preset_id": preset_id}
-        )
-        raise HTTPException(status_code=500, detail=f"Failed to clone preset: {str(e)}")
-
-
-@router.post("/custom/{preset_id}/validate", response_model=ValidationResultResponse)
-async def validate_custom_preset(
-    preset_id: str,
-    trace_id: str = Depends(get_trace_id)
-) -> ValidationResultResponse:
-    """Validate a custom preset configuration."""
-    try:
-        preset = preset_manager.get_custom_preset(preset_id)
-        if not preset:
-            raise HTTPException(status_code=404, detail=f"Custom preset not found: {preset_id}")
-        
-        validation_result = preset_manager.validate_preset(preset)
-        
-        logger.info(
-            f"Validated preset: {preset.name} - {validation_result.status.value}",
-            extra={
-                "module": "presets_api",
-                "trace_id": trace_id,
-                "preset_id": preset_id,
-                "validation_status": validation_result.status.value,
-                "risk_score": validation_result.risk_score
-            }
-        )
-        
-        return ValidationResultResponse(
-            status=validation_result.status,
-            warnings=validation_result.warnings,
-            errors=validation_result.errors,
-            suggestions=validation_result.suggestions,
-            risk_score=validation_result.risk_score,
-            expected_performance=validation_result.expected_performance
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(
-            f"Failed to validate preset: {e}",
-            extra={"module": "presets_api", "trace_id": trace_id, "preset_id": preset_id}
-        )
-        raise HTTPException(status_code=500, detail=f"Failed to validate preset: {str(e)}")
-
-
-@router.get("/recommendations", response_model=List[PresetRecommendationResponse])
-async def get_preset_recommendations(
-    strategy_type: StrategyType = Query(..., description="Strategy type for recommendations"),
-    risk_preference: RiskLevel = Query(RiskLevel.MEDIUM, description="Risk preference"),
-    experience_level: str = Query("intermediate", description="Experience level"),
-    trace_id: str = Depends(get_trace_id)
-) -> List[PresetRecommendationResponse]:
-    """Get preset recommendations based on user preferences."""
-    try:
-        recommendations = preset_manager.get_preset_recommendations(
-            strategy_type=strategy_type,
-            risk_preference=risk_preference,
-            experience_level=experience_level
-        )
-        
-        responses = []
-        for rec in recommendations:
-            config_response = _convert_config_to_response(rec["config"], strategy_type)
+    logger.info(f"Listing presets: strategy_type={strategy_type}, preset_type={preset_type}")
+    
+    presets = []
+    
+    # Add built-in presets
+    if include_built_in:
+        built_in_presets = _get_built_in_presets()
+        for preset in built_in_presets.values():
+            if strategy_type and preset.strategy_type != strategy_type:
+                continue
+            if preset_type and preset.preset_type != preset_type:
+                continue
             
-            responses.append(PresetRecommendationResponse(
-                type=rec["type"],
-                preset_name=rec.get("preset_name"),
-                preset_id=rec.get("preset_id"),
-                config=config_response,
-                score=rec["score"],
-                reason=rec["reason"]
+            presets.append(PresetSummary(
+                id=preset.id,
+                name=preset.name,
+                strategy_type=preset.strategy_type,
+                preset_type=preset.preset_type,
+                risk_score=preset.risk_score,
+                version=preset.version,
+                is_built_in=preset.is_built_in,
+                created_at=preset.created_at,
+                updated_at=preset.updated_at
             ))
-        
-        logger.info(
-            f"Generated {len(responses)} preset recommendations",
-            extra={
-                "module": "presets_api",
-                "trace_id": trace_id,
-                "strategy_type": strategy_type.value,
-                "risk_preference": risk_preference.value,
-                "count": len(responses)
-            }
-        )
-        
-        return responses
-        
-    except Exception as e:
-        logger.error(
-            f"Failed to get recommendations: {e}",
-            extra={"module": "presets_api", "trace_id": trace_id}
-        )
-        raise HTTPException(status_code=500, detail=f"Failed to get recommendations: {str(e)}")
+    
+    # Add custom presets
+    for preset in _custom_presets.values():
+        if strategy_type and preset.strategy_type != strategy_type:
+            continue
+        if preset_type and preset.preset_type != preset_type:
+            continue
+            
+        presets.append(PresetSummary(
+            id=preset.id,
+            name=preset.name,
+            strategy_type=preset.strategy_type,
+            preset_type=preset.preset_type,
+            risk_score=preset.risk_score,
+            version=preset.version,
+            is_built_in=preset.is_built_in,
+            created_at=preset.created_at,
+            updated_at=preset.updated_at
+        ))
+    
+    logger.info(f"Returning {len(presets)} presets")
+    return presets
 
 
-@router.get("/performance/summary")
-async def get_performance_summary(
-    trace_id: str = Depends(get_trace_id)
-) -> Dict[str, Any]:
-    """Get performance summary across all presets."""
-    try:
-        summary = preset_manager.get_performance_summary()
+@router.get("/{preset_id}", response_model=PresetDetail)
+async def get_preset(preset_id: str) -> PresetDetail:
+    """
+    Get detailed preset configuration.
+    
+    Args:
+        preset_id: Preset identifier
         
-        logger.info(
-            "Retrieved performance summary",
-            extra={
-                "module": "presets_api",
-                "trace_id": trace_id,
-                "total_presets": summary["total_presets"],
-                "total_trades": summary["total_trades"]
-            }
-        )
-        
-        return summary
-        
-    except Exception as e:
-        logger.error(
-            f"Failed to get performance summary: {e}",
-            extra={"module": "presets_api", "trace_id": trace_id}
-        )
-        raise HTTPException(status_code=500, detail=f"Failed to get performance summary: {str(e)}")
+    Returns:
+        Detailed preset information
+    """
+    logger.info(f"Getting preset: {preset_id}")
+    
+    # Check built-in presets first
+    built_in_presets = _get_built_in_presets()
+    if preset_id in built_in_presets:
+        return built_in_presets[preset_id]
+    
+    # Check custom presets
+    if preset_id in _custom_presets:
+        return _custom_presets[preset_id]
+    
+    logger.warning(f"Preset not found: {preset_id}")
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"Preset '{preset_id}' not found"
+    )
 
 
-@router.get("/custom/{preset_id}/export")
-async def export_preset(
-    preset_id: str,
-    trace_id: str = Depends(get_trace_id)
-) -> Dict[str, Any]:
-    """Export a preset configuration for sharing or backup."""
-    try:
-        export_data = preset_manager.export_preset(preset_id)
-        if not export_data:
-            raise HTTPException(status_code=404, detail=f"Custom preset not found: {preset_id}")
+@router.post("", response_model=PresetDetail, status_code=status.HTTP_201_CREATED)
+async def create_preset(config: PresetConfig) -> PresetDetail:
+    """
+    Create a new custom preset.
+    
+    Args:
+        config: Preset configuration
         
-        logger.info(
-            f"Exported preset: {preset_id}",
-            extra={"module": "presets_api", "trace_id": trace_id, "preset_id": preset_id}
+    Returns:
+        Created preset details
+    """
+    logger.info(f"Creating preset: {config.name}")
+    
+    # Generate unique ID
+    preset_id = f"custom_{uuid.uuid4().hex[:8]}"
+    
+    # Validate configuration
+    validation = _validate_preset(config)
+    if validation.status == "invalid":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid preset configuration: {', '.join(validation.errors)}"
         )
-        
-        return export_data
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(
-            f"Failed to export preset: {e}",
-            extra={"module": "presets_api", "trace_id": trace_id, "preset_id": preset_id}
-        )
-        raise HTTPException(status_code=500, detail=f"Failed to export preset: {str(e)}")
+    
+    # Create preset
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    
+    preset = PresetDetail(
+        id=preset_id,
+        name=config.name,
+        strategy_type=config.strategy_type,
+        preset_type=PresetType.CUSTOM,
+        description=config.description,
+        risk_score=validation.risk_score,
+        version=1,
+        is_built_in=False,
+        created_at=now,
+        updated_at=now,
+        config=config
+    )
+    
+    # Store preset
+    _custom_presets[preset_id] = preset
+    
+    logger.info(f"Created preset: {preset_id} with risk score {validation.risk_score}")
+    return preset
 
 
-@router.post("/custom/import", response_model=CustomPresetResponse)
-async def import_preset(
-    preset_data: Dict[str, Any] = Body(..., description="Exported preset data"),
-    trace_id: str = Depends(get_trace_id)
-) -> CustomPresetResponse:
-    """Import a preset configuration from exported data."""
-    try:
-        preset = preset_manager.import_preset(preset_data)
-        if not preset:
-            raise HTTPException(status_code=400, detail="Invalid preset data or import failed")
+@router.put("/{preset_id}", response_model=PresetDetail)
+async def update_preset(preset_id: str, config: PresetConfig) -> PresetDetail:
+    """
+    Update an existing custom preset.
+    
+    Args:
+        preset_id: Preset identifier
+        config: Updated preset configuration
         
-        logger.info(
-            f"Imported preset: {preset.name}",
-            extra={
-                "module": "presets_api",
-                "trace_id": trace_id,
-                "preset_id": preset.preset_id
-            }
+    Returns:
+        Updated preset details
+    """
+    logger.info(f"Updating preset: {preset_id}")
+    
+    # Check if preset exists and is custom
+    if preset_id not in _custom_presets:
+        built_in_presets = _get_built_in_presets()
+        if preset_id in built_in_presets:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot modify built-in preset"
+            )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Preset '{preset_id}' not found"
         )
-        
-        return _convert_custom_preset_to_response(preset)
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(
-            f"Failed to import preset: {e}",
-            extra={"module": "presets_api", "trace_id": trace_id}
+    
+    # Validate configuration
+    validation = _validate_preset(config)
+    if validation.status == "invalid":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid preset configuration: {', '.join(validation.errors)}"
         )
-        raise HTTPException(status_code=500, detail=f"Failed to import preset: {str(e)}")
+    
+    # Update preset
+    existing_preset = _custom_presets[preset_id]
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    
+    updated_preset = PresetDetail(
+        id=preset_id,
+        name=config.name,
+        strategy_type=config.strategy_type,
+        preset_type=PresetType.CUSTOM,
+        description=config.description,
+        risk_score=validation.risk_score,
+        version=existing_preset.version + 1,
+        is_built_in=False,
+        created_at=existing_preset.created_at,
+        updated_at=now,
+        config=config
+    )
+    
+    _custom_presets[preset_id] = updated_preset
+    
+    logger.info(f"Updated preset: {preset_id} to version {updated_preset.version}")
+    return updated_preset
 
 
-@router.get("/position-sizing-methods")
-async def list_position_sizing_methods(
-    trace_id: str = Depends(get_trace_id)
-) -> Dict[str, Dict[str, str]]:
-    """List available position sizing methods with descriptions."""
-    try:
-        methods = {
-            PositionSizingMethod.FIXED.value: {
-                "name": "Fixed Size",
-                "description": "Use fixed position size regardless of market conditions",
-                "recommended_for": "Beginners, consistent risk exposure"
-            },
-            PositionSizingMethod.PERCENTAGE.value: {
-                "name": "Portfolio Percentage",
-                "description": "Size positions as percentage of total portfolio",
-                "recommended_for": "Portfolio management, risk scaling"
-            },
-            PositionSizingMethod.KELLY.value: {
-                "name": "Kelly Criterion",
-                "description": "Optimal sizing based on historical win/loss ratios",
-                "recommended_for": "Advanced traders, maximize growth"
-            },
-            PositionSizingMethod.RISK_PARITY.value: {
-                "name": "Risk Parity",
-                "description": "Size positions to contribute equal risk to portfolio",
-                "recommended_for": "Risk management, diversification"
-            },
-            PositionSizingMethod.VOLATILITY_ADJUSTED.value: {
-                "name": "Volatility Adjusted",
-                "description": "Adjust size based on asset volatility",
-                "recommended_for": "Volatile markets, risk normalization"
-            },
-            PositionSizingMethod.CONFIDENCE_WEIGHTED.value: {
-                "name": "Confidence Weighted",
-                "description": "Size based on signal confidence and conviction",
-                "recommended_for": "Signal-based trading, variable confidence"
-            },
-            PositionSizingMethod.DYNAMIC_RISK.value: {
-                "name": "Dynamic Risk (Recommended)",
-                "description": "Combines multiple methods for optimal allocation",
-                "recommended_for": "All traders, balanced approach"
-            }
+@router.delete("/{preset_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_preset(preset_id: str) -> None:
+    """
+    Delete a custom preset.
+    
+    Args:
+        preset_id: Preset identifier
+    """
+    logger.info(f"Deleting preset: {preset_id}")
+    
+    # Check if preset exists and is custom
+    if preset_id not in _custom_presets:
+        built_in_presets = _get_built_in_presets()
+        if preset_id in built_in_presets:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot delete built-in preset"
+            )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Preset '{preset_id}' not found"
+        )
+    
+    # Delete preset
+    del _custom_presets[preset_id]
+    
+    logger.info(f"Deleted preset: {preset_id}")
+
+
+@router.post("/{preset_id}/validate", response_model=PresetValidation)
+async def validate_preset(preset_id: str) -> PresetValidation:
+    """
+    Validate a preset configuration.
+    
+    Args:
+        preset_id: Preset identifier
+        
+    Returns:
+        Validation result with risk score and warnings
+    """
+    logger.info(f"Validating preset: {preset_id}")
+    
+    # Get preset
+    preset = None
+    built_in_presets = _get_built_in_presets()
+    
+    if preset_id in built_in_presets:
+        preset = built_in_presets[preset_id]
+    elif preset_id in _custom_presets:
+        preset = _custom_presets[preset_id]
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Preset '{preset_id}' not found"
+        )
+    
+    # Validate configuration
+    validation = _validate_preset(preset.config)
+    
+    logger.info(f"Validation result for {preset_id}: {validation.status}, risk={validation.risk_score}")
+    return validation
+
+
+@router.get("/recommendations", response_model=List[PresetRecommendation])
+async def get_preset_recommendations(
+    strategy_type: Optional[StrategyType] = Query(None, description="Strategy type for recommendations"),
+    risk_tolerance: Optional[str] = Query(None, description="Risk tolerance (low, medium, high)"),
+    max_position_usd: Optional[float] = Query(None, description="Maximum position size in USD")
+) -> List[PresetRecommendation]:
+    """
+    Get preset recommendations based on user criteria.
+    
+    Args:
+        strategy_type: Optional strategy type filter
+        risk_tolerance: Optional risk tolerance (low, medium, high)
+        max_position_usd: Optional maximum position size
+        
+    Returns:
+        List of recommended presets
+    """
+    logger.info(f"Getting recommendations: strategy={strategy_type}, risk={risk_tolerance}")
+    
+    recommendations = []
+    built_in_presets = _get_built_in_presets()
+    
+    for preset in built_in_presets.values():
+        # Filter by strategy type
+        if strategy_type and preset.strategy_type != strategy_type:
+            continue
+        
+        # Calculate match score
+        match_score = 80.0  # Base score for built-in presets
+        
+        # Adjust for risk tolerance
+        if risk_tolerance:
+            preset_risk = preset.risk_score or 50.0
+            if risk_tolerance == "low" and preset_risk <= 30.0:
+                match_score += 15.0
+            elif risk_tolerance == "medium" and 30.0 < preset_risk <= 70.0:
+                match_score += 15.0
+            elif risk_tolerance == "high" and preset_risk > 70.0:
+                match_score += 15.0
+            else:
+                match_score -= 20.0
+        
+        # Adjust for position size
+        if max_position_usd:
+            preset_max = float(preset.config.max_position_size_usd)
+            if preset_max <= max_position_usd:
+                match_score += 5.0
+            else:
+                match_score -= 15.0
+        
+        # Generate recommendation reason
+        reason_parts = []
+        if preset.preset_type == PresetType.CONSERVATIVE:
+            reason_parts.append("Low risk approach")
+        elif preset.preset_type == PresetType.STANDARD:
+            reason_parts.append("Balanced risk/reward")
+        elif preset.preset_type == PresetType.AGGRESSIVE:
+            reason_parts.append("High potential returns")
+        
+        if preset.strategy_type == StrategyType.NEW_PAIR_SNIPE:
+            reason_parts.append("optimized for new pair detection")
+        elif preset.strategy_type == StrategyType.TRENDING_REENTRY:
+            reason_parts.append("designed for trending momentum")
+        
+        recommendations.append(PresetRecommendation(
+            preset_id=preset.id,
+            name=preset.name,
+            strategy_type=preset.strategy_type,
+            match_score=min(match_score, 100.0),
+            reason=", ".join(reason_parts),
+            is_built_in=True
+        ))
+    
+    # Sort by match score (descending)
+    recommendations.sort(key=lambda x: x.match_score, reverse=True)
+    
+    logger.info(f"Returning {len(recommendations)} recommendations")
+    return recommendations
+
+
+@router.post("/{preset_id}/clone", response_model=PresetDetail, status_code=status.HTTP_201_CREATED)
+async def clone_preset(preset_id: str, name: Optional[str] = None) -> PresetDetail:
+    """
+    Clone an existing preset to create a new custom preset.
+    
+    Args:
+        preset_id: Preset identifier to clone
+        name: Optional name for the cloned preset
+        
+    Returns:
+        Cloned preset details
+    """
+    logger.info(f"Cloning preset: {preset_id}")
+    
+    # Get source preset
+    source_preset = None
+    built_in_presets = _get_built_in_presets()
+    
+    if preset_id in built_in_presets:
+        source_preset = built_in_presets[preset_id]
+    elif preset_id in _custom_presets:
+        source_preset = _custom_presets[preset_id]
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Preset '{preset_id}' not found"
+        )
+    
+    # Create cloned configuration
+    cloned_config = source_preset.config.model_copy()
+    if name:
+        cloned_config.name = name
+    else:
+        cloned_config.name = f"{source_preset.name} (Clone)"
+    
+    # Create new preset
+    return await create_preset(cloned_config)
+
+
+@router.get("/methods/position-sizing", response_model=List[Dict[str, str]])
+async def get_position_sizing_methods() -> List[Dict[str, str]]:
+    """
+    Get available position sizing methods.
+    
+    Returns:
+        List of position sizing methods with descriptions
+    """
+    return [
+        {
+            "method": PositionSizingMethod.FIXED,
+            "name": "Fixed Amount",
+            "description": "Use a fixed USD amount for all trades"
+        },
+        {
+            "method": PositionSizingMethod.PERCENTAGE,
+            "name": "Percentage of Balance",
+            "description": "Use a percentage of available balance"
+        },
+        {
+            "method": PositionSizingMethod.DYNAMIC,
+            "name": "Dynamic Sizing",
+            "description": "Adjust size based on market conditions"
+        },
+        {
+            "method": PositionSizingMethod.KELLY,
+            "name": "Kelly Criterion",
+            "description": "Optimal sizing based on win rate and odds"
         }
-        
-        logger.info(
-            f"Listed {len(methods)} position sizing methods",
-            extra={"module": "presets_api", "trace_id": trace_id}
-        )
-        
-        return methods
-        
-    except Exception as e:
-        logger.error(
-            f"Failed to list position sizing methods: {e}",
-            extra={"module": "presets_api", "trace_id": trace_id}
-        )
-        raise HTTPException(status_code=500, detail=f"Failed to list methods: {str(e)}")
+    ]
 
 
-@router.get("/trigger-conditions")
-async def list_trigger_conditions(
-    trace_id: str = Depends(get_trace_id)
-) -> Dict[str, Dict[str, str]]:
-    """List available trigger conditions with descriptions."""
-    try:
-        conditions = {
-            TriggerCondition.IMMEDIATE.value: {
-                "name": "Immediate",
-                "description": "Execute immediately when signal is generated",
-                "risk_level": "High"
-            },
-            TriggerCondition.LIQUIDITY_THRESHOLD.value: {
-                "name": "Liquidity Threshold",
-                "description": "Wait for minimum liquidity before execution",
-                "risk_level": "Low"
-            },
-            TriggerCondition.BLOCK_DELAY.value: {
-                "name": "Block Delay",
-                "description": "Wait for specified number of blocks",
-                "risk_level": "Medium"
-            },
-            TriggerCondition.TIME_DELAY.value: {
-                "name": "Time Delay",
-                "description": "Wait for specified time before execution",
-                "risk_level": "Medium"
-            },
-            TriggerCondition.VOLUME_SPIKE.value: {
-                "name": "Volume Spike",
-                "description": "Execute when volume spike is detected",
-                "risk_level": "Medium"
-            },
-            TriggerCondition.PRICE_MOVEMENT.value: {
-                "name": "Price Movement",
-                "description": "Execute on favorable price movement",
-                "risk_level": "Medium"
-            }
+@router.get("/conditions/triggers", response_model=List[Dict[str, str]])
+async def get_trigger_conditions() -> List[Dict[str, str]]:
+    """
+    Get available trigger conditions.
+    
+    Returns:
+        List of trigger conditions with descriptions
+    """
+    return [
+        {
+            "condition": TriggerCondition.IMMEDIATE,
+            "name": "Immediate",
+            "description": "Execute trade immediately when opportunity detected"
+        },
+        {
+            "condition": TriggerCondition.LIQUIDITY_THRESHOLD,
+            "name": "Liquidity Threshold",
+            "description": "Wait for minimum liquidity before trading"
+        },
+        {
+            "condition": TriggerCondition.BLOCK_DELAY,
+            "name": "Block Delay",
+            "description": "Wait for specified number of blocks"
+        },
+        {
+            "condition": TriggerCondition.TIME_DELAY,
+            "name": "Time Delay",
+            "description": "Wait for specified time period"
+        },
+        {
+            "condition": TriggerCondition.VOLUME_SPIKE,
+            "name": "Volume Spike",
+            "description": "Trigger on significant volume increase"
+        },
+        {
+            "condition": TriggerCondition.PRICE_MOVEMENT,
+            "name": "Price Movement",
+            "description": "Trigger on price momentum signals"
         }
-        
-        logger.info(
-            f"Listed {len(conditions)} trigger conditions",
-            extra={"module": "presets_api", "trace_id": trace_id}
-        )
-        
-        return conditions
-        
-    except Exception as e:
-        logger.error(
-            f"Failed to list trigger conditions: {e}",
-            extra={"module": "presets_api", "trace_id": trace_id}
-        )
-        raise HTTPException(status_code=500, detail=f"Failed to list conditions: {str(e)}")
+    ]
+
+
+@router.get("/performance/summary", response_model=PerformanceSummary)
+async def get_performance_summary() -> PerformanceSummary:
+    """
+    Get preset performance summary.
+    
+    Returns:
+        Performance summary with preset and trade statistics
+    """
+    built_in_count = len(_get_built_in_presets())
+    custom_count = len(_custom_presets)
+    
+    # Mock trade data (will be replaced with actual data)
+    total_trades = 0
+    successful_trades = 0
+    total_pnl = 0.0
+    
+    win_rate = (successful_trades / total_trades * 100) if total_trades > 0 else 0.0
+    
+    return PerformanceSummary(
+        total_presets=built_in_count + custom_count,
+        built_in_presets=built_in_count,
+        custom_presets=custom_count,
+        total_trades=total_trades,
+        successful_trades=successful_trades,
+        win_rate=win_rate,
+        total_pnl_usd=total_pnl
+    )

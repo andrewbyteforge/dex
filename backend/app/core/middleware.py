@@ -119,33 +119,50 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         """
         response = await call_next(request)
         
-        # Basic security headers
+        # Add security headers
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         
-        # Environment-specific CSP settings
+        # Add CSP header (development-friendly)
         if settings.environment == "development":
-            # Relaxed CSP for development (allows FastAPI docs to work)
             csp = (
-                "default-src 'self'; "
-                "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; "
-                "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+                "default-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+                "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+                "style-src 'self' 'unsafe-inline'; "
                 "img-src 'self' data: https:; "
-                "font-src 'self' https://cdn.jsdelivr.net; "
-                "connect-src 'self' *.walletconnect.com *.walletconnect.org"
+                "connect-src 'self' ws: wss: https:"
             )
         else:
-            # Strict CSP for production
             csp = (
                 "default-src 'self'; "
                 "script-src 'self'; "
                 "style-src 'self' 'unsafe-inline'; "
-                "img-src 'self' data:; "
-                "connect-src 'self' *.walletconnect.com *.walletconnect.org"
+                "img-src 'self' data: https:; "
+                "connect-src 'self' https:"
             )
         
         response.headers["Content-Security-Policy"] = csp
         
         return response
+
+
+def get_trace_id(request: Request) -> str:
+    """
+    FastAPI dependency to get trace ID from request.
+    
+    Args:
+        request: FastAPI request object
+        
+    Returns:
+        Trace ID for request correlation
+    """
+    # Get trace ID from request state (set by middleware)
+    if hasattr(request.state, 'trace_id'):
+        return request.state.trace_id
+    
+    # Fallback: generate new trace ID if middleware didn't set one
+    trace_id = str(uuid.uuid4())
+    request.state.trace_id = trace_id
+    return trace_id

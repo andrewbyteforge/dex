@@ -1,0 +1,14 @@
+{
+  "total_tests": 1,
+  "passed": 0,
+  "failed": 1,
+  "success_rate": 0.0,
+  "results": [
+    {
+      "test": "Health Check",
+      "success": false,
+      "details": "Status: 404",
+      "timestamp": "2025-08-17T13:40:53.345759"
+    }
+  ]
+}

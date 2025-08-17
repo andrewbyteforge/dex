@@ -66,6 +66,11 @@ class ValidationError(DEXSniperException):
 
     pass
 
+class NotFoundError(DEXSniperException):
+    """Raised when a requested resource is not found."""
+
+    pass
+
 
 async def exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """

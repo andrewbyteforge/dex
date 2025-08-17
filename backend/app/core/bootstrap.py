@@ -156,7 +156,7 @@ def create_app() -> FastAPI:
     # Exceptions
     app.add_exception_handler(Exception, exception_handler)
 
-    # Routers (v1) - TESTING WITH QUOTES
+    # Routers (v1) - TESTING WITH QUOTES AND PRESETS
     api_router = APIRouter(prefix="/api/v1")
 
     # Health API
@@ -190,6 +190,14 @@ def create_app() -> FastAPI:
         logging.getLogger("app.bootstrap").info("Trades API loaded successfully")
     except Exception as e:
         logging.getLogger("app.bootstrap").warning(f"Trades API not available: {e}")
+
+    # Presets API (Phase 5.2) - SIMPLE VERSION
+    try:
+        from ..api.presets_simple import router as presets_router
+        api_router.include_router(presets_router, tags=["Presets"])
+        logging.getLogger("app.bootstrap").info("Presets API (simple) loaded successfully")
+    except Exception as e:
+        logging.getLogger("app.bootstrap").warning(f"Presets API not available: {e}")
 
     # Database testing routes (development only)
     if settings.environment == "development":
