@@ -46,7 +46,6 @@ class JupiterAdapter:
         }
     
     async def get_quote(
-        self,
         chain: str,
         token_in: str,
         token_out: str,
