@@ -5,14 +5,17 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import AsyncGenerator, List, Optional, Sequence
+from typing import AsyncGenerator, List, Optional, Sequence, Dict, Any
 
 from sqlalchemy import and_, desc, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from .database import get_db_session
-from .models import LedgerEntry, TokenMetadata, Transaction, User, Wallet
+from .models import (
+    LedgerEntry, TokenMetadata, Transaction, User, Wallet,
+    SafetyEvent, BlacklistedToken
+)
 
 
 class BaseRepository:
@@ -178,6 +181,253 @@ class WalletRepository(BaseRepository):
         )
         await self.session.execute(stmt)
         await self.session.commit()
+
+
+class SafetyRepository(BaseRepository):
+    """
+    Repository for safety events and blacklisted tokens.
+    
+    Manages safety-related database operations including event logging,
+    blacklist management, and risk tracking.
+    """
+    
+    async def log_safety_event(
+        self,
+        event_type: str,
+        severity: str,
+        reason: str,
+        chain: Optional[str] = None,
+        token_address: Optional[str] = None,
+        wallet_address: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+        risk_score: Optional[float] = None,
+        action: Optional[str] = None,
+        trace_id: Optional[str] = None
+    ) -> SafetyEvent:
+        """
+        Log a safety event.
+        
+        Args:
+            event_type: Type of event (block, warning, intervention, kill_switch)
+            severity: Severity level (low, medium, high, critical)
+            reason: Reason for the event
+            chain: Blockchain network
+            token_address: Token contract address
+            wallet_address: Wallet address
+            details: Additional event details
+            risk_score: Associated risk score
+            action: Action taken
+            trace_id: Trace ID for correlation
+            
+        Returns:
+            Created SafetyEvent instance
+        """
+        event = SafetyEvent(
+            event_type=event_type,
+            severity=severity,
+            reason=reason,
+            chain=chain,
+            token_address=token_address,
+            wallet_address=wallet_address,
+            details=details,
+            risk_score=risk_score,
+            action=action,
+            trace_id=trace_id,
+            timestamp=datetime.now(timezone.utc)
+        )
+        
+        self.session.add(event)
+        await self.session.commit()
+        await self.session.refresh(event)
+        
+        return event
+    
+    async def get_recent_events(
+        self,
+        limit: int = 100,
+        severity: Optional[str] = None,
+        event_type: Optional[str] = None,
+        resolved: Optional[bool] = None
+    ) -> List[SafetyEvent]:
+        """
+        Get recent safety events with filtering.
+        
+        Args:
+            limit: Maximum number of events to return
+            severity: Filter by severity level
+            event_type: Filter by event type
+            resolved: Filter by resolution status
+            
+        Returns:
+            List of SafetyEvent instances
+        """
+        conditions = []
+        
+        if severity:
+            conditions.append(SafetyEvent.severity == severity)
+        if event_type:
+            conditions.append(SafetyEvent.event_type == event_type)
+        if resolved is not None:
+            conditions.append(SafetyEvent.resolved == resolved)
+        
+        stmt = select(SafetyEvent)
+        if conditions:
+            stmt = stmt.where(and_(*conditions))
+        
+        stmt = stmt.order_by(desc(SafetyEvent.timestamp)).limit(limit)
+        
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+    
+    async def resolve_event(
+        self,
+        event_id: int,
+        resolution_notes: Optional[str] = None
+    ) -> None:
+        """
+        Mark a safety event as resolved.
+        
+        Args:
+            event_id: Event ID to resolve
+            resolution_notes: Optional resolution notes
+        """
+        stmt = (
+            update(SafetyEvent)
+            .where(SafetyEvent.id == event_id)
+            .values(
+                resolved=True,
+                resolved_at=datetime.now(timezone.utc),
+                resolution_notes=resolution_notes
+            )
+        )
+        await self.session.execute(stmt)
+        await self.session.commit()
+    
+    async def add_to_blacklist(
+        self,
+        token_address: str,
+        chain: str,
+        reason: str,
+        severity: str = "high",
+        category: Optional[str] = None,
+        evidence: Optional[Dict[str, Any]] = None,
+        reported_by: Optional[str] = None,
+        reference_url: Optional[str] = None,
+        notes: Optional[str] = None
+    ) -> BlacklistedToken:
+        """
+        Add a token to the blacklist.
+        
+        Args:
+            token_address: Token contract address
+            chain: Blockchain network
+            reason: Reason for blacklisting
+            severity: Severity level
+            category: Category (scam, honeypot, rugpull, etc.)
+            evidence: Supporting evidence
+            reported_by: Reporter identifier
+            reference_url: Reference URL
+            notes: Additional notes
+            
+        Returns:
+            Created BlacklistedToken instance
+        """
+        # Check if already blacklisted
+        stmt = select(BlacklistedToken).where(
+            and_(
+                BlacklistedToken.token_address == token_address,
+                BlacklistedToken.chain == chain,
+                BlacklistedToken.is_active == True
+            )
+        )
+        result = await self.session.execute(stmt)
+        existing = result.scalar_one_or_none()
+        
+        if existing:
+            return existing
+        
+        blacklisted = BlacklistedToken(
+            token_address=token_address,
+            chain=chain,
+            reason=reason,
+            severity=severity,
+            category=category,
+            evidence=evidence,
+            reported_by=reported_by,
+            reference_url=reference_url,
+            notes=notes,
+            blacklisted_at=datetime.now(timezone.utc)
+        )
+        
+        self.session.add(blacklisted)
+        await self.session.commit()
+        await self.session.refresh(blacklisted)
+        
+        return blacklisted
+    
+    async def is_blacklisted(
+        self,
+        token_address: str,
+        chain: str
+    ) -> bool:
+        """
+        Check if a token is blacklisted.
+        
+        Args:
+            token_address: Token contract address
+            chain: Blockchain network
+            
+        Returns:
+            True if blacklisted, False otherwise
+        """
+        stmt = select(BlacklistedToken).where(
+            and_(
+                BlacklistedToken.token_address == token_address,
+                BlacklistedToken.chain == chain,
+                BlacklistedToken.is_active == True
+            )
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none() is not None
+    
+    async def get_blacklisted_tokens(
+        self,
+        chain: Optional[str] = None,
+        severity: Optional[str] = None,
+        category: Optional[str] = None,
+        active_only: bool = True
+    ) -> List[BlacklistedToken]:
+        """
+        Get blacklisted tokens with filtering.
+        
+        Args:
+            chain: Filter by chain
+            severity: Filter by severity
+            category: Filter by category
+            active_only: Only return active blacklistings
+            
+        Returns:
+            List of BlacklistedToken instances
+        """
+        conditions = []
+        
+        if chain:
+            conditions.append(BlacklistedToken.chain == chain)
+        if severity:
+            conditions.append(BlacklistedToken.severity == severity)
+        if category:
+            conditions.append(BlacklistedToken.category == category)
+        if active_only:
+            conditions.append(BlacklistedToken.is_active == True)
+        
+        stmt = select(BlacklistedToken)
+        if conditions:
+            stmt = stmt.where(and_(*conditions))
+        
+        stmt = stmt.order_by(desc(BlacklistedToken.blacklisted_at))
+        
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
 
 
 class TransactionRepository(BaseRepository):
@@ -505,6 +755,12 @@ async def get_wallet_repository() -> AsyncGenerator[WalletRepository, None]:
     """FastAPI dependency to get WalletRepository instance."""
     async for session in get_db_session():
         yield WalletRepository(session)
+
+
+async def get_safety_repository() -> AsyncGenerator[SafetyRepository, None]:
+    """FastAPI dependency to get SafetyRepository instance."""
+    async for session in get_db_session():
+        yield SafetyRepository(session)
 
 
 async def get_transaction_repository() -> AsyncGenerator[TransactionRepository, None]:

@@ -1,6 +1,4 @@
-"""
-Trade execution engine with preview, validation, and execution capabilities.
-"""
+"""Trade execution engine with preview, validation, and execution capabilities."""
 from __future__ import annotations
 
 import asyncio
@@ -9,98 +7,22 @@ import time
 import uuid
 from decimal import Decimal
 from enum import Enum
-from typing import Dict, List, Optional, Tuple
-from .protocols import TradeExecutorProtocol
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
+
 from pydantic import BaseModel, Field
-from .protocols import TradeExecutorProtocol
+
 from ..core.logging import get_logger
 from ..core.settings import settings
-from .nonce_manager import NonceManager
-from .canary import CanaryTradeValidator
-from ..storage.models import TradeStatus as DBTradeStatus
-from ..storage.repositories import TransactionRepository
-from ..ledger.ledger_writer import LedgerWriter
 from .models import TradeRequest, TradeResult, TradePreview, TradeStatus, TradeType
+from .protocols import TradeExecutorProtocol
+
+if TYPE_CHECKING:
+    from .nonce_manager import NonceManager
+    from .canary import CanaryTradeValidator
+    from ..storage.repositories import TransactionRepository
+    from ..ledger.ledger_writer import LedgerWriter
 
 logger = get_logger(__name__)
-
-
-class TradeStatus(str, Enum):
-    """Trade execution status."""
-    PENDING = "pending"
-    BUILDING = "building"
-    APPROVING = "approving"
-    EXECUTING = "executing"
-    SUBMITTED = "submitted"
-    CONFIRMED = "confirmed"
-    FAILED = "failed"
-    REVERTED = "reverted"
-    CANCELLED = "cancelled"
-
-
-class TradeType(str, Enum):
-    """Trade type classification."""
-    MANUAL = "manual"
-    AUTOTRADE = "autotrade"
-    CANARY = "canary"
-    REVERT_TEST = "revert_test"
-
-
-class TradePreview(BaseModel):
-    """Trade preview with validation results."""
-    
-    trace_id: str
-    input_token: str
-    output_token: str
-    input_amount: str
-    expected_output: str
-    minimum_output: str
-    price: str
-    price_impact: str
-    gas_estimate: str
-    gas_price: str
-    total_cost_native: str
-    total_cost_usd: Optional[str] = None
-    route: List[str]
-    dex: str
-    slippage_bps: int
-    deadline_seconds: int
-    valid: bool
-    validation_errors: List[str] = Field(default_factory=list)
-    warnings: List[str] = Field(default_factory=list)
-    execution_time_ms: float
-
-
-class TradeResult(BaseModel):
-    """Trade execution result."""
-    
-    trace_id: str
-    status: TradeStatus
-    transaction_id: Optional[str] = None
-    tx_hash: Optional[str] = None
-    block_number: Optional[int] = None
-    gas_used: Optional[str] = None
-    actual_output: Optional[str] = None
-    actual_price: Optional[str] = None
-    error_message: Optional[str] = None
-    execution_time_ms: float
-
-
-class TradeRequest(BaseModel):
-    """Trade execution request."""
-    
-    input_token: str = Field(..., description="Input token address")
-    output_token: str = Field(..., description="Output token address")
-    amount_in: str = Field(..., description="Input amount in smallest units")
-    minimum_amount_out: str = Field(..., description="Minimum output amount")
-    chain: str = Field(..., description="Blockchain network")
-    dex: str = Field(..., description="DEX to execute on")
-    route: List[str] = Field(..., description="Trading route")
-    slippage_bps: int = Field(default=50, description="Slippage tolerance in basis points")
-    deadline_seconds: int = Field(default=300, description="Transaction deadline in seconds")
-    wallet_address: str = Field(..., description="Wallet address")
-    trade_type: TradeType = Field(default=TradeType.MANUAL, description="Trade type")
-    gas_price_gwei: Optional[str] = Field(default=None, description="Custom gas price in Gwei")
 
 
 class TradeExecutor(TradeExecutorProtocol):
@@ -108,10 +30,10 @@ class TradeExecutor(TradeExecutorProtocol):
     
     def __init__(
         self,
-        nonce_manager: NonceManager,
-        canary_validator: CanaryTradeValidator,
-        transaction_repo: TransactionRepository,
-        ledger_writer: LedgerWriter,
+        nonce_manager: 'NonceManager',
+        canary_validator: 'CanaryTradeValidator',
+        transaction_repo: 'TransactionRepository',
+        ledger_writer: 'LedgerWriter',
     ):
         """
         Initialize trade executor.

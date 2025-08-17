@@ -1,23 +1,29 @@
-"""
-Trade execution API endpoints for manual and automated trading.
-"""
+"""Trade execution API endpoints for manual and automated trading."""
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
+from enum import Enum
+from decimal import Decimal
+from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Query
+from pydantic import BaseModel, Field, validator
 
+from ..core.config import settings
 from ..core.dependencies import get_chain_clients, get_trade_executor
 from ..core.logging import get_logger
+from ..trading.executor import TradeExecutor
 from ..trading.models import (
-    TradeRequest, 
-    TradeResult, 
-    TradePreview, 
-    TradeStatus, 
+    TradeRequest,
+    TradeResult,
+    TradePreview,
+    TradeStatus,
     TradeType
 )
+from ..strategy.risk_manager import RiskManager
+from ..chains.evm_client import EvmClient
+from ..chains.solana_client import SolanaClient
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/trades", tags=["trades"])

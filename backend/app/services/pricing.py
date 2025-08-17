@@ -1,12 +1,19 @@
 """
 Quote aggregation engine for multi-DEX price comparison and routing.
+Enhanced with PricingService for token price feeds.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime, timedelta
+from dataclasses import dataclass
+from enum import Enum
+
+import httpx
+from pydantic import BaseModel
 
 from ..core.settings import settings
 from ..dex.uniswap_v2 import pancake_adapter, quickswap_adapter, uniswap_v2_adapter
@@ -16,6 +23,240 @@ logger = logging.getLogger(__name__)
 # Module-level constants
 MIN_LIQUIDITY_THRESHOLD_USD = Decimal("10000")  # $10k minimum liquidity
 MAX_PRICE_DEVIATION = Decimal("1.5")  # 1.5x max deviation from AMM mid
+
+
+class PriceSource(str, Enum):
+    """Price data sources."""
+    
+    COINGECKO = "coingecko"
+    DEXSCREENER = "dexscreener"
+    ONCHAIN = "onchain"
+    AGGREGATED = "aggregated"
+
+
+@dataclass
+class TokenPrice:
+    """
+    Token price information.
+    
+    Attributes:
+        token_address: Token contract address
+        chain: Blockchain network
+        price_usd: Price in USD
+        price_native: Price in native token (ETH, BNB, etc.)
+        liquidity_usd: Total liquidity in USD
+        volume_24h: 24-hour trading volume
+        price_change_24h: 24-hour price change percentage
+        last_updated: Timestamp of last update
+        source: Price data source
+    """
+    
+    token_address: str
+    chain: str
+    price_usd: Decimal
+    price_native: Decimal
+    liquidity_usd: Optional[Decimal] = None
+    volume_24h: Optional[Decimal] = None
+    price_change_24h: Optional[float] = None
+    last_updated: datetime = None
+    source: PriceSource = PriceSource.AGGREGATED
+
+
+class PriceRequest(BaseModel):
+    """Price request model."""
+    
+    token_address: str
+    chain: str
+    amount: Optional[str] = None
+    include_gas: bool = False
+
+
+class PriceResponse(BaseModel):
+    """Price response model."""
+    
+    token_address: str
+    chain: str
+    price_usd: str
+    price_native: str
+    liquidity_usd: Optional[str] = None
+    volume_24h: Optional[str] = None
+    price_change_24h: Optional[float] = None
+    market_cap: Optional[str] = None
+    fully_diluted_valuation: Optional[str] = None
+    timestamp: datetime
+
+
+class PricingService:
+    """
+    Service for fetching and managing token prices.
+    
+    Provides methods for getting current prices, historical data,
+    and price feeds from multiple sources.
+    """
+    
+    def __init__(self):
+        """Initialize pricing service."""
+        self.cache: Dict[str, TokenPrice] = {}
+        self.cache_ttl = 30  # Cache TTL in seconds
+        self.coingecko_api = "https://api.coingecko.com/api/v3"
+        self.dexscreener_api = "https://api.dexscreener.com/latest"
+        self._http_client = None
+    
+    async def get_token_price(
+        self,
+        token_address: str,
+        chain: str,
+        use_cache: bool = True
+    ) -> Optional[TokenPrice]:
+        """
+        Get current token price.
+        
+        Args:
+            token_address: Token contract address
+            chain: Blockchain network
+            use_cache: Whether to use cached prices
+            
+        Returns:
+            Token price information or None if not found
+        """
+        cache_key = f"{chain}:{token_address.lower()}"
+        
+        # Check cache
+        if use_cache and cache_key in self.cache:
+            cached_price = self.cache[cache_key]
+            if cached_price.last_updated:
+                age = datetime.utcnow() - cached_price.last_updated
+                if age.total_seconds() < self.cache_ttl:
+                    return cached_price
+        
+        # Fetch fresh price
+        try:
+            # Try DexScreener first
+            price = await self._fetch_dexscreener_price(token_address, chain)
+            
+            if not price:
+                # Fallback to CoinGecko
+                price = await self._fetch_coingecko_price(token_address, chain)
+            
+            if price:
+                price.last_updated = datetime.utcnow()
+                self.cache[cache_key] = price
+                return price
+                
+        except Exception as e:
+            logger.error(f"Failed to fetch price for {token_address}: {e}")
+        
+        return None
+    
+    async def _fetch_dexscreener_price(
+        self,
+        token_address: str,
+        chain: str
+    ) -> Optional[TokenPrice]:
+        """
+        Fetch price from DexScreener API.
+        
+        Args:
+            token_address: Token contract address
+            chain: Blockchain network
+            
+        Returns:
+            Token price or None
+        """
+        # Map chain names to DexScreener chain IDs
+        chain_map = {
+            "ethereum": "ethereum",
+            "bsc": "bsc",
+            "polygon": "polygon",
+            "base": "base",
+            "arbitrum": "arbitrum",
+            "solana": "solana"
+        }
+        
+        dex_chain = chain_map.get(chain.lower())
+        if not dex_chain:
+            return None
+        
+        # Mock implementation for development
+        # In production, make actual API call
+        mock_price = TokenPrice(
+            token_address=token_address,
+            chain=chain,
+            price_usd=Decimal("1.0"),
+            price_native=Decimal("0.0005"),
+            liquidity_usd=Decimal("100000"),
+            volume_24h=Decimal("50000"),
+            price_change_24h=5.2,
+            source=PriceSource.DEXSCREENER
+        )
+        
+        return mock_price
+    
+    async def _fetch_coingecko_price(
+        self,
+        token_address: str,
+        chain: str
+    ) -> Optional[TokenPrice]:
+        """
+        Fetch price from CoinGecko API.
+        
+        Args:
+            token_address: Token contract address
+            chain: Blockchain network
+            
+        Returns:
+            Token price or None
+        """
+        # Mock implementation for development
+        # In production, make actual API call
+        return None
+    
+    async def get_native_token_price(self, chain: str) -> Decimal:
+        """
+        Get native token price (ETH, BNB, MATIC, etc.).
+        
+        Args:
+            chain: Blockchain network
+            
+        Returns:
+            Native token price in USD
+        """
+        # Mock prices for development
+        native_prices = {
+            "ethereum": Decimal("2000"),
+            "bsc": Decimal("250"),
+            "polygon": Decimal("0.8"),
+            "base": Decimal("2000"),
+            "arbitrum": Decimal("2000"),
+            "solana": Decimal("40")
+        }
+        
+        return native_prices.get(chain.lower(), Decimal("1"))
+    
+    def calculate_price_impact(
+        self,
+        amount_in: Decimal,
+        amount_out: Decimal,
+        spot_price: Decimal
+    ) -> Decimal:
+        """
+        Calculate price impact of a trade.
+        
+        Args:
+            amount_in: Input amount
+            amount_out: Output amount
+            spot_price: Current spot price
+            
+        Returns:
+            Price impact as decimal (0.01 = 1%)
+        """
+        if amount_in == 0 or spot_price == 0:
+            return Decimal("0")
+        
+        execution_price = amount_out / amount_in
+        price_impact = abs(execution_price - spot_price) / spot_price
+        
+        return price_impact
 
 
 class QuoteEngine:
@@ -34,6 +275,7 @@ class QuoteEngine:
             "polygon": [quickswap_adapter],
         }
         self._aggregator_warm_up_attempts: Dict[str, int] = {}
+        self.pricing_service = PricingService()
     
     async def get_best_quote(
         self,
@@ -271,5 +513,6 @@ class QuoteEngine:
         }
 
 
-# Global quote engine instance
+# Global instances
 quote_engine = QuoteEngine()
+pricing_service = PricingService()

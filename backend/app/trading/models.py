@@ -1,6 +1,4 @@
-"""
-Trading models and data structures for DEX Sniper Pro.
-
+"""Trading models and data structures for DEX Sniper Pro.
 Contains all trading-related models to avoid circular imports.
 """
 from __future__ import annotations
@@ -19,6 +17,7 @@ class TradeStatus(str, Enum):
     BUILDING = "building"
     APPROVING = "approving"
     EXECUTING = "executing"
+    SUBMITTING = "submitting"
     SUBMITTED = "submitted"
     CONFIRMED = "confirmed"
     FAILED = "failed"
@@ -70,10 +69,14 @@ class TradePreview(BaseModel):
     """Trade preview with cost estimation."""
     
     trace_id: str = Field(..., description="Trace identifier")
+    input_token: str = Field(..., description="Input token address")
+    output_token: str = Field(..., description="Output token address")
+    input_amount: str = Field(..., description="Input amount")
     expected_output: str = Field(..., description="Expected output amount")
     minimum_output: str = Field(..., description="Minimum guaranteed output")
+    price: str = Field(..., description="Execution price")
     price_impact: str = Field(..., description="Price impact percentage")
-    estimated_gas: str = Field(..., description="Estimated gas units")
+    gas_estimate: str = Field(..., description="Estimated gas units")  # Changed from estimated_gas
     gas_price: str = Field(..., description="Gas price in gwei")
     total_cost_native: str = Field(..., description="Total cost in native token")
     total_cost_usd: Optional[str] = Field(default=None, description="Total cost in USD")
