@@ -1,5 +1,5 @@
 """
-Application bootstrap and initialization.
+Application bootstrap and initialization - MINIMAL VERSION FOR TESTING.
 """
 from __future__ import annotations
 
@@ -65,7 +65,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.service_mode = getattr(settings, "global_service_mode", "free")
 
     log.info(
-        "Starting DEX Sniper Pro",
+        "Starting DEX Sniper Pro - MINIMAL VERSION",
         extra={
             "extra_data": {
                 "environment": app.state.environment,
@@ -81,58 +81,27 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         log.info("Database initialized successfully with WAL mode")
     except Exception as e:
         log.error(f"Failed to initialize database: {e}")
-        raise
+        # Don't raise - allow app to start for testing
+        log.warning("Continuing without database for testing")
 
-    # Initialize RPC pools and chain clients (Phase 2.1)
-    try:
-        from ..chains.rpc_pool import rpc_pool
-        from ..chains.evm_client import evm_client
-        from ..chains.solana_client import solana_client
-        
-        await rpc_pool.initialize()
-        await evm_client.initialize()
-        await solana_client.initialize()
-        log.info("RPC pools and chain clients initialized successfully")
-        
-        # Store references in app state for access in endpoints
-        app.state.rpc_pool = rpc_pool
-        app.state.evm_client = evm_client
-        app.state.solana_client = solana_client
-        
-    except Exception as e:
-        log.error(f"Failed to initialize chain clients: {e}")
-        # Don't raise - allow app to start without chains for development
-        app.state.rpc_pool = None
-        app.state.evm_client = None
-        app.state.solana_client = None
-
-    # TODO: Initialize background tasks / schedulers (later phases)
+    # Skip RPC initialization for now
+    app.state.rpc_pool = None
+    app.state.evm_client = None
+    app.state.solana_client = None
+    log.info("Skipping RPC/chain client initialization for testing")
 
     try:
         yield
     finally:
         # --- Shutdown ---
         log.info(
-            "Shutting down DEX Sniper Pro",
+            "Shutting down DEX Sniper Pro - MINIMAL VERSION",
             extra={
                 "extra_data": {
                     "uptime_sec": (datetime.now(timezone.utc) - app.state.started_at).total_seconds()
                 }
             },
         )
-
-        # Cleanup RPC connections and chain clients
-        try:
-            if hasattr(app.state, 'rpc_pool') and app.state.rpc_pool:
-                await app.state.rpc_pool.close()
-            if hasattr(app.state, 'evm_client') and app.state.evm_client:
-                # EVM client doesn't have close method yet, but prepare for it
-                pass
-            if hasattr(app.state, 'solana_client') and app.state.solana_client:
-                await app.state.solana_client.close()
-            log.info("RPC connections and chain clients closed")
-        except Exception as e:
-            log.error(f"Error closing RPC connections: {e}")
 
         # Cleanup database connections
         try:
@@ -141,23 +110,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception as e:
             log.error(f"Error closing database: {e}")
 
-        # TODO: Stop background tasks
-
         cleanup_logging()
 
 
 def create_app() -> FastAPI:
     """
-    Create and configure FastAPI application.
+    Create and configure FastAPI application - MINIMAL VERSION.
     """
     # Environment-aware docs: disable in prod unless debug is true
     env = getattr(settings, "environment", "development").lower()
     docs_enabled = settings.debug or env != "production"
 
     app = FastAPI(
-        title="DEX Sniper Pro",
-        description="Multi-chain DEX sniping and autotrading platform",
-        version="1.0.0",
+        title="DEX Sniper Pro - Testing",
+        description="Multi-chain DEX sniping platform - Minimal testing version",
+        version="1.0.0-testing",
         debug=settings.debug,
         lifespan=lifespan,
         docs_url="/docs" if docs_enabled else None,
@@ -189,37 +156,38 @@ def create_app() -> FastAPI:
     # Exceptions
     app.add_exception_handler(Exception, exception_handler)
 
-    # Routers (v1)
+    # Routers (v1) - MINIMAL VERSION
     api_router = APIRouter(prefix="/api/v1")
 
-    # Health
-    from ..api.health import router as health_router  # local import to avoid early imports
-    api_router.include_router(health_router, tags=["Health"])
-
-    # Quotes API (Phase 3.1)
-    from ..api.quotes import router as quotes_router
-    api_router.include_router(quotes_router, tags=["Quotes"])
-
-    # Trade API (Phase 3.2)
-    from ..api.trades import router as trades_router
-    api_router.include_router(trades_router, tags=["Trades"])
+    # Health ONLY for testing
+    try:
+        from ..api.health import router as health_router
+        api_router.include_router(health_router, tags=["Health"])
+        logging.getLogger("app.bootstrap").info("Health API loaded successfully")
+    except Exception as e:
+        logging.getLogger("app.bootstrap").error(f"Failed to load health API: {e}")
 
     # Database testing routes (development only)
     if settings.environment == "development":
-        from ..api.database import router as database_router
-        api_router.include_router(database_router, tags=["Database"])
+        try:
+            from ..api.database import router as database_router
+            api_router.include_router(database_router, tags=["Database"])
+            logging.getLogger("app.bootstrap").info("Database API loaded successfully")
+        except Exception as e:
+            logging.getLogger("app.bootstrap").warning(f"Database API not available: {e}")
 
     app.include_router(api_router)
 
-    # Basic root ping (optional, handy for reverse proxies)
+    # Basic root ping
     @app.get("/", tags=["Meta"])
     async def root() -> dict:
         return {
-            "app": "DEX Sniper Pro",
-            "version": "1.0.0",
+            "app": "DEX Sniper Pro - Testing",
+            "version": "1.0.0-testing",
             "environment": env,
             "service_mode": getattr(settings, "global_service_mode", "free"),
             "started_at": getattr(app.state, "started_at", None),
+            "status": "minimal_testing_version",
         }
 
     return app

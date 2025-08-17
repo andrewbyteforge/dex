@@ -22,6 +22,20 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
 
+from enum import Enum
+
+class TradeStatus(str, Enum):
+    """Trade execution status."""
+    PENDING = "pending"
+    BUILDING = "building"
+    APPROVING = "approving"
+    EXECUTING = "executing"
+    SUBMITTED = "submitted"
+    CONFIRMED = "confirmed"
+    FAILED = "failed"
+    REVERTED = "reverted"
+    CANCELLED = "cancelled"
+
 
 class User(Base):
     """User session and configuration model."""

@@ -39,3 +39,18 @@ async def get_chain_clients() -> Dict[str, Any]:
         "solana": await get_solana_client(),
         "rpc_pool": await get_rpc_pool()
     }
+
+async def get_trade_executor():
+    """FastAPI dependency to get trade executor instance."""
+    # Simple mock for now until we test the basic system
+    class MockTradeExecutor:
+        def __init__(self):
+            self.active_trades = {}
+        
+        async def preview_trade(self, *args, **kwargs):
+            return {"status": "mock"}
+        
+        async def execute_trade(self, *args, **kwargs):
+            return {"status": "mock"}
+    
+    return MockTradeExecutor()
