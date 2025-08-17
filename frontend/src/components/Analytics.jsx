@@ -82,81 +82,85 @@ function Analytics() {
     
     try {
       const baseUrl = 'http://127.0.0.1:8000/api/v1/analytics';
-      const fetchPromises = [];
-
-      if (dataType === 'all' || dataType === 'summary') {
-        fetchPromises.push(
-          fetch(`${baseUrl}/summary`)
-            .then(res => res.json())
-            .then(data => ({ type: 'summary', data }))
-        );
-      }
-
-      if (dataType === 'all' || dataType === 'performance') {
-        fetchPromises.push(
-          fetch(`${baseUrl}/performance?period=${selectedPeriod}`)
-            .then(res => res.json())
-            .then(data => ({ type: 'performance', data: data.data }))
-        );
-      }
-
-      if (dataType === 'all' || dataType === 'realtime') {
-        fetchPromises.push(
-          fetch(`${baseUrl}/realtime`)
-            .then(res => res.json())
-            .then(data => ({ type: 'realtime', data: data.data }))
-        );
-      }
-
-      if (dataType === 'all' || dataType === 'kpi') {
-        fetchPromises.push(
-          fetch(`${baseUrl}/kpi?period=${selectedPeriod}`)
-            .then(res => res.json())
-            .then(data => ({ type: 'kpi', data: data.data }))
-        );
-      }
-
-      if (dataType === 'all' || dataType === 'alerts') {
-        fetchPromises.push(
-          fetch(`${baseUrl}/alerts`)
-            .then(res => res.json())
-            .then(data => ({ type: 'alerts', data: data.data }))
-        );
-      }
-
-      if (dataType === 'all' || dataType === 'comparisons') {
-        fetchPromises.push(
-          fetch(`${baseUrl}/strategies/comparison?period=${selectedPeriod}`)
-            .then(res => res.json())
-            .then(data => ({ type: 'strategies', data })),
-          fetch(`${baseUrl}/presets/comparison?period=${selectedPeriod}`)
-            .then(res => res.json())
-            .then(data => ({ type: 'presets', data })),
-          fetch(`${baseUrl}/chains/comparison?period=${selectedPeriod}`)
-            .then(res => res.json())
-            .then(data => ({ type: 'chains', data }))
-        );
-      }
-
-      const results = await Promise.all(fetchPromises);
       
-      setAnalyticsData(prev => {
-        const updated = { ...prev };
-        
-        results.forEach(result => {
-          if (result.type === 'strategies' || result.type === 'presets' || result.type === 'chains') {
-            updated.comparisons[result.type] = result.data;
+      // Fetch summary data
+      if (dataType === 'all' || dataType === 'summary') {
+        try {
+          const response = await fetch(`${baseUrl}/summary`);
+          if (response.ok) {
+            const data = await response.json();
+            setAnalyticsData(prev => ({ ...prev, summary: data }));
           } else {
-            updated[result.type] = result.data;
+            console.error('Summary API failed:', response.status, response.statusText);
           }
-        });
-        
-        return updated;
-      });
+        } catch (err) {
+          console.error('Summary API error:', err);
+        }
+      }
+
+      // Fetch performance data
+      if (dataType === 'all' || dataType === 'performance') {
+        try {
+          const response = await fetch(`${baseUrl}/performance?period=${selectedPeriod}`);
+          if (response.ok) {
+            const result = await response.json();
+            setAnalyticsData(prev => ({ ...prev, performance: result.data || result }));
+          } else {
+            console.error('Performance API failed:', response.status, response.statusText);
+          }
+        } catch (err) {
+          console.error('Performance API error:', err);
+        }
+      }
+
+      // Fetch real-time data
+      if (dataType === 'all' || dataType === 'realtime') {
+        try {
+          const response = await fetch(`${baseUrl}/realtime`);
+          if (response.ok) {
+            const result = await response.json();
+            setAnalyticsData(prev => ({ ...prev, realtime: result.data || result }));
+          } else {
+            console.error('Realtime API failed:', response.status, response.statusText);
+          }
+        } catch (err) {
+          console.error('Realtime API error:', err);
+        }
+      }
+
+      // Fetch KPI data
+      if (dataType === 'all' || dataType === 'kpi') {
+        try {
+          const response = await fetch(`${baseUrl}/kpi?period=${selectedPeriod}`);
+          if (response.ok) {
+            const result = await response.json();
+            setAnalyticsData(prev => ({ ...prev, kpi: result.data || result }));
+          } else {
+            console.error('KPI API failed:', response.status, response.statusText);
+          }
+        } catch (err) {
+          console.error('KPI API error:', err);
+        }
+      }
+
+      // Fetch alerts data
+      if (dataType === 'all' || dataType === 'alerts') {
+        try {
+          const response = await fetch(`${baseUrl}/alerts`);
+          if (response.ok) {
+            const result = await response.json();
+            setAnalyticsData(prev => ({ ...prev, alerts: result.data || [] }));
+          } else {
+            console.error('Alerts API failed:', response.status, response.statusText);
+          }
+        } catch (err) {
+          console.error('Alerts API error:', err);
+        }
+      }
 
     } catch (err) {
       console.error('Failed to fetch analytics data:', err);
-      setError('Failed to load analytics data. Please try again.');
+      setError('Failed to load analytics data. Please ensure the backend server is running on port 8000.');
     } finally {
       setLoading(false);
     }
@@ -215,7 +219,7 @@ function Analytics() {
               <div className="d-flex justify-content-between">
                 <div>
                   <h6 className="card-subtitle mb-2 text-muted">Total PnL</h6>
-                  <h4 className={`mb-0 ${summary?.total_pnl_usd >= 0 ? 'text-success' : 'text-danger'}`}>
+                  <h4 className={`mb-0 ${(summary?.total_pnl_usd || 0) >= 0 ? 'text-success' : 'text-danger'}`}>
                     {formatCurrency(summary?.total_pnl_usd)}
                   </h4>
                 </div>
@@ -253,7 +257,7 @@ function Analytics() {
               <div className="d-flex justify-content-between">
                 <div>
                   <h6 className="card-subtitle mb-2 text-muted">Today's PnL</h6>
-                  <h4 className={`mb-0 ${realtime?.daily_pnl_usd >= 0 ? 'text-success' : 'text-danger'}`}>
+                  <h4 className={`mb-0 ${(realtime?.daily_pnl_usd || 0) >= 0 ? 'text-success' : 'text-danger'}`}>
                     {formatCurrency(realtime?.daily_pnl_usd)}
                   </h4>
                 </div>
@@ -271,7 +275,7 @@ function Analytics() {
               <div className="d-flex justify-content-between">
                 <div>
                   <h6 className="card-subtitle mb-2 text-muted">Active Alerts</h6>
-                  <h4 className={`mb-0 ${alerts?.length > 0 ? 'text-warning' : 'text-success'}`}>
+                  <h4 className={`mb-0 ${(alerts?.length || 0) > 0 ? 'text-warning' : 'text-success'}`}>
                     {alerts?.length || 0}
                   </h4>
                 </div>
@@ -397,7 +401,15 @@ function Analytics() {
     const { performance, kpi } = analyticsData;
 
     if (!performance) {
-      return <div className="text-center py-4">No performance data available</div>;
+      return (
+        <Row>
+          <Col lg={12}>
+            <Alert variant="info">
+              Performance data will be displayed here once trading activity begins.
+            </Alert>
+          </Col>
+        </Row>
+      );
     }
 
     return (
@@ -542,13 +554,31 @@ function Analytics() {
     return (
       <Row>
         <Col lg={12}>
-          {renderComparisonChart(comparisons.strategies, 'Strategy Performance')}
+          {Object.keys(comparisons.strategies).length > 0 ? (
+            renderComparisonChart(comparisons.strategies, 'Strategy Performance')
+          ) : (
+            <Alert variant="info">
+              Strategy comparison will be available once multiple strategies have trading data.
+            </Alert>
+          )}
         </Col>
         <Col lg={12}>
-          {renderComparisonChart(comparisons.presets, 'Preset Performance')}
+          {Object.keys(comparisons.presets).length > 0 ? (
+            renderComparisonChart(comparisons.presets, 'Preset Performance')
+          ) : (
+            <Alert variant="info">
+              Preset comparison will be available once multiple presets have trading data.
+            </Alert>
+          )}
         </Col>
         <Col lg={12}>
-          {renderComparisonChart(comparisons.chains, 'Chain Performance')}
+          {Object.keys(comparisons.chains).length > 0 ? (
+            renderComparisonChart(comparisons.chains, 'Chain Performance')
+          ) : (
+            <Alert variant="info">
+              Chain comparison will be available once trading occurs on multiple chains.
+            </Alert>
+          )}
         </Col>
       </Row>
     );
@@ -634,20 +664,11 @@ function Analytics() {
       </Row>
 
       {/* Tab Content */}
-      {loading && !analyticsData.summary ? (
-        <div className="text-center py-5">
-          <Spinner animation="border" role="status">
-            <span className="visually-hidden">Loading...</span>
-          </Spinner>
-          <p className="mt-2">Loading analytics data...</p>
-        </div>
-      ) : (
-        <>
-          {activeTab === 'overview' && renderOverview()}
-          {activeTab === 'performance' && renderPerformance()}
-          {activeTab === 'comparisons' && renderComparisons()}
-        </>
-      )}
+      <>
+        {activeTab === 'overview' && renderOverview()}
+        {activeTab === 'performance' && renderPerformance()}
+        {activeTab === 'comparisons' && renderComparisons()}
+      </>
     </Container>
   );
 }
