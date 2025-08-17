@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Card, Form, Button, Alert, Badge, Spinner, Row, Col, InputGroup } from 'react-bootstrap';
-import { ArrowDownUp, Zap, AlertTriangle, CheckCircle, XCircle } from 'lucide-react';
+import { ArrowDownUp, Zap, AlertTriangle, CheckCircle, XCircle, Shield } from 'lucide-react';
+import RiskDisplay from './RiskDisplay';
 
 const TradePanel = ({ 
   walletAddress, 
@@ -22,6 +23,10 @@ const TradePanel = ({
   const [activeTraceId, setActiveTraceId] = useState(null);
   const [errors, setErrors] = useState([]);
   const [warnings, setWarnings] = useState([]);
+
+  // Risk assessment state
+  const [riskAssessment, setRiskAssessment] = useState(null);
+  const [showRiskPanel, setShowRiskPanel] = useState(false);
 
   // Auto-update quote when inputs change
   const [quoteTimer, setQuoteTimer] = useState(null);
@@ -49,6 +54,29 @@ const TradePanel = ({
       { symbol: 'USDC', address: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', name: 'USD Coin' },
       { symbol: 'USDT', address: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', name: 'Tether USD' },
     ],
+  };
+
+  // Risk assessment callback
+  const handleRiskAssessed = (riskData) => {
+    setRiskAssessment(riskData);
+    
+    // Update warnings based on risk assessment
+    const newWarnings = [...warnings.filter(w => !w.includes('⛔') && !w.includes('⚠️'))]; // Remove existing risk warnings
+    
+    if (!riskData.tradeable) {
+      newWarnings.push('⛔ Token is not safe to trade based on risk assessment');
+    } else if (riskData.overall_risk === 'high' || riskData.risk_level === 'high') {
+      newWarnings.push('⚠️ High risk token - trade with extreme caution');
+    } else if (riskData.overall_risk === 'medium' || riskData.risk_level === 'medium') {
+      newWarnings.push('⚠️ Medium risk token - use smaller position sizes');
+    }
+    
+    // Add specific warnings from risk assessment
+    if (riskData.warnings) {
+      newWarnings.push(...riskData.warnings);
+    }
+    
+    setWarnings(newWarnings);
   };
 
   // Get quote with debouncing
@@ -103,7 +131,15 @@ const TradePanel = ({
       if (previewResponse.ok) {
         const preview = await previewResponse.json();
         setPreviewData(preview);
-        setWarnings(preview.warnings || []);
+        
+        // Filter out risk warnings to avoid duplication
+        const nonRiskWarnings = (preview.warnings || []).filter(w => 
+          !w.includes('⛔') && !w.includes('⚠️')
+        );
+        setWarnings(prev => [
+          ...prev.filter(w => w.includes('⛔') || w.includes('⚠️')), // Keep risk warnings
+          ...nonRiskWarnings
+        ]);
         setErrors(preview.errors || []);
       }
 
@@ -176,6 +212,12 @@ const TradePanel = ({
       return;
     }
 
+    // Additional risk-based validation
+    if (riskAssessment && !riskAssessment.tradeable) {
+      setErrors(['This token is flagged as high risk and not safe to trade']);
+      return;
+    }
+
     try {
       setIsLoading(true);
       setErrors([]);
@@ -222,6 +264,8 @@ const TradePanel = ({
     const tempToken = inputToken;
     setInputToken(outputToken);
     setOutputToken(tempToken);
+    // Reset risk assessment when tokens are swapped
+    setRiskAssessment(null);
   };
 
   // Format amount for display
@@ -331,7 +375,10 @@ const TradePanel = ({
           <Form.Label>To</Form.Label>
           <Form.Select 
             value={outputToken} 
-            onChange={(e) => setOutputToken(e.target.value)}
+            onChange={(e) => {
+              setOutputToken(e.target.value);
+              setRiskAssessment(null); // Reset risk assessment when output token changes
+            }}
             disabled={isLoading || activeTraceId}
           >
             <option value="">Select token...</option>
@@ -342,6 +389,34 @@ const TradePanel = ({
             ))}
           </Form.Select>
         </Form.Group>
+
+        {/* Risk Assessment */}
+        {outputToken && outputToken !== 'native' && (
+          <Form.Group className="mb-3">
+            <div className="d-flex align-items-center justify-content-between mb-2">
+              <Form.Label className="mb-0">Risk Assessment</Form.Label>
+              <Button
+                variant="outline-info"
+                size="sm"
+                onClick={() => setShowRiskPanel(!showRiskPanel)}
+              >
+                <Shield size={14} className="me-1" />
+                {showRiskPanel ? 'Hide' : 'Show'} Risk Analysis
+              </Button>
+            </div>
+            
+            <div className="mt-2">
+              <RiskDisplay
+                tokenAddress={outputToken}
+                chain={selectedChain}
+                tradeAmount={inputAmount}
+                autoAssess={true}
+                onRiskAssessed={handleRiskAssessed}
+                compact={!showRiskPanel}
+              />
+            </div>
+          </Form.Group>
+        )}
 
         {/* Quote Display */}
         {quoteData && (
@@ -459,13 +534,22 @@ const TradePanel = ({
               !inputToken ||
               !outputToken ||
               !inputAmount ||
-              parseFloat(inputAmount) <= 0
+              parseFloat(inputAmount) <= 0 ||
+              (riskAssessment && !riskAssessment.tradeable)
             }
           >
             {isLoading && <Spinner size="sm" className="me-2" />}
             {activeTraceId ? 'Trade in Progress...' : 'Execute Trade'}
           </Button>
         </div>
+
+        {/* Risk-based trade button messaging */}
+        {riskAssessment && !riskAssessment.tradeable && (
+          <Alert variant="danger" className="mt-2 mb-0">
+            <XCircle size={16} className="me-2" />
+            Trading disabled: Token failed risk assessment
+          </Alert>
+        )}
 
         {/* Quick Actions */}
         <Row className="mt-3">
