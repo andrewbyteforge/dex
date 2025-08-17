@@ -7,7 +7,7 @@ import asyncio
 import logging
 import time
 from decimal import Decimal
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -15,6 +15,9 @@ from pydantic import BaseModel, Field
 from ..core.dependencies import get_chain_clients
 from ..core.logging import get_logger
 from ..core.settings import settings
+from ..dex.uniswap_v2 import uniswap_v2_adapter, pancake_adapter, quickswap_adapter
+from ..dex.uniswap_v3 import uniswap_v3_adapter, pancake_v3_adapter
+from ..dex.jupiter import jupiter_adapter
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/quotes", tags=["quotes"])
@@ -66,507 +69,26 @@ class AggregatedQuoteResponse(BaseModel):
     execution_time_ms: float
 
 
-class DEXAdapter:
-    """Base DEX adapter interface."""
-    
-    def __init__(self, name: str, chain: str):
-        """Initialize DEX adapter."""
-        self.name = name
-        self.chain = chain
-    
-    async def get_quote(
-        self,
-        input_token: str,
-        output_token: str,
-        amount_in: str,
-        slippage_bps: int,
-        chain_clients: Dict,
-    ) -> Optional[QuoteResponse]:
-        """
-        Get quote from this DEX.
-        
-        Args:
-            input_token: Input token address
-            output_token: Output token address
-            amount_in: Input amount in smallest units
-            slippage_bps: Slippage tolerance in basis points
-            chain_clients: Chain client instances
-            
-        Returns:
-            Quote response or None if failed
-        """
-        raise NotImplementedError("Subclasses must implement get_quote")
-
-
-class UniswapV2Adapter(DEXAdapter):
-    """Uniswap V2 adapter for quote fetching."""
-    
-    def __init__(self, chain: str):
-        """Initialize Uniswap V2 adapter."""
-        super().__init__("uniswap_v2", chain)
-        self.router_addresses = {
-            "ethereum": "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D",
-            "bsc": "0x10ED43C718714eb63d5aA57B78B54704E256024E",  # PancakeSwap
-            "polygon": "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",  # QuickSwap
-        }
-        # Minimal ABI for getAmountsOut
-        self.router_abi = [
-            {
-                "inputs": [
-                    {"internalType": "uint256", "name": "amountIn", "type": "uint256"},
-                    {"internalType": "address[]", "name": "path", "type": "address[]"}
-                ],
-                "name": "getAmountsOut",
-                "outputs": [
-                    {"internalType": "uint256[]", "name": "amounts", "type": "uint256[]"}
-                ],
-                "stateMutability": "view",
-                "type": "function"
-            }
-        ]
-    
-    async def get_quote(
-        self,
-        input_token: str,
-        output_token: str,
-        amount_in: str,
-        slippage_bps: int,
-        chain_clients: Dict,
-    ) -> Optional[QuoteResponse]:
-        """
-        Get quote from Uniswap V2 style DEX.
-        
-        Args:
-            input_token: Input token address
-            output_token: Output token address
-            amount_in: Input amount in smallest units
-            slippage_bps: Slippage tolerance in basis points
-            chain_clients: Chain client instances
-            
-        Returns:
-            Quote response or None if failed
-        """
-        start_time = time.time()
-        
-        try:
-            # Get EVM client
-            evm_client = chain_clients.get("evm")
-            if not evm_client:
-                logger.error(f"No EVM client available for chain: {self.chain}")
-                return None
-            
-            # Get router address for this chain
-            router_address = self.router_addresses.get(self.chain)
-            if not router_address:
-                logger.error(f"No router address configured for chain: {self.chain}")
-                return None
-            
-            # Get Web3 instance from EVM client
-            w3 = await evm_client.get_web3(self.chain)
-            if not w3:
-                logger.error(f"Failed to get Web3 instance for chain: {self.chain}")
-                return None
-            
-            # Create router contract
-            router_contract = w3.eth.contract(
-                address=w3.to_checksum_address(router_address),
-                abi=self.router_abi
-            )
-            
-            # Convert addresses to checksummed format
-            input_address = w3.to_checksum_address(input_token)
-            output_address = w3.to_checksum_address(output_token)
-            
-            # Create trading path (direct for now, could add WETH routing later)
-            path = [input_address, output_address]
-            
-            # Convert amount to integer
-            amount_in_int = int(amount_in)
-            
-            # Call getAmountsOut
-            try:
-                amounts_out = await asyncio.to_thread(
-                    router_contract.functions.getAmountsOut(amount_in_int, path).call
-                )
-                
-                if len(amounts_out) < 2:
-                    logger.warning(f"Invalid amounts_out response: {amounts_out}")
-                    return None
-                
-                output_amount = amounts_out[-1]  # Last amount is final output
-                
-            except Exception as contract_error:
-                logger.warning(f"Contract call failed for {self.name}: {contract_error}")
-                # Try with WETH routing as fallback
-                weth_addresses = {
-                    "ethereum": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
-                    "bsc": "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c",  # WBNB
-                    "polygon": "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",  # WMATIC
-                }
-                
-                weth_address = weth_addresses.get(self.chain)
-                if not weth_address or input_address == weth_address or output_address == weth_address:
-                    return None
-                
-                # Try routing through WETH
-                path_with_weth = [input_address, w3.to_checksum_address(weth_address), output_address]
-                try:
-                    amounts_out = await asyncio.to_thread(
-                        router_contract.functions.getAmountsOut(amount_in_int, path_with_weth).call
-                    )
-                    if len(amounts_out) < 3:
-                        return None
-                    output_amount = amounts_out[-1]
-                    path = path_with_weth  # Update path for response
-                except Exception:
-                    return None
-            
-            # Calculate price and price impact
-            input_decimal = Decimal(amount_in_int)
-            output_decimal = Decimal(output_amount)
-            
-            if input_decimal == 0:
-                return None
-            
-            # Price as output/input ratio
-            price = str(output_decimal / input_decimal)
-            
-            # Estimate price impact (simplified calculation)
-            # In real implementation, would compare to ideal constant product price
-            price_impact = self._calculate_price_impact(input_decimal, output_decimal)
-            
-            # Estimate gas (standard Uniswap V2 swap gas)
-            gas_estimate = "150000"
-            
-            execution_time_ms = (time.time() - start_time) * 1000
-            
-            return QuoteResponse(
-                dex=self.name,
-                input_amount=amount_in,
-                output_amount=str(output_amount),
-                price=price,
-                price_impact=f"{price_impact:.2f}%",
-                gas_estimate=gas_estimate,
-                route=[addr.lower() for addr in path],
-                execution_time_ms=execution_time_ms,
-            )
-            
-        except Exception as e:
-            logger.warning(f"Quote failed for {self.name} on {self.chain}: {e}")
-            return None
-    
-    def _calculate_price_impact(self, amount_in: Decimal, amount_out: Decimal) -> Decimal:
-        """
-        Calculate estimated price impact.
-        
-        Args:
-            amount_in: Input amount
-            amount_out: Output amount
-            
-        Returns:
-            Price impact percentage
-        """
-        # Simplified price impact calculation
-        # Real implementation would need pool reserves
-        if amount_in == 0:
-            return Decimal("0")
-        
-        # Use trade size as proxy for impact (larger trades = higher impact)
-        # This is a rough approximation
-        trade_size_impact = min(float(amount_in) / 1e20, 0.05)  # Max 5% impact
-        return Decimal(str(trade_size_impact * 100))
-
-
-class UniswapV3Adapter(DEXAdapter):
-    """Uniswap V3 adapter with fee tier support."""
-    
-    def __init__(self, chain: str):
-        """Initialize Uniswap V3 adapter."""
-        super().__init__("uniswap_v3", chain)
-        self.quoter_addresses = {
-            "ethereum": "0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6",
-            "bsc": "0x78D78E420Da98ad378D7799bE8f4AF69033EB077",  # PancakeSwap V3
-            "polygon": "0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6",
-        }
-        self.fee_tiers = [500, 3000, 10000]  # 0.05%, 0.3%, 1%
-        
-        # Minimal Quoter ABI
-        self.quoter_abi = [
-            {
-                "inputs": [
-                    {"internalType": "address", "name": "tokenIn", "type": "address"},
-                    {"internalType": "address", "name": "tokenOut", "type": "address"},
-                    {"internalType": "uint24", "name": "fee", "type": "uint24"},
-                    {"internalType": "uint256", "name": "amountIn", "type": "uint256"},
-                    {"internalType": "uint160", "name": "sqrtPriceLimitX96", "type": "uint160"}
-                ],
-                "name": "quoteExactInputSingle",
-                "outputs": [
-                    {"internalType": "uint256", "name": "amountOut", "type": "uint256"}
-                ],
-                "stateMutability": "nonpayable",
-                "type": "function"
-            }
-        ]
-    
-    async def get_quote(
-        self,
-        input_token: str,
-        output_token: str,
-        amount_in: str,
-        slippage_bps: int,
-        chain_clients: Dict,
-    ) -> Optional[QuoteResponse]:
-        """
-        Get quote from Uniswap V3 with best fee tier.
-        
-        Args:
-            input_token: Input token address
-            output_token: Output token address
-            amount_in: Input amount in smallest units
-            slippage_bps: Slippage tolerance in basis points
-            chain_clients: Chain client instances
-            
-        Returns:
-            Quote response or None if failed
-        """
-        start_time = time.time()
-        
-        try:
-            # Get EVM client
-            evm_client = chain_clients.get("evm")
-            if not evm_client:
-                logger.error(f"No EVM client available for chain: {self.chain}")
-                return None
-            
-            # Get quoter address for this chain
-            quoter_address = self.quoter_addresses.get(self.chain)
-            if not quoter_address:
-                logger.error(f"No quoter address configured for chain: {self.chain}")
-                return None
-            
-            # Get Web3 instance
-            w3 = await evm_client.get_web3(self.chain)
-            if not w3:
-                logger.error(f"Failed to get Web3 instance for chain: {self.chain}")
-                return None
-            
-            # Create quoter contract
-            quoter_contract = w3.eth.contract(
-                address=w3.to_checksum_address(quoter_address),
-                abi=self.quoter_abi
-            )
-            
-            # Convert addresses to checksummed format
-            input_address = w3.to_checksum_address(input_token)
-            output_address = w3.to_checksum_address(output_token)
-            amount_in_int = int(amount_in)
-            
-            # Try all fee tiers and find the best quote
-            best_quote = None
-            best_fee_tier = None
-            
-            for fee_tier in self.fee_tiers:
-                try:
-                    amount_out = await asyncio.to_thread(
-                        quoter_contract.functions.quoteExactInputSingle(
-                            input_address,
-                            output_address,
-                            fee_tier,
-                            amount_in_int,
-                            0  # sqrtPriceLimitX96 = 0 for no limit
-                        ).call
-                    )
-                    
-                    if amount_out > 0 and (best_quote is None or amount_out > best_quote):
-                        best_quote = amount_out
-                        best_fee_tier = fee_tier
-                        
-                except Exception as fee_error:
-                    logger.debug(f"Fee tier {fee_tier} failed for {self.name}: {fee_error}")
-                    continue
-            
-            if best_quote is None:
-                logger.warning(f"No valid quotes found for {self.name}")
-                return None
-            
-            # Calculate price and price impact
-            input_decimal = Decimal(amount_in_int)
-            output_decimal = Decimal(best_quote)
-            
-            if input_decimal == 0:
-                return None
-            
-            price = str(output_decimal / input_decimal)
-            
-            # V3 typically has lower price impact due to concentrated liquidity
-            price_impact = self._calculate_v3_price_impact(input_decimal, output_decimal, best_fee_tier)
-            
-            # V3 gas is typically higher than V2
-            gas_estimate = "200000"
-            
-            execution_time_ms = (time.time() - start_time) * 1000
-            
-            return QuoteResponse(
-                dex=self.name,
-                input_amount=amount_in,
-                output_amount=str(best_quote),
-                price=price,
-                price_impact=f"{price_impact:.2f}%",
-                gas_estimate=gas_estimate,
-                route=[input_address.lower(), output_address.lower()],
-                execution_time_ms=execution_time_ms,
-            )
-            
-        except Exception as e:
-            logger.warning(f"Quote failed for {self.name} on {self.chain}: {e}")
-            return None
-    
-    def _calculate_v3_price_impact(self, amount_in: Decimal, amount_out: Decimal, fee_tier: int) -> Decimal:
-        """
-        Calculate estimated V3 price impact.
-        
-        Args:
-            amount_in: Input amount
-            amount_out: Output amount
-            fee_tier: Fee tier used
-            
-        Returns:
-            Price impact percentage
-        """
-        if amount_in == 0:
-            return Decimal("0")
-        
-        # V3 typically has lower impact due to concentrated liquidity
-        base_impact = min(float(amount_in) / 2e20, 0.03)  # Max 3% impact, half of V2
-        
-        # Higher fee tiers typically have lower liquidity = higher impact
-        fee_multiplier = {500: 0.8, 3000: 1.0, 10000: 1.5}.get(fee_tier, 1.0)
-        
-        return Decimal(str(base_impact * fee_multiplier * 100))
-
-
-class JupiterAdapter(DEXAdapter):
-    """Jupiter aggregator adapter for Solana."""
-    
-    def __init__(self):
-        """Initialize Jupiter adapter."""
-        super().__init__("jupiter", "solana")
-        self.jupiter_api_url = "https://quote-api.jup.ag/v6/quote"
-    
-    async def get_quote(
-        self,
-        input_token: str,
-        output_token: str,
-        amount_in: str,
-        slippage_bps: int,
-        chain_clients: Dict,
-    ) -> Optional[QuoteResponse]:
-        """
-        Get quote from Jupiter aggregator.
-        
-        Args:
-            input_token: Input token mint address
-            output_token: Output token mint address
-            amount_in: Input amount in smallest units
-            slippage_bps: Slippage tolerance in basis points
-            chain_clients: Chain client instances
-            
-        Returns:
-            Quote response or None if failed
-        """
-        start_time = time.time()
-        
-        try:
-            solana_client = chain_clients.get("solana")
-            if not solana_client:
-                logger.error("No Solana client available")
-                return None
-            
-            # Use Solana client's Jupiter integration if available
-            if hasattr(solana_client, 'get_jupiter_quote'):
-                quote_data = await solana_client.get_jupiter_quote(
-                    input_mint=input_token,
-                    output_mint=output_token,
-                    amount=int(amount_in),
-                    slippage_bps=slippage_bps,
-                )
-            else:
-                # Fallback to direct API call
-                import httpx
-                
-                params = {
-                    "inputMint": input_token,
-                    "outputMint": output_token,
-                    "amount": amount_in,
-                    "slippageBps": slippage_bps,
-                }
-                
-                async with httpx.AsyncClient() as client:
-                    response = await client.get(self.jupiter_api_url, params=params)
-                    response.raise_for_status()
-                    quote_data = response.json()
-            
-            execution_time_ms = (time.time() - start_time) * 1000
-            
-            # Extract Jupiter quote data
-            output_amount = quote_data.get("outAmount", "0")
-            price_impact = quote_data.get("priceImpactPct", 0)
-            route_plan = quote_data.get("routePlan", [])
-            
-            # Build route from Jupiter route plan
-            route = []
-            if route_plan:
-                for step in route_plan[:3]:  # Limit to first 3 steps for display
-                    swap_info = step.get("swapInfo", {})
-                    if swap_info:
-                        label = swap_info.get("label", "Unknown")
-                        route.append(label)
-            
-            if not route:
-                route = ["Jupiter"]
-            
-            # Calculate price
-            input_decimal = Decimal(amount_in) if amount_in != "0" else Decimal("1")
-            output_decimal = Decimal(output_amount)
-            price = str(output_decimal / input_decimal) if input_decimal > 0 else "0"
-            
-            return QuoteResponse(
-                dex=self.name,
-                input_amount=amount_in,
-                output_amount=output_amount,
-                price=price,
-                price_impact=f"{abs(float(price_impact)):.2f}%" if price_impact else "0.00%",
-                gas_estimate=None,  # Solana doesn't use gas
-                route=route,
-                execution_time_ms=execution_time_ms,
-            )
-            
-        except Exception as e:
-            logger.warning(f"Quote failed for Jupiter: {e}")
-            return None
-
-
 class QuoteAggregator:
-    """Quote aggregation service."""
+    """Quote aggregation service with real DEX adapters."""
     
     def __init__(self):
-        """Initialize quote aggregator."""
+        """Initialize quote aggregator with real adapters."""
         self.adapters = {
             "ethereum": [
-                UniswapV2Adapter("ethereum"),
-                UniswapV3Adapter("ethereum"),
+                ("uniswap_v2", uniswap_v2_adapter),
+                ("uniswap_v3", uniswap_v3_adapter),
             ],
             "bsc": [
-                UniswapV2Adapter("bsc"),  # PancakeSwap V2
-                UniswapV3Adapter("bsc"),  # PancakeSwap V3
+                ("pancake_v2", pancake_adapter),
+                ("pancake_v3", pancake_v3_adapter),
             ],
             "polygon": [
-                UniswapV2Adapter("polygon"),  # QuickSwap
-                UniswapV3Adapter("polygon"),
+                ("quickswap_v2", quickswap_adapter),
+                ("uniswap_v3", uniswap_v3_adapter),
             ],
             "solana": [
-                JupiterAdapter(),
+                ("jupiter", jupiter_adapter),
             ],
         }
     
@@ -576,7 +98,7 @@ class QuoteAggregator:
         chain_clients: Dict,
     ) -> AggregatedQuoteResponse:
         """
-        Get aggregated quotes from multiple DEXs.
+        Get aggregated quotes from real DEX adapters.
         
         Args:
             request: Quote request
@@ -597,7 +119,17 @@ class QuoteAggregator:
         
         # Filter out excluded DEXs
         if request.exclude_dexs:
-            adapters = [a for a in adapters if a.name not in request.exclude_dexs]
+            adapters = [(name, adapter) for name, adapter in adapters 
+                       if name not in request.exclude_dexs]
+        
+        # Convert amount to Decimal for precise calculations
+        try:
+            amount_in_decimal = Decimal(request.amount_in) / Decimal(10**18)  # Assume 18 decimals
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid amount_in format"
+            )
         
         # Get token information
         input_token_info = await self._get_token_info(
@@ -608,26 +140,24 @@ class QuoteAggregator:
         )
         
         # Get quotes from all adapters concurrently
-        quote_tasks = [
-            adapter.get_quote(
-                request.input_token,
-                request.output_token,
-                request.amount_in,
-                request.slippage_bps,
-                chain_clients,
+        quote_tasks = []
+        for dex_name, adapter in adapters:
+            task = self._safe_get_adapter_quote(
+                adapter, request.chain, request.input_token, request.output_token,
+                amount_in_decimal, request.slippage_bps / 10000, chain_clients, dex_name
             )
-            for adapter in adapters
-        ]
+            quote_tasks.append(task)
         
         quote_results = await asyncio.gather(*quote_tasks, return_exceptions=True)
         
-        # Filter successful quotes
+        # Process results and convert to QuoteResponse format
         quotes = []
         for i, result in enumerate(quote_results):
-            if isinstance(result, QuoteResponse):
-                quotes.append(result)
+            if isinstance(result, dict) and result.get("success"):
+                dex_name = adapters[i][0]
+                quotes.append(self._convert_to_quote_response(result, dex_name))
             elif isinstance(result, Exception):
-                logger.warning(f"Quote failed for {adapters[i].name}: {result}")
+                logger.warning(f"Quote failed for {adapters[i][0]}: {result}")
         
         if not quotes:
             raise HTTPException(
@@ -647,6 +177,72 @@ class QuoteAggregator:
             quotes=quotes,
             best_quote=best_quote,
             total_quotes=len(quotes),
+            execution_time_ms=execution_time_ms,
+        )
+    
+    async def _safe_get_adapter_quote(
+        self,
+        adapter: Any,
+        chain: str,
+        token_in: str,
+        token_out: str,
+        amount_in: Decimal,
+        slippage_tolerance: Decimal,
+        chain_clients: Dict,
+        dex_name: str,
+    ) -> Dict[str, Any]:
+        """Safely get quote from adapter with error handling."""
+        try:
+            # Convert slippage from ratio to Decimal
+            slippage_decimal = Decimal(str(slippage_tolerance))
+            
+            result = await adapter.get_quote(
+                chain=chain,
+                token_in=token_in,
+                token_out=token_out,
+                amount_in=amount_in,
+                slippage_tolerance=slippage_decimal,
+                chain_clients=chain_clients,
+            )
+            
+            return result
+            
+        except Exception as e:
+            logger.warning(f"Adapter quote failed for {dex_name}: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "dex": dex_name,
+                "chain": chain,
+            }
+    
+    def _convert_to_quote_response(
+        self, 
+        adapter_result: Dict[str, Any], 
+        dex_name: str
+    ) -> QuoteResponse:
+        """Convert adapter result to QuoteResponse format."""
+        # Calculate execution time
+        execution_time_ms = adapter_result.get("execution_time_ms", 0.0)
+        
+        # Handle gas estimate (Solana doesn't have gas)
+        gas_estimate = adapter_result.get("gas_estimate")
+        if gas_estimate is not None:
+            gas_estimate = str(gas_estimate)
+        
+        # Format route
+        route = adapter_result.get("route", [])
+        if isinstance(route, list):
+            route = [str(addr) for addr in route]
+        
+        return QuoteResponse(
+            dex=dex_name,
+            input_amount=adapter_result.get("input_amount", "0"),
+            output_amount=adapter_result.get("output_amount", "0"),
+            price=adapter_result.get("price", "0"),
+            price_impact=adapter_result.get("price_impact", "0"),
+            gas_estimate=gas_estimate,
+            route=route,
             execution_time_ms=execution_time_ms,
         )
     
@@ -808,7 +404,7 @@ async def quote_health(
     # Check chain client availability
     for chain, adapters in quote_aggregator.adapters.items():
         adapter_health = []
-        for adapter in adapters:
+        for adapter_name, adapter in adapters:
             try:
                 if chain == "solana":
                     client_available = chain_clients.get("solana") is not None
@@ -816,12 +412,12 @@ async def quote_health(
                     client_available = chain_clients.get("evm") is not None
 
                 adapter_health.append({
-                    "name": adapter.name,
+                    "name": adapter_name,
                     "status": "OK" if client_available else "NO_CLIENT"
                 })
             except Exception as e:
                 adapter_health.append({
-                    "name": adapter.name,
+                    "name": adapter_name,
                     "status": "ERROR",
                     "error": str(e)
                 })
@@ -892,3 +488,45 @@ async def test_quote():
         },
         "note": "This is mock test data"
     }
+
+
+@router.post("/test-real-quote")
+async def test_real_quote(
+    chain_clients: Dict = Depends(get_chain_clients),
+):
+    """Test endpoint for real DEX adapter quotes."""
+    # Test quote: 1 ETH -> USDC on Ethereum
+    test_request = QuoteRequest(
+        input_token="0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",  # WETH
+        output_token="0xA0b86a33E6417c7CAcB4b4E0a17bb02B3eF4c8a3",  # USDC
+        amount_in="1000000000000000000",  # 1 ETH in wei
+        chain="ethereum",
+        slippage_bps=50,  # 0.5%
+    )
+    
+    try:
+        result = await quote_aggregator.get_aggregated_quote(test_request, chain_clients)
+        return {
+            "status": "success",
+            "message": "Real DEX adapters are working",
+            "test_result": {
+                "total_quotes": result.total_quotes,
+                "best_dex": result.best_quote.dex,
+                "best_output": result.best_quote.output_amount,
+                "execution_time_ms": result.execution_time_ms,
+                "all_quotes": [
+                    {
+                        "dex": q.dex,
+                        "output_amount": q.output_amount,
+                        "price_impact": q.price_impact,
+                    }
+                    for q in result.quotes
+                ]
+            }
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Real adapter test failed: {str(e)}",
+            "note": "This is expected if RPC clients are not properly configured"
+        }
