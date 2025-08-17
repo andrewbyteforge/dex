@@ -1,269 +1,244 @@
 """
-Trade execution API endpoints.
+Trade execution API endpoints for manual and automated trading.
 """
 from __future__ import annotations
 
-import uuid
-from typing import Dict, Optional
+import logging
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from ..core.dependencies import get_chain_clients
+from ..core.dependencies import get_chain_clients, get_trade_executor
 from ..core.logging import get_logger
-from ..trading.executor import TradeRequest, TradeResult, TradeType, trade_executor
+from ..trading.executor import TradeRequest, TradePreview, TradeResult, TradeType, TradeStatus
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/trades", tags=["trades"])
 
 
 class TradePreviewRequest(BaseModel):
-    """Trade preview request."""
+    """Trade preview request model."""
     
-    input_token: str = Field(..., description="Input token address or symbol")
-    output_token: str = Field(..., description="Output token address or symbol")
+    input_token: str = Field(..., description="Input token address")
+    output_token: str = Field(..., description="Output token address")
     amount_in: str = Field(..., description="Input amount in smallest units")
     chain: str = Field(..., description="Blockchain network")
+    dex: str = Field(..., description="DEX to execute on")
+    wallet_address: str = Field(..., description="Wallet address")
     slippage_bps: int = Field(default=50, description="Slippage tolerance in basis points")
-    wallet_address: str = Field(..., description="Wallet address for balance checks")
+    gas_price_gwei: Optional[str] = Field(default=None, description="Custom gas price in Gwei")
 
 
-class TradePreviewResponse(BaseModel):
-    """Trade preview response."""
+class TradeExecutionRequest(BaseModel):
+    """Trade execution request model."""
     
-    valid: bool
-    estimated_output: Optional[str] = None
-    estimated_price: Optional[str] = None
-    estimated_gas: Optional[str] = None
-    price_impact: Optional[str] = None
-    route: Optional[str] = None
-    warnings: list[str] = []
-    errors: list[str] = []
-
-
-class ExecuteTradeRequest(BaseModel):
-    """Execute trade request."""
-    
-    user_id: int
-    input_token: str
-    output_token: str
-    amount_in: str
-    min_output_amount: str
-    chain: str
-    wallet_address: str
-    slippage_bps: int = 50
-    preferred_dex: Optional[str] = None
-    enable_canary: bool = True
-    wallet_type: str = "external"
+    input_token: str = Field(..., description="Input token address")
+    output_token: str = Field(..., description="Output token address")
+    amount_in: str = Field(..., description="Input amount in smallest units")
+    minimum_amount_out: str = Field(..., description="Minimum output amount")
+    chain: str = Field(..., description="Blockchain network")
+    dex: str = Field(..., description="DEX to execute on")
+    route: List[str] = Field(..., description="Trading route")
+    wallet_address: str = Field(..., description="Wallet address")
+    slippage_bps: int = Field(default=50, description="Slippage tolerance in basis points")
+    deadline_seconds: int = Field(default=300, description="Transaction deadline in seconds")
+    trade_type: TradeType = Field(default=TradeType.MANUAL, description="Trade type")
+    gas_price_gwei: Optional[str] = Field(default=None, description="Custom gas price in Gwei")
 
 
 class TradeStatusResponse(BaseModel):
-    """Trade status response."""
+    """Trade status response model."""
     
     trace_id: str
-    status: str
-    transaction_id: Optional[int] = None
+    status: TradeStatus
+    transaction_id: Optional[str] = None
     tx_hash: Optional[str] = None
     progress_percentage: int
     current_step: str
-    estimated_completion_ms: Optional[int] = None
     error_message: Optional[str] = None
 
 
-@router.post("/preview", response_model=TradePreviewResponse)
+class TradeHistoryResponse(BaseModel):
+    """Trade history response model."""
+    
+    trades: List[TradeResult]
+    total_count: int
+    page: int
+    page_size: int
+
+
+@router.post("/preview", response_model=TradePreview)
 async def preview_trade(
     request: TradePreviewRequest,
     chain_clients: Dict = Depends(get_chain_clients),
-) -> TradePreviewResponse:
+    trade_executor = Depends(get_trade_executor),
+) -> TradePreview:
     """
-    Preview a trade without executing it.
-    
-    Provides estimated output, gas costs, price impact, and validation
-    warnings/errors before actual execution.
+    Generate trade preview with validation and cost estimation.
     
     Args:
-        request: Trade preview parameters
+        request: Trade preview request
         chain_clients: Chain client dependencies
+        trade_executor: Trade execution service
         
     Returns:
-        Trade preview with estimates and validation results
+        Trade preview with validation results
     """
     logger.info(
-        f"Trade preview requested: {request.amount_in} {request.input_token} -> {request.output_token}",
+        f"Trade preview request: {request.amount_in} {request.input_token} -> {request.output_token}",
         extra={
             'extra_data': {
                 'chain': request.chain,
-                'input_token': request.input_token,
-                'output_token': request.output_token,
+                'dex': request.dex,
+                'wallet': request.wallet_address,
                 'amount_in': request.amount_in,
-                'wallet_address': request.wallet_address,
             }
         }
     )
     
-    warnings = []
-    errors = []
-    
     try:
-        # Get quote for preview
-        from ..api.quotes import quote_aggregator, QuoteRequest
-        
-        quote_request = QuoteRequest(
+        # Convert preview request to trade request format
+        trade_request = TradeRequest(
             input_token=request.input_token,
             output_token=request.output_token,
             amount_in=request.amount_in,
+            minimum_amount_out="0",  # Will be calculated in preview
             chain=request.chain,
+            dex=request.dex,
+            route=[request.input_token, request.output_token],  # Basic route
+            wallet_address=request.wallet_address,
             slippage_bps=request.slippage_bps,
+            trade_type=TradeType.MANUAL,
+            gas_price_gwei=request.gas_price_gwei,
         )
         
-        aggregated_quote = await quote_aggregator.get_aggregated_quote(
-            quote_request, chain_clients
+        # Generate preview
+        preview = await trade_executor.preview_trade(trade_request, chain_clients)
+        
+        logger.info(
+            f"Trade preview completed: {preview.trace_id}, valid: {preview.valid}",
+            extra={
+                'extra_data': {
+                    'trace_id': preview.trace_id,
+                    'valid': preview.valid,
+                    'expected_output': preview.expected_output,
+                    'gas_estimate': preview.gas_estimate,
+                    'execution_time_ms': preview.execution_time_ms,
+                }
+            }
         )
         
-        best_quote = aggregated_quote.best_quote
-        
-        # Check wallet balance
-        try:
-            if request.chain == "solana":
-                solana_client = chain_clients.get("solana")
-                if solana_client:
-                    balance = await solana_client.get_balance(
-                        request.wallet_address,
-                        request.input_token if request.input_token != "SOL" else None
-                    )
-            else:
-                evm_client = chain_clients.get("evm")
-                if evm_client:
-                    balance = await evm_client.get_balance(
-                        request.wallet_address,
-                        request.chain,
-                        request.input_token if request.input_token.startswith("0x") else None
-                    )
-            
-            from decimal import Decimal
-            required_amount = Decimal(request.amount_in)
-            
-            if balance < required_amount:
-                errors.append(f"Insufficient balance: {balance} < {required_amount}")
-            elif balance < required_amount * Decimal("1.1"):
-                warnings.append("Balance is close to trade amount, consider gas fees")
-                
-        except Exception as e:
-            warnings.append(f"Could not verify balance: {str(e)}")
-        
-        # Check price impact
-        price_impact_str = best_quote.price_impact
-        if price_impact_str:
-            price_impact_value = float(price_impact_str.rstrip('%'))
-            if price_impact_value > 5.0:
-                warnings.append(f"High price impact: {price_impact_str}")
-            if price_impact_value > 10.0:
-                errors.append(f"Extreme price impact: {price_impact_str}")
-        
-        # Check slippage
-        if request.slippage_bps > 500:  # 5%
-            warnings.append(f"High slippage tolerance: {request.slippage_bps / 100}%")
-        
-        # Build route description
-        route_description = f"{best_quote.dex}"
-        if best_quote.route and len(best_quote.route) > 2:
-            route_description += f" via {' → '.join(best_quote.route[1:-1])}"
-        
-        return TradePreviewResponse(
-            valid=len(errors) == 0,
-            estimated_output=best_quote.output_amount,
-            estimated_price=best_quote.price,
-            estimated_gas=best_quote.gas_estimate,
-            price_impact=best_quote.price_impact,
-            route=route_description,
-            warnings=warnings,
-            errors=errors,
-        )
+        return preview
         
     except Exception as e:
-        logger.error(f"Trade preview failed: {e}")
-        return TradePreviewResponse(
-            valid=False,
-            errors=[f"Preview failed: {str(e)}"]
+        logger.error(
+            f"Trade preview failed: {e}",
+            extra={
+                'extra_data': {
+                    'chain': request.chain,
+                    'error': str(e),
+                }
+            }
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Trade preview failed"
         )
 
 
-@router.post("/execute", response_model=TradeStatusResponse)
+@router.post("/execute", response_model=TradeResult)
 async def execute_trade(
-    request: ExecuteTradeRequest,
+    request: TradeExecutionRequest,
     chain_clients: Dict = Depends(get_chain_clients),
-) -> TradeStatusResponse:
+    trade_executor = Depends(get_trade_executor),
+) -> TradeResult:
     """
-    Execute a trade with full safety checks and monitoring.
+    Execute trade with full validation and monitoring.
     
     Args:
-        request: Trade execution parameters
+        request: Trade execution request
         chain_clients: Chain client dependencies
+        trade_executor: Trade execution service
         
     Returns:
-        Trade status with trace ID for monitoring
+        Trade execution result with trace ID for monitoring
     """
-    trace_id = str(uuid.uuid4())
-    
     logger.info(
-        f"Trade execution requested: {request.amount_in} {request.input_token} -> {request.output_token}",
+        f"Trade execution request: {request.amount_in} {request.input_token} -> {request.output_token}",
         extra={
             'extra_data': {
-                'trace_id': trace_id,
-                'user_id': request.user_id,
                 'chain': request.chain,
-                'wallet_address': request.wallet_address,
+                'dex': request.dex,
+                'wallet': request.wallet_address,
+                'trade_type': request.trade_type,
+                'slippage_bps': request.slippage_bps,
             }
         }
     )
     
     try:
-        # Create trade request
+        # Convert to internal trade request format
         trade_request = TradeRequest(
-            user_id=request.user_id,
-            trace_id=trace_id,
-            trade_type=TradeType.BUY if request.input_token != request.output_token else TradeType.SELL,
-            chain=request.chain,
             input_token=request.input_token,
             output_token=request.output_token,
-            input_amount=request.amount_in,
-            min_output_amount=request.min_output_amount,
-            slippage_bps=request.slippage_bps,
-            preferred_dex=request.preferred_dex,
-            enable_canary=request.enable_canary,
+            amount_in=request.amount_in,
+            minimum_amount_out=request.minimum_amount_out,
+            chain=request.chain,
+            dex=request.dex,
+            route=request.route,
             wallet_address=request.wallet_address,
-            wallet_type=request.wallet_type,
+            slippage_bps=request.slippage_bps,
+            deadline_seconds=request.deadline_seconds,
+            trade_type=request.trade_type,
+            gas_price_gwei=request.gas_price_gwei,
         )
         
-        # Start trade execution (async)
-        import asyncio
-        asyncio.create_task(
-            trade_executor.execute_trade(trade_request, chain_clients)
+        # Execute trade
+        result = await trade_executor.execute_trade(trade_request, chain_clients)
+        
+        logger.info(
+            f"Trade execution completed: {result.trace_id}, status: {result.status}",
+            extra={
+                'extra_data': {
+                    'trace_id': result.trace_id,
+                    'status': result.status,
+                    'tx_hash': result.tx_hash,
+                    'execution_time_ms': result.execution_time_ms,
+                }
+            }
         )
         
-        return TradeStatusResponse(
-            trace_id=trace_id,
-            status="pending",
-            progress_percentage=0,
-            current_step="Validating trade parameters",
-            estimated_completion_ms=30000,  # 30 seconds estimate
-        )
+        return result
         
     except Exception as e:
-        logger.error(f"Trade execution setup failed: {e}")
+        logger.error(
+            f"Trade execution failed: {e}",
+            extra={
+                'extra_data': {
+                    'chain': request.chain,
+                    'dex': request.dex,
+                    'error': str(e),
+                }
+            }
+        )
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Trade execution failed: {str(e)}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Trade execution failed"
         )
 
 
 @router.get("/status/{trace_id}", response_model=TradeStatusResponse)
-async def get_trade_status(trace_id: str) -> TradeStatusResponse:
+async def get_trade_status(
+    trace_id: str,
+    trade_executor = Depends(get_trade_executor),
+) -> TradeStatusResponse:
     """
     Get current status of a trade execution.
     
     Args:
         trace_id: Trade trace ID
+        trade_executor: Trade execution service
         
     Returns:
         Current trade status and progress
@@ -278,14 +253,15 @@ async def get_trade_status(trace_id: str) -> TradeStatusResponse:
     
     # Map status to progress and current step
     progress_map = {
-        "pending": (5, "Initializing trade"),
-        "building": (15, "Building transaction"),
-        "approving": (30, "Processing approvals"),
-        "executing": (60, "Executing trade"),
-        "submitted": (80, "Waiting for confirmation"),
-        "confirmed": (100, "Trade completed"),
-        "failed": (0, "Trade failed"),
-        "reverted": (0, "Transaction reverted"),
+        TradeStatus.PENDING: (5, "Initializing trade"),
+        TradeStatus.BUILDING: (15, "Building transaction"),
+        TradeStatus.APPROVING: (30, "Processing approvals"),
+        TradeStatus.EXECUTING: (60, "Executing trade"),
+        TradeStatus.SUBMITTED: (80, "Waiting for confirmation"),
+        TradeStatus.CONFIRMED: (100, "Trade completed"),
+        TradeStatus.FAILED: (0, "Trade failed"),
+        TradeStatus.REVERTED: (0, "Transaction reverted"),
+        TradeStatus.CANCELLED: (0, "Trade cancelled"),
     }
     
     progress, current_step = progress_map.get(result.status, (0, "Unknown status"))
@@ -302,12 +278,16 @@ async def get_trade_status(trace_id: str) -> TradeStatusResponse:
 
 
 @router.post("/cancel/{trace_id}")
-async def cancel_trade(trace_id: str) -> Dict[str, str]:
+async def cancel_trade(
+    trace_id: str,
+    trade_executor = Depends(get_trade_executor),
+) -> Dict[str, str]:
     """
     Cancel an active trade if possible.
     
     Args:
         trace_id: Trade trace ID
+        trade_executor: Trade execution service
         
     Returns:
         Cancellation result
@@ -328,69 +308,210 @@ async def get_trade_history(
     limit: int = 50,
     offset: int = 0,
     chain: Optional[str] = None,
-) -> Dict:
+    status: Optional[TradeStatus] = None,
+    trade_executor = Depends(get_trade_executor),
+) -> TradeHistoryResponse:
     """
     Get trade history for a user.
     
     Args:
         user_id: User ID
-        limit: Maximum number of results
-        offset: Number of results to skip
+        limit: Maximum number of trades to return
+        offset: Offset for pagination
         chain: Optional chain filter
+        status: Optional status filter
+        trade_executor: Trade execution service
         
     Returns:
-        Trade history with pagination
+        Paginated trade history
     """
-    from ..storage.database import get_session_context
-    from ..storage.repositories import TransactionRepository
+    try:
+        # This would integrate with the transaction repository
+        # For now, return mock data structure
+        
+        logger.info(
+            f"Trade history request: user_id={user_id}, limit={limit}, offset={offset}",
+            extra={
+                'extra_data': {
+                    'user_id': user_id,
+                    'limit': limit,
+                    'offset': offset,
+                    'chain_filter': chain,
+                    'status_filter': status,
+                }
+            }
+        )
+        
+        # Mock implementation - would fetch from database
+        trades = []  # List[TradeResult]
+        total_count = 0
+        
+        return TradeHistoryResponse(
+            trades=trades,
+            total_count=total_count,
+            page=offset // limit + 1,
+            page_size=limit,
+        )
+        
+    except Exception as e:
+        logger.error(f"Failed to fetch trade history: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch trade history"
+        )
+
+
+@router.get("/active")
+async def get_active_trades(
+    trade_executor = Depends(get_trade_executor),
+) -> Dict[str, List[TradeResult]]:
+    """
+    Get all currently active trades.
     
-    async with get_session_context() as session:
-        tx_repo = TransactionRepository(session)
-        transactions = await tx_repo.get_user_transactions(
-            user_id=user_id,
-            limit=limit,
-            offset=offset,
-            chain=chain,
+    Args:
+        trade_executor: Trade execution service
+        
+    Returns:
+        List of active trades
+    """
+    try:
+        # Get active trades from executor
+        active_trades = list(trade_executor.active_trades.values())
+        
+        logger.info(
+            f"Active trades request: {len(active_trades)} trades",
+            extra={'extra_data': {'active_count': len(active_trades)}}
+        )
+        
+        return {"active_trades": active_trades}
+        
+    except Exception as e:
+        logger.error(f"Failed to fetch active trades: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch active trades"
+        )
+
+
+@router.post("/batch-execute")
+async def batch_execute_trades(
+    requests: List[TradeExecutionRequest],
+    chain_clients: Dict = Depends(get_chain_clients),
+    trade_executor = Depends(get_trade_executor),
+) -> Dict[str, List[TradeResult]]:
+    """
+    Execute multiple trades in batch.
+    
+    Args:
+        requests: List of trade execution requests
+        chain_clients: Chain client dependencies
+        trade_executor: Trade execution service
+        
+    Returns:
+        Batch execution results
+    """
+    if len(requests) > 10:  # Limit batch size
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Batch size limited to 10 trades"
         )
     
-    return {
-        "trades": [
-            {
-                "id": tx.id,
-                "trace_id": tx.trace_id,
-                "tx_hash": tx.tx_hash,
-                "chain": tx.chain,
-                "tx_type": tx.tx_type,
-                "status": tx.status,
-                "token_symbol": tx.token_symbol,
-                "amount_in": str(tx.amount_in) if tx.amount_in else None,
-                "amount_out": str(tx.amount_out) if tx.amount_out else None,
-                "dex": tx.dex,
-                "created_at": tx.created_at.isoformat(),
-                "confirmed_at": tx.confirmed_at.isoformat() if tx.confirmed_at else None,
+    logger.info(
+        f"Batch trade execution: {len(requests)} trades",
+        extra={'extra_data': {'batch_size': len(requests)}}
+    )
+    
+    results = []
+    
+    try:
+        # Execute trades sequentially for safety
+        # In production, could consider parallel execution with limits
+        for request in requests:
+            trade_request = TradeRequest(
+                input_token=request.input_token,
+                output_token=request.output_token,
+                amount_in=request.amount_in,
+                minimum_amount_out=request.minimum_amount_out,
+                chain=request.chain,
+                dex=request.dex,
+                route=request.route,
+                wallet_address=request.wallet_address,
+                slippage_bps=request.slippage_bps,
+                deadline_seconds=request.deadline_seconds,
+                trade_type=request.trade_type,
+                gas_price_gwei=request.gas_price_gwei,
+            )
+            
+            result = await trade_executor.execute_trade(trade_request, chain_clients)
+            results.append(result)
+        
+        success_count = sum(1 for r in results if r.status == TradeStatus.CONFIRMED)
+        
+        logger.info(
+            f"Batch execution completed: {success_count}/{len(results)} successful",
+            extra={
+                'extra_data': {
+                    'total_trades': len(results),
+                    'successful_trades': success_count,
+                }
             }
-            for tx in transactions
-        ],
-        "pagination": {
-            "limit": limit,
-            "offset": offset,
-            "has_more": len(transactions) == limit,
-        }
-    }
+        )
+        
+        return {"results": results}
+        
+    except Exception as e:
+        logger.error(f"Batch trade execution failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Batch trade execution failed"
+        )
 
 
 @router.get("/health")
-async def trade_health() -> Dict[str, str]:
+async def trade_health(
+    chain_clients: Dict = Depends(get_chain_clients),
+    trade_executor = Depends(get_trade_executor),
+) -> Dict:
     """
     Health check for trade execution service.
     
     Returns:
-        Health status of trade executor
+        Health status of trading components
     """
-    active_trades_count = len(trade_executor.active_trades)
-    
-    return {
-        "status": "OK",
-        "active_trades": str(active_trades_count),
-        "executor_ready": "true",
-    }
+    try:
+        health_status = {
+            "status": "OK",
+            "active_trades": len(trade_executor.active_trades),
+            "components": {}
+        }
+        
+        # Check nonce manager health
+        if hasattr(trade_executor, 'nonce_manager'):
+            nonce_health = await trade_executor.nonce_manager.health_check()
+            health_status["components"]["nonce_manager"] = nonce_health
+        
+        # Check canary validator health
+        if hasattr(trade_executor, 'canary_validator'):
+            canary_health = await trade_executor.canary_validator.health_check()
+            health_status["components"]["canary_validator"] = canary_health
+        
+        # Check chain client availability
+        chain_status = {}
+        for chain_type, client in chain_clients.items():
+            if client:
+                chain_status[chain_type] = "OK"
+            else:
+                chain_status[chain_type] = "UNAVAILABLE"
+        
+        health_status["components"]["chain_clients"] = chain_status
+        
+        return health_status
+        
+    except Exception as e:
+        logger.error(f"Trade health check failed: {e}")
+        return {
+            "status": "ERROR",
+            "error": str(e),
+            "active_trades": 0,
+            "components": {}
+        }
