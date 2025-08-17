@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Container, Row, Col, Navbar, Nav, Card, Alert, Badge } from 'react-bootstrap';
 import { Activity, TrendingUp, Settings, BarChart3 } from 'lucide-react';
+import Analytics from './components/Analytics.jsx';
 
 function App() {
   const [systemHealth, setSystemHealth] = useState(null);
@@ -57,6 +58,14 @@ function App() {
                 onClick={() => setActiveTab('trade')}
               >
                 Trade
+              </Nav.Link>
+              <Nav.Link 
+                href="#analytics" 
+                active={activeTab === 'analytics'}
+                onClick={() => setActiveTab('analytics')}
+              >
+                <BarChart3 className="me-1" size={16} />
+                Analytics
               </Nav.Link>
               <Nav.Link 
                 href="#portfolio" 
@@ -153,6 +162,9 @@ function App() {
                 </Card.Body>
               </Card>
             )}
+
+            {/* Analytics Dashboard */}
+            {activeTab === 'analytics' && <Analytics />}
 
             {/* Portfolio Tab */}
             {activeTab === 'portfolio' && (
