@@ -2024,3 +2024,12 @@
 {"timestamp":"2025-08-17T12:45:53.378565Z","level":"INFO","logger":"app.bootstrap","message":"Shutting down DEX Sniper Pro - MINIMAL VERSION","module":"bootstrap","uptime_sec":2.300044}
 {"timestamp":"2025-08-17T12:45:53.379949Z","level":"INFO","logger":"app.storage.database","message":"Database connections closed","module":"database"}
 {"timestamp":"2025-08-17T12:45:53.379949Z","level":"INFO","logger":"app.bootstrap","message":"Database connections closed","module":"bootstrap"}
+{"timestamp":"2025-08-17T12:45:56.871359Z","level":"INFO","logger":"root","message":"Logging system initialized","module":"logging","log_level":"INFO","debug":false,"environment":"development"}
+{"timestamp":"2025-08-17T12:45:56.871359Z","level":"INFO","logger":"app.bootstrap","message":"Starting DEX Sniper Pro - MINIMAL VERSION","module":"bootstrap","environment":"development","service_mode":"free","debug":false}
+{"timestamp":"2025-08-17T12:45:56.871359Z","level":"INFO","logger":"app.storage.database","message":"Initializing database at: data\\app.db","module":"database"}
+{"timestamp":"2025-08-17T12:45:56.884824Z","level":"INFO","logger":"app.storage.database","message":"Database initialized successfully with WAL mode","module":"database"}
+{"timestamp":"2025-08-17T12:45:56.888031Z","level":"INFO","logger":"app.storage.database","message":"Database tables created successfully","module":"database"}
+{"timestamp":"2025-08-17T12:45:56.888031Z","level":"INFO","logger":"app.bootstrap","message":"Database initialized successfully with WAL mode","module":"bootstrap"}
+{"timestamp":"2025-08-17T12:45:56.888031Z","level":"INFO","logger":"app.bootstrap","message":"Skipping RPC/chain client initialization for testing","module":"bootstrap"}
+{"timestamp":"2025-08-17T12:45:58.151935Z","level":"INFO","logger":"app.core.middleware","message":"Request started: GET /api/v1/health/","module":"middleware","trace_id":"670dc314-acc0-4764-b3a6-aebb250eb53f","method":"GET","path":"/api/v1/health/","query_params":"","client_ip":"127.0.0.1","user_agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:141.0) Gecko/20100101 Firefox/141.0"}
+{"timestamp":"2025-08-17T12:45:58.151935Z","level":"INFO","logger":"app.core.middleware","message":"Request completed: GET /api/v1/health/","module":"middleware","trace_id":"670dc314-acc0-4764-b3a6-aebb250eb53f","status_code":404,"process_time_ms":1.05,"response_size":0}
