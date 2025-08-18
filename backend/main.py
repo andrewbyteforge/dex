@@ -3,7 +3,6 @@ DEX Sniper Pro - Main Application.
 
 Professional DEX trading and automation platform with centralized API routing.
 """
-import asyncio
 import logging
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -35,7 +34,7 @@ try:
     logger.info("✅ Centralized API router registered")
 except ImportError as e:
     logger.error(f"❌ Failed to load centralized API router: {e}")
-    
+
     # Fallback to individual routers if centralized fails
     try:
         from app.api.presets_working import router as presets_router
@@ -51,6 +50,7 @@ except ImportError as e:
     except ImportError as e:
         logger.warning(f"⚠️  Autotrade API failed: {e}")
 
+
 @app.get("/")
 async def root():
     """Root endpoint."""
@@ -64,9 +64,10 @@ async def root():
             "presets": "/api/v1/presets/",
             "autotrade": "/api/v1/autotrade/",
             "trades": "/api/v1/trades/",
-            "websocket": "/ws/autotrade"
-        }
+            "websocket": "/ws/autotrade",
+        },
     }
+
 
 @app.get("/health")
 async def health_check():
@@ -79,9 +80,10 @@ async def health_check():
         "apis": {
             "presets": "available",
             "autotrade": "available",
-            "trades": "available"
-        }
+            "trades": "available",
+        },
     }
+
 
 # WebSocket endpoint for autotrade
 @app.websocket("/ws/autotrade")
@@ -89,50 +91,55 @@ async def autotrade_websocket(websocket: WebSocket):
     """WebSocket endpoint for autotrade real-time updates."""
     await websocket.accept()
     logger.info("WebSocket client connected")
-    
+
     try:
-        await websocket.send_json({
-            "type": "connection_established",
-            "data": {
-                "server_time": "2025-08-17T15:00:00Z",
-                "message": "Connected to autotrade WebSocket"
+        await websocket.send_json(
+            {
+                "type": "connection_established",
+                "data": {
+                    "server_time": "2025-08-17T15:00:00Z",
+                    "message": "Connected to autotrade WebSocket",
+                },
             }
-        })
-        
+        )
+
         while True:
             try:
                 message = await websocket.receive_text()
                 logger.info(f"Received WebSocket message: {message}")
-                
-                await websocket.send_json({
-                    "type": "echo",
-                    "data": {
-                        "received": message,
-                        "timestamp": "2025-08-17T15:00:00Z"
+
+                await websocket.send_json(
+                    {
+                        "type": "echo",
+                        "data": {
+                            "received": message,
+                            "timestamp": "2025-08-17T15:00:00Z",
+                        },
                     }
-                })
-                
+                )
+
             except WebSocketDisconnect:
                 logger.info("WebSocket client disconnected")
                 break
-                
+
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
     finally:
         try:
             await websocket.close()
-        except:
+        except Exception:
             pass
+
 
 if __name__ == "__main__":
     import uvicorn
-    
+
     logger.info("🚀 Starting DEX Sniper Pro server...")
-    
+
     uvicorn.run(
         "main:app",
         host="127.0.0.1",
         port=8000,
         reload=True,
-        log_level="info"
+        log_level="info",
     )

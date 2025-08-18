@@ -465,7 +465,7 @@ def create_app() -> FastAPI:
                 "strategy_type": "new_pair_snipe",
                 "match_score": 85.0,
                 "reason": "Low risk approach for new pair detection",
-                "type": "builtin"  # Changed from is_built_in to type
+                "type": "builtin"
             }
         ]
 
