@@ -24,12 +24,13 @@ class AutotradeMessage(BaseModel):
     """WebSocket message for autotrade events."""
     type: str
     data: Dict
-    timestamp: str = None
+    timestamp: Optional[str] = None
     
-    def __init__(self, **data):
-        if 'timestamp' not in data:
-            data['timestamp'] = datetime.utcnow().isoformat()
-        super().__init__(**data)
+    def __init__(self, **kwargs):
+        """Initialize message with automatic timestamp if not provided."""
+        if 'timestamp' not in kwargs or kwargs['timestamp'] is None:
+            kwargs['timestamp'] = datetime.utcnow().isoformat()
+        super().__init__(**kwargs)
 
 
 class AutotradeWebSocketHub:
