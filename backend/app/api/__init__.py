@@ -65,21 +65,20 @@ except ImportError as e:
     logger.warning(f"⚠️  Working Presets API not available: {e}")
     print(f"⚠️  Working Presets API not available: {e}")
 
-# **PHASE 8: SIMULATION & BACKTESTING** - NEW
+# **PHASE 8: SIMULATION & BACKTESTING** - FIXED IMPORTS
 _register_router("sim", description="Simulation & Backtesting")
 
-# **COMMENTED OUT BROKEN MODULES UNTIL FIXED**
-# These have circular imports or missing dependencies:
-_register_router("database", description="Database Operations")      # Missing LedgerEntry
-_register_router("wallet", description="Wallet Management")          # Module doesn't exist
-_register_router("quotes", description="Price Quotes")               # Circular import TradeExecutor
-_register_router("trades", description="Trade Execution")            # Circular import TradeExecutor  
-_register_router("pairs", description="Trading Pairs")               # Module doesn't exist
-_register_router("risk", description="Risk Assessment")              # Circular import TradeExecutor
-_register_router("analytics", description="Performance Analytics")   # 'backend' import error
-_register_router("orders", description="Advanced Orders")            # Circular import TradeExecutor
-_register_router("discovery", description="Pair Discovery")          # Module doesn't exist
-_register_router("safety", description="Safety Controls")            # Circular import TradeExecutor
+# **TEMPORARILY ENABLE THESE FOR TESTING** - Comment out when fixed
+_register_router("database", description="Database Operations")
+_register_router("wallet", description="Wallet Management")
+_register_router("quotes", description="Price Quotes")
+_register_router("trades", description="Trade Execution")
+_register_router("pairs", description="Trading Pairs")
+_register_router("risk", description="Risk Assessment")
+_register_router("analytics", description="Performance Analytics")
+_register_router("orders", description="Advanced Orders")
+_register_router("discovery", description="Pair Discovery")
+_register_router("safety", description="Safety Controls")
 
 # Working autotrade (bypasses circular imports)
 _register_router("autotrade", description="Automated Trading")

@@ -16,11 +16,11 @@ from typing import Dict, List, Optional, Tuple, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, validator
 
-from backend.app.core.dependencies import get_current_user, CurrentUser
+from ..core.dependencies import get_current_user, CurrentUser
 
 # Safe imports with fallbacks for all simulation components
 try:
-    from backend.app.sim.backtester import (
+    from ..sim.backtester import (
         Backtester,
         BacktestMode,
         BacktestRequest,
@@ -54,7 +54,7 @@ except ImportError as e:
     HAS_BACKTESTER = False
 
 try:
-    from backend.app.sim.simulator import (
+    from ..sim.simulator import (
         SimulationEngine,
         SimulationMode,
         SimulationParameters,
@@ -105,14 +105,14 @@ except ImportError as e:
     HAS_SIMULATOR = False
 
 try:
-    from backend.app.sim.metrics import (
+    from ..sim.metrics import (
         PerformanceAnalyzer,
         PerformanceMetrics,
         TradeResult,
     )
     # Try additional imports that might exist
     try:
-        from backend.app.sim.metrics import (
+        from ..sim.metrics import (
             ComparisonMetrics,
             DrawdownPeriod,
         )
@@ -155,7 +155,7 @@ except ImportError as e:
     HAS_PERFORMANCE_ANALYZER = False
 
 try:
-    from backend.app.sim.market_impact import (
+    from ..sim.market_impact import (
         MarketImpactModel,
         MarketCondition,
         LiquidityTier,
@@ -191,7 +191,7 @@ except ImportError as e:
     HAS_MARKET_IMPACT = False
 
 try:
-    from backend.app.sim.latency_model import (
+    from ..sim.latency_model import (
         LatencyModel,
         LatencyMeasurement,
         LatencyDistribution,
@@ -237,7 +237,7 @@ except ImportError as e:
     HAS_LATENCY_MODEL = False
 
 try:
-    from backend.app.sim.historical_data import (
+    from ..sim.historical_data import (
         HistoricalDataManager,
         DataReplayIterator,
         SimulationSnapshot,
