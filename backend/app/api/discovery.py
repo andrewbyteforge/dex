@@ -11,10 +11,11 @@ from decimal import Decimal
 from datetime import datetime, timedelta
 from enum import Enum
 
-from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect, HTTPException
 from pydantic import BaseModel, Field
 
-from app.core.dependencies import get_current_user, CurrentUser
+# Fixed import - use relative path
+from ..core.dependencies import get_current_user, CurrentUser
 
 router = APIRouter(
     prefix="/api/discovery",
@@ -89,319 +90,334 @@ class TokenDiscoveryInfo(BaseModel):
     """Detailed token discovery information."""
     
     token_address: str
+    token_symbol: str
+    token_name: Optional[str]
     chain: str
-    symbol: str
-    name: Optional[str]
-    decimals: int
-    total_supply: str
+    discovery_time: datetime
+    initial_pairs: List[str]
     deployer_address: str
-    deploy_timestamp: datetime
-    deploy_block: int
     contract_verified: bool
-    has_socials: bool
-    website: Optional[str]
-    telegram: Optional[str]
-    twitter: Optional[str]
-    initial_liquidity_usd: str
-    current_liquidity_usd: str
-    holder_count: int
-    honeypot_status: str  # safe, warning, danger, unknown
+    honeypot_status: Optional[bool]
     buy_tax: Optional[float]
     sell_tax: Optional[float]
-    max_tx_amount: Optional[str]
-    owner_balance_percent: Optional[float]
-    top_10_holders_percent: Optional[float]
+    holder_count: Optional[int]
     risk_assessment: Dict[str, Any]
 
 
 @router.get("/events", response_model=List[DiscoveryEvent])
 async def get_discovery_events(
+    limit: int = Query(50, description="Maximum number of events", le=200),
     chain: Optional[str] = Query(None, description="Filter by chain"),
     event_type: Optional[DiscoveryEventType] = Query(None, description="Filter by event type"),
-    hours: int = Query(1, description="Time window in hours"),
-    limit: int = Query(50, le=200),
+    urgency: Optional[str] = Query(None, description="Filter by urgency level"),
     current_user: CurrentUser = Depends(get_current_user)
 ) -> List[DiscoveryEvent]:
     """
     Get recent discovery events.
     
-    Returns discovery events from the specified time window,
-    filtered by chain and event type.
+    Args:
+        limit: Maximum number of events to return
+        chain: Filter by blockchain
+        event_type: Filter by event type
+        urgency: Filter by urgency level
+        current_user: Current authenticated user
+        
+    Returns:
+        List of discovery events
     """
-    # Mock discovery events
+    # Mock discovery events for development
     mock_events = [
         DiscoveryEvent(
-            event_id="evt_001",
+            event_id="event_001",
             event_type=DiscoveryEventType.NEW_PAIR,
             chain=chain or "base",
             dex="uniswap_v2",
             pair_address="0x" + "1" * 40,
             token_address="0x" + "a" * 40,
-            token_symbol="NEWGEM",
-            token_name="New Gem Token",
+            token_symbol="NEWCOIN",
+            token_name="New Coin Token",
             timestamp=datetime.utcnow(),
             block_number=12345678,
             details={
-                "initial_liquidity_usd": "50000",
-                "paired_with": "WETH",
+                "initial_liquidity_usd": 50000.0,
                 "deployer": "0x" + "d" * 40,
-                "verified_contract": True
+                "paired_with": "WETH"
             },
-            urgency="high",
+            urgency="medium",
             action_required=True,
-            risk_score=0.4
+            risk_score=2.5
         ),
         DiscoveryEvent(
-            event_id="evt_002",
-            event_type=DiscoveryEventType.LIQUIDITY_ADDED,
+            event_id="event_002",
+            event_type=DiscoveryEventType.LARGE_TRADE,
             chain=chain or "ethereum",
             dex="uniswap_v3",
             pair_address="0x" + "2" * 40,
             token_address="0x" + "b" * 40,
             token_symbol="PEPE",
-            token_name="Pepe",
-            timestamp=datetime.utcnow() - timedelta(minutes=30),
-            block_number=12345600,
+            token_name="Pepe Token",
+            timestamp=datetime.utcnow() - timedelta(minutes=5),
+            block_number=12345677,
             details={
-                "amount_usd": "100000",
-                "provider": "0x" + "e" * 40,
-                "new_total_liquidity": "5000000"
+                "trade_amount_usd": 500000.0,
+                "price_impact": 2.5,
+                "trader": "0x" + "t" * 40
             },
-            urgency="medium",
+            urgency="high",
             action_required=False,
-            risk_score=0.2
+            risk_score=1.8
         )
     ]
     
-    # Filter by event type if specified
+    # Apply filters
+    filtered_events = mock_events
     if event_type:
-        mock_events = [e for e in mock_events if e.event_type == event_type]
+        filtered_events = [e for e in filtered_events if e.event_type == event_type]
+    if urgency:
+        filtered_events = [e for e in filtered_events if e.urgency == urgency]
     
-    return mock_events[:limit]
+    return filtered_events[:limit]
 
 
-@router.post("/filters", response_model=Dict[str, str])
-async def set_discovery_filters(
-    filters: DiscoveryFilter,
+@router.post("/filter", response_model=List[DiscoveryEvent])
+async def filter_discovery_events(
+    filter_criteria: DiscoveryFilter,
     current_user: CurrentUser = Depends(get_current_user)
-) -> Dict[str, str]:
+) -> List[DiscoveryEvent]:
     """
-    Set discovery filters for real-time monitoring.
+    Filter discovery events with advanced criteria.
     
-    Configures which events to monitor and alert on.
+    Args:
+        filter_criteria: Filter criteria
+        current_user: Current authenticated user
+        
+    Returns:
+        Filtered discovery events
     """
-    # Mock implementation - would save filters to database
-    return {
-        "message": "Discovery filters updated successfully",
-        "active_chains": str(len(filters.chains)),
-        "active_event_types": str(len(filters.event_types))
-    }
-
-
-@router.get("/filters", response_model=DiscoveryFilter)
-async def get_discovery_filters(
-    current_user: CurrentUser = Depends(get_current_user)
-) -> DiscoveryFilter:
-    """Get current discovery filter settings."""
-    # Return default filters for now
-    return DiscoveryFilter(
-        chains=["ethereum", "bsc", "base"],
-        dexes=["uniswap_v2", "uniswap_v3", "pancakeswap"],
-        event_types=[DiscoveryEventType.NEW_PAIR, DiscoveryEventType.LIQUIDITY_ADDED],
-        min_liquidity_usd=10000,
-        exclude_honeypots=True,
-        exclude_high_tax=True
-    )
-
-
-@router.get("/snapshot/{chain}", response_model=MarketSnapshot)
-async def get_market_snapshot(
-    chain: str,
-    dex: Optional[str] = Query(None, description="Specific DEX or all"),
-    current_user: CurrentUser = Depends(get_current_user)
-) -> MarketSnapshot:
-    """
-    Get current market snapshot for a chain.
-    
-    Provides overview of market activity, trending tokens,
-    and significant events.
-    """
-    # Mock snapshot
-    return MarketSnapshot(
-        chain=chain,
-        dex=dex or "all",
-        timestamp=datetime.utcnow(),
-        active_pairs=1234,
-        new_pairs_24h=45,
-        total_liquidity_usd="50000000",
-        volume_24h_usd="25000000",
-        trending_tokens=[
-            {
-                "symbol": "PEPE",
-                "address": "0x" + "a" * 40,
-                "price_change_24h": 45.5,
-                "volume_24h": "5000000"
+    # Mock filtered events
+    mock_filtered = [
+        DiscoveryEvent(
+            event_id="filtered_001",
+            event_type=DiscoveryEventType.NEW_PAIR,
+            chain="ethereum",
+            dex="uniswap_v2",
+            pair_address="0x" + "3" * 40,
+            token_address="0x" + "c" * 40,
+            token_symbol="FILTERED",
+            token_name="Filtered Token",
+            timestamp=datetime.utcnow(),
+            block_number=12345679,
+            details={
+                "initial_liquidity_usd": 100000.0,
+                "buy_tax": 2.0,
+                "sell_tax": 2.0
             },
-            {
-                "symbol": "MEME",
-                "address": "0x" + "b" * 40,
-                "price_change_24h": 30.2,
-                "volume_24h": "3000000"
-            }
-        ],
-        largest_liquidity_adds=[
-            {
-                "pair": "PEPE/WETH",
-                "amount_usd": "500000",
-                "timestamp": datetime.utcnow().isoformat()
-            }
-        ],
-        rugged_count_24h=2
-    )
+            urgency="low",
+            action_required=False,
+            risk_score=1.5
+        )
+    ]
+    
+    return mock_filtered
 
 
-@router.get("/token/{token_address}", response_model=TokenDiscoveryInfo)
+@router.get("/snapshot", response_model=List[MarketSnapshot])
+async def get_market_snapshot(
+    chains: Optional[List[str]] = Query(None, description="Chains to include"),
+    current_user: CurrentUser = Depends(get_current_user)
+) -> List[MarketSnapshot]:
+    """
+    Get current market snapshot across chains/DEXs.
+    
+    Args:
+        chains: List of chains to include
+        current_user: Current authenticated user
+        
+    Returns:
+        Market snapshots
+    """
+    target_chains = chains or ["ethereum", "bsc", "polygon", "base"]
+    
+    mock_snapshots = []
+    for chain in target_chains:
+        snapshot = MarketSnapshot(
+            chain=chain,
+            dex="uniswap_v2" if chain == "ethereum" else "pancakeswap",
+            timestamp=datetime.utcnow(),
+            active_pairs=1250,
+            new_pairs_24h=45,
+            total_liquidity_usd="50000000.00",
+            volume_24h_usd="25000000.00",
+            trending_tokens=[
+                {"symbol": "TREND", "price_change": 85.5},
+                {"symbol": "MOON", "price_change": 42.3}
+            ],
+            largest_liquidity_adds=[
+                {"token": "NEWTOKEN", "amount_usd": 500000.0}
+            ],
+            rugged_count_24h=3
+        )
+        mock_snapshots.append(snapshot)
+    
+    return mock_snapshots
+
+
+@router.get("/tokens/{token_address}", response_model=TokenDiscoveryInfo)
 async def get_token_discovery_info(
     token_address: str,
     chain: str = Query(..., description="Blockchain network"),
     current_user: CurrentUser = Depends(get_current_user)
 ) -> TokenDiscoveryInfo:
     """
-    Get detailed discovery information for a token.
+    Get detailed discovery information for a specific token.
     
-    Provides comprehensive analysis including deployment info,
-    liquidity, holder distribution, and risk assessment.
+    Args:
+        token_address: Token contract address
+        chain: Blockchain network
+        current_user: Current authenticated user
+        
+    Returns:
+        Token discovery information
     """
-    # Mock token info
-    return TokenDiscoveryInfo(
+    # Mock token discovery info
+    mock_info = TokenDiscoveryInfo(
         token_address=token_address,
+        token_symbol="DISCOVERED",
+        token_name="Discovered Token",
         chain=chain,
-        symbol="MOCK",
-        name="Mock Token",
-        decimals=18,
-        total_supply="1000000000000000000000000",
+        discovery_time=datetime.utcnow() - timedelta(hours=2),
+        initial_pairs=["0x" + "p1" * 20, "0x" + "p2" * 20],
         deployer_address="0x" + "d" * 40,
-        deploy_timestamp=datetime.utcnow() - timedelta(hours=24),
-        deploy_block=12340000,
         contract_verified=True,
-        has_socials=True,
-        website="https://example.com",
-        telegram="https://t.me/example",
-        twitter="https://twitter.com/example",
-        initial_liquidity_usd="50000",
-        current_liquidity_usd="150000",
-        holder_count=500,
-        honeypot_status="safe",
+        honeypot_status=False,
         buy_tax=2.0,
         sell_tax=2.0,
-        max_tx_amount="10000000000000000000000",
-        owner_balance_percent=5.0,
-        top_10_holders_percent=35.0,
+        holder_count=850,
         risk_assessment={
-            "overall_score": 0.3,
-            "risk_level": "medium",
-            "positive_factors": [
-                "Contract verified",
-                "Liquidity locked",
-                "Active community"
-            ],
-            "negative_factors": [
-                "New token (< 7 days)",
-                "Concentrated holdings"
-            ]
+            "overall_score": 2.5,
+            "liquidity_risk": "low",
+            "contract_risk": "low",
+            "market_risk": "medium"
         }
     )
-
-
-@router.get("/mempool")
-async def get_mempool_activity(
-    chain: str = Query(..., description="Blockchain network"),
-    filter_large_trades: bool = Query(True, description="Only show large trades"),
-    min_value_usd: float = Query(10000, description="Minimum trade value"),
-    current_user: CurrentUser = Depends(get_current_user)
-) -> List[Dict[str, Any]]:
-    """
-    Get current mempool activity for pending transactions.
     
-    Monitors pending transactions to identify large trades
-    and potential opportunities.
+    return mock_info
+
+
+@router.get("/trending", response_model=List[DiscoveryEvent])
+async def get_trending_discoveries(
+    period: str = Query("24h", description="Time period (1h, 6h, 24h)"),
+    metric: str = Query("volume", description="Trending metric"),
+    limit: int = Query(20, le=100),
+    current_user: CurrentUser = Depends(get_current_user)
+) -> List[DiscoveryEvent]:
     """
-    # Mock mempool data
-    return [
-        {
-            "tx_hash": "0x" + "f" * 64,
-            "type": "swap",
-            "token_in": "WETH",
-            "token_out": "PEPE",
-            "amount_in": "10.0",
-            "estimated_amount_out": "10000000",
-            "value_usd": "20000",
-            "gas_price": "20",
-            "sender": "0x" + "5" * 40,
-            "pending_since": datetime.utcnow().isoformat()
-        }
+    Get trending discovery events.
+    
+    Args:
+        period: Time period for trending calculation
+        metric: Metric to determine trending
+        limit: Number of results
+        current_user: Current authenticated user
+        
+    Returns:
+        Trending discovery events
+    """
+    # Mock trending discoveries
+    mock_trending = [
+        DiscoveryEvent(
+            event_id="trending_001",
+            event_type=DiscoveryEventType.TRENDING,
+            chain="base",
+            dex="uniswap_v2",
+            pair_address="0x" + "4" * 40,
+            token_address="0x" + "t1" * 20,
+            token_symbol="VIRAL",
+            token_name="Viral Token",
+            timestamp=datetime.utcnow() - timedelta(hours=1),
+            block_number=12345680,
+            details={
+                "volume_24h": 2000000.0,
+                "price_change": 150.5,
+                "transaction_count": 5000
+            },
+            urgency="high",
+            action_required=True,
+            risk_score=3.0
+        )
     ]
+    
+    return mock_trending[:limit]
 
 
-@router.websocket("/stream")
-async def discovery_stream(websocket: WebSocket):
+@router.websocket("/ws")
+async def discovery_websocket(
+    websocket: WebSocket,
+    current_user: CurrentUser = Depends(get_current_user)
+):
     """
     WebSocket endpoint for real-time discovery events.
     
-    Streams discovery events as they occur based on
-    configured filters.
+    Args:
+        websocket: WebSocket connection
+        current_user: Current authenticated user
     """
     await websocket.accept()
+    
     try:
-        # Mock streaming - in production would connect to event source
         while True:
-            # Send mock event every 5 seconds
-            await websocket.send_json({
+            # Send mock discovery event every 10 seconds
+            await asyncio.sleep(10)
+            
+            mock_event = {
+                "event_id": f"ws_event_{int(datetime.utcnow().timestamp())}",
                 "event_type": "new_pair",
                 "chain": "base",
-                "token_symbol": "STREAM",
-                "pair_address": "0x" + "8" * 40,
-                "liquidity_usd": "25000",
-                "timestamp": datetime.utcnow().isoformat()
-            })
+                "token_symbol": "LIVE",
+                "timestamp": datetime.utcnow().isoformat(),
+                "urgency": "medium"
+            }
             
-            # Wait for client message or timeout
-            import asyncio
-            try:
-                message = await asyncio.wait_for(
-                    websocket.receive_text(),
-                    timeout=5.0
-                )
-                # Handle client messages (e.g., filter updates)
-                if message == "ping":
-                    await websocket.send_text("pong")
-            except asyncio.TimeoutError:
-                continue
-                
+            await websocket.send_json(mock_event)
+            
     except WebSocketDisconnect:
         pass
 
 
-@router.get("/stats")
+@router.get("/stats", response_model=Dict[str, Any])
 async def get_discovery_stats(
-    period: str = Query("24h", description="Time period (1h, 6h, 24h, 7d)"),
     current_user: CurrentUser = Depends(get_current_user)
 ) -> Dict[str, Any]:
     """
-    Get discovery statistics for the specified period.
+    Get discovery service statistics.
     
-    Provides metrics on discovered pairs, success rates,
-    and performance.
+    Args:
+        current_user: Current authenticated user
+        
+    Returns:
+        Discovery statistics
     """
     return {
-        "period": period,
-        "total_pairs_discovered": 156,
-        "pairs_traded": 45,
-        "success_rate": 0.72,
-        "total_profit_usd": "12500.00",
-        "average_profit_per_trade": "277.78",
-        "best_performing_chain": "base",
-        "most_active_dex": "uniswap_v2",
-        "rugged_avoided": 8,
-        "honeypots_detected": 15
+        "total_events_24h": 1250,
+        "new_pairs_24h": 45,
+        "honeypots_detected": 8,
+        "rugs_detected": 3,
+        "active_chains": ["ethereum", "bsc", "polygon", "base"],
+        "uptime_hours": 23.5,
+        "processing_speed_ms": 150.0
+    }
+
+
+@router.get("/health")
+async def discovery_health() -> Dict[str, str]:
+    """
+    Health check for discovery service.
+    
+    Returns:
+        Health status
+    """
+    return {
+        "status": "OK",
+        "message": "Discovery service is operational",
+        "note": "Using mock discovery data for testing"
     }

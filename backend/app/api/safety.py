@@ -1,404 +1,423 @@
 """
-Safety control API endpoints for managing trading safety systems.
+Pair Discovery API for DEX Sniper Pro.
 
-Simplified version for initial deployment.
+Real-time monitoring and discovery of new trading pairs,
+liquidity events, and market opportunities.
 """
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Any
+from typing import List, Optional, Dict, Any
 from decimal import Decimal
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect, HTTPException
 from pydantic import BaseModel, Field
 
-from app.core.dependencies import get_current_user, CurrentUser, get_chain_clients
-from app.storage.repositories import get_safety_repository, SafetyRepository
+# Fixed import - use relative path
+from ..core.dependencies import get_current_user, CurrentUser
 
 router = APIRouter(
-    prefix="/api/safety",
-    tags=["safety"],
+    prefix="/api/discovery",
+    tags=["discovery"],
     responses={404: {"description": "Not found"}},
 )
 
 
-class SafetyLevel(str, Enum):
-    """Safety level enumeration."""
-    PERMISSIVE = "permissive"
-    STANDARD = "standard"
-    CONSERVATIVE = "conservative"
-    EMERGENCY = "emergency"
+class DiscoveryEventType(str, Enum):
+    """Types of discovery events."""
+    
+    NEW_PAIR = "new_pair"
+    LIQUIDITY_ADDED = "liquidity_added"
+    LIQUIDITY_REMOVED = "liquidity_removed"
+    LARGE_TRADE = "large_trade"
+    WHALE_ACTIVITY = "whale_activity"
+    RUGGED = "rugged"
+    HONEYPOT_DETECTED = "honeypot_detected"
+    TRENDING = "trending"
 
 
-class BlacklistReason(str, Enum):
-    """Blacklist reason enumeration."""
-    HONEYPOT = "honeypot"
-    HIGH_TAX = "high_tax"
-    RUGPULL = "rugpull"
-    SCAM = "scam"
-    MANUAL = "manual"
-    OTHER = "other"
-
-
-class TradeCheckRequest(BaseModel):
-    """Request for trade safety check."""
-    token_address: str = Field(..., description="Token contract address")
-    chain: str = Field(..., description="Blockchain network")
-    trade_amount_usd: str = Field(..., description="Trade amount in USD")
-
-
-class TradeCheckResponse(BaseModel):
-    """Response for trade safety check."""
-    is_safe: bool = Field(..., description="Whether the trade is safe")
-    blocking_reasons: List[str] = Field(..., description="Reasons blocking the trade")
-    safety_level: str = Field(..., description="Current safety level")
-    emergency_stop: bool = Field(..., description="Emergency stop status")
-    risk_score: float = Field(..., description="Risk score (0-1)")
-
-
-class BlacklistRequest(BaseModel):
-    """Request to blacklist a token."""
-    token_address: str = Field(..., description="Token contract address")
-    chain: str = Field(..., description="Blockchain network")
-    reason: BlacklistReason = Field(..., description="Reason for blacklisting")
-    details: str = Field(..., description="Additional details")
-    severity: str = Field(default="high", description="Severity level")
-
-
-class SafetyStatusResponse(BaseModel):
-    """Response for safety system status."""
-    safety_level: str = Field(..., description="Current safety level")
-    emergency_stop: bool = Field(..., description="Emergency stop status")
-    active_circuit_breakers: List[str] = Field(..., description="Triggered circuit breakers")
-    blacklisted_tokens_count: int = Field(..., description="Number of blacklisted tokens")
-    recent_events_count: int = Field(..., description="Recent safety events")
-
-
-class SafetyEventResponse(BaseModel):
-    """Safety event response model."""
-    id: int
-    event_type: str
-    severity: str
-    reason: str
+class DiscoveryEvent(BaseModel):
+    """Discovery event model."""
+    
+    event_id: str
+    event_type: DiscoveryEventType
+    chain: str
+    dex: str
+    pair_address: str
+    token_address: str
+    token_symbol: str
+    token_name: Optional[str]
     timestamp: datetime
-    chain: Optional[str]
-    token_address: Optional[str]
-    resolved: bool
+    block_number: int
+    details: Dict[str, Any]
+    urgency: str  # low, medium, high, critical
+    action_required: bool
+    risk_score: float
 
 
-# Global safety state (in production, this would be in database)
-_safety_state = {
-    "safety_level": SafetyLevel.STANDARD,
-    "emergency_stop": False,
-    "circuit_breakers": []
-}
+class DiscoveryFilter(BaseModel):
+    """Filter criteria for discovery events."""
+    
+    chains: List[str] = Field(default_factory=list)
+    dexes: List[str] = Field(default_factory=list)
+    event_types: List[DiscoveryEventType] = Field(default_factory=list)
+    min_liquidity_usd: Optional[float] = None
+    max_token_age_hours: Optional[int] = None
+    min_holder_count: Optional[int] = None
+    exclude_honeypots: bool = True
+    exclude_high_tax: bool = True
+    max_buy_tax: float = 5.0
+    max_sell_tax: float = 5.0
 
 
-@router.post("/check-trade", response_model=TradeCheckResponse)
-async def check_trade_safety(
-    request: TradeCheckRequest,
-    current_user: CurrentUser = Depends(get_current_user),
-    safety_repo: SafetyRepository = Depends(get_safety_repository)
-) -> TradeCheckResponse:
+class MarketSnapshot(BaseModel):
+    """Market snapshot for a chain/DEX."""
+    
+    chain: str
+    dex: str
+    timestamp: datetime
+    active_pairs: int
+    new_pairs_24h: int
+    total_liquidity_usd: str
+    volume_24h_usd: str
+    trending_tokens: List[Dict[str, Any]]
+    largest_liquidity_adds: List[Dict[str, Any]]
+    rugged_count_24h: int
+
+
+class TokenDiscoveryInfo(BaseModel):
+    """Detailed token discovery information."""
+    
+    token_address: str
+    token_symbol: str
+    token_name: Optional[str]
+    chain: str
+    discovery_time: datetime
+    initial_pairs: List[str]
+    deployer_address: str
+    contract_verified: bool
+    honeypot_status: Optional[bool]
+    buy_tax: Optional[float]
+    sell_tax: Optional[float]
+    holder_count: Optional[int]
+    risk_assessment: Dict[str, Any]
+
+
+@router.get("/events", response_model=List[DiscoveryEvent])
+async def get_discovery_events(
+    limit: int = Query(50, description="Maximum number of events", le=200),
+    chain: Optional[str] = Query(None, description="Filter by chain"),
+    event_type: Optional[DiscoveryEventType] = Query(None, description="Filter by event type"),
+    urgency: Optional[str] = Query(None, description="Filter by urgency level"),
+    current_user: CurrentUser = Depends(get_current_user)
+) -> List[DiscoveryEvent]:
     """
-    Check if a trade is safe to execute.
+    Get recent discovery events.
     
-    Performs comprehensive safety checks including blacklist verification,
-    circuit breaker status, spend limits, and risk assessment.
+    Args:
+        limit: Maximum number of events to return
+        chain: Filter by blockchain
+        event_type: Filter by event type
+        urgency: Filter by urgency level
+        current_user: Current authenticated user
+        
+    Returns:
+        List of discovery events
     """
-    blocking_reasons = []
-    risk_score = 0.3  # Mock risk score
-    
-    # Check emergency stop
-    if _safety_state["emergency_stop"]:
-        blocking_reasons.append("Emergency stop is active")
-    
-    # Check if token is blacklisted
-    is_blacklisted = await safety_repo.is_blacklisted(
-        token_address=request.token_address,
-        chain=request.chain
-    )
-    
-    if is_blacklisted:
-        blocking_reasons.append("Token is blacklisted")
-        risk_score = 1.0
-    
-    # Check circuit breakers
-    if _safety_state["circuit_breakers"]:
-        blocking_reasons.append(f"Circuit breakers active: {', '.join(_safety_state['circuit_breakers'])}")
-    
-    # Check trade amount limits (mock)
-    trade_amount = Decimal(request.trade_amount_usd)
-    if trade_amount > Decimal("10000"):
-        blocking_reasons.append("Trade amount exceeds limit")
-    
-    # Conservative mode checks
-    if _safety_state["safety_level"] == SafetyLevel.CONSERVATIVE:
-        if risk_score > 0.5:
-            blocking_reasons.append("Risk score too high for conservative mode")
-    
-    is_safe = len(blocking_reasons) == 0
-    
-    return TradeCheckResponse(
-        is_safe=is_safe,
-        blocking_reasons=blocking_reasons,
-        safety_level=_safety_state["safety_level"].value,
-        emergency_stop=_safety_state["emergency_stop"],
-        risk_score=risk_score
-    )
-
-
-@router.post("/blacklist", response_model=Dict[str, Any])
-async def blacklist_token(
-    request: BlacklistRequest,
-    current_user: CurrentUser = Depends(get_current_user),
-    safety_repo: SafetyRepository = Depends(get_safety_repository)
-) -> Dict[str, Any]:
-    """
-    Add a token to the blacklist.
-    
-    Prevents future trading of the specified token with reason tracking.
-    """
-    # Add to blacklist
-    blacklisted = await safety_repo.add_to_blacklist(
-        token_address=request.token_address,
-        chain=request.chain,
-        reason=request.reason.value,
-        severity=request.severity,
-        category=request.reason.value,
-        notes=request.details,
-        reported_by=current_user.username
-    )
-    
-    # Log safety event
-    await safety_repo.log_safety_event(
-        event_type="blacklist_add",
-        severity=request.severity,
-        reason=f"Token blacklisted: {request.reason.value}",
-        chain=request.chain,
-        token_address=request.token_address,
-        action="blocked",
-        details={"reason": request.reason.value, "details": request.details}
-    )
-    
-    return {
-        "success": True,
-        "message": f"Token {request.token_address} blacklisted successfully",
-        "blacklist_id": blacklisted.id
-    }
-
-
-@router.delete("/blacklist/{chain}/{token_address}")
-async def remove_from_blacklist(
-    chain: str,
-    token_address: str,
-    current_user: CurrentUser = Depends(get_current_user),
-    safety_repo: SafetyRepository = Depends(get_safety_repository)
-) -> Dict[str, Any]:
-    """Remove a token from the blacklist."""
-    # This would update the blacklist in database
-    # For now, return success
-    
-    await safety_repo.log_safety_event(
-        event_type="blacklist_remove",
-        severity="low",
-        reason=f"Token removed from blacklist",
-        chain=chain,
-        token_address=token_address,
-        action="unblocked"
-    )
-    
-    return {
-        "success": True,
-        "message": f"Token {token_address} removed from blacklist",
-        "chain": chain
-    }
-
-
-@router.post("/emergency-stop")
-async def set_emergency_stop(
-    enabled: bool,
-    reason: str,
-    current_user: CurrentUser = Depends(get_current_user),
-    safety_repo: SafetyRepository = Depends(get_safety_repository)
-) -> Dict[str, Any]:
-    """Enable or disable emergency stop."""
-    _safety_state["emergency_stop"] = enabled
-    
-    await safety_repo.log_safety_event(
-        event_type="emergency_stop",
-        severity="critical" if enabled else "low",
-        reason=reason,
-        action="activated" if enabled else "deactivated"
-    )
-    
-    return {
-        "success": True,
-        "message": f"Emergency stop {'activated' if enabled else 'deactivated'}",
-        "enabled": enabled,
-        "reason": reason
-    }
-
-
-@router.post("/safety-level")
-async def set_safety_level(
-    level: SafetyLevel,
-    current_user: CurrentUser = Depends(get_current_user),
-    safety_repo: SafetyRepository = Depends(get_safety_repository)
-) -> Dict[str, Any]:
-    """Change the current safety level."""
-    old_level = _safety_state["safety_level"]
-    _safety_state["safety_level"] = level
-    
-    await safety_repo.log_safety_event(
-        event_type="safety_level_change",
-        severity="medium",
-        reason=f"Safety level changed from {old_level.value} to {level.value}",
-        action="config_change"
-    )
-    
-    return {
-        "success": True,
-        "message": f"Safety level changed to {level.value}",
-        "level": level.value
-    }
-
-
-@router.post("/circuit-breaker/{breaker_type}")
-async def trigger_circuit_breaker(
-    breaker_type: str,
-    reason: str,
-    current_user: CurrentUser = Depends(get_current_user),
-    safety_repo: SafetyRepository = Depends(get_safety_repository)
-) -> Dict[str, Any]:
-    """Manually trigger a circuit breaker."""
-    if breaker_type not in _safety_state["circuit_breakers"]:
-        _safety_state["circuit_breakers"].append(breaker_type)
-    
-    await safety_repo.log_safety_event(
-        event_type="circuit_breaker",
-        severity="high",
-        reason=reason,
-        action="triggered",
-        details={"breaker_type": breaker_type}
-    )
-    
-    return {
-        "success": True,
-        "message": f"Circuit breaker {breaker_type} triggered",
-        "breaker_type": breaker_type,
-        "reason": reason
-    }
-
-
-@router.delete("/circuit-breaker/{breaker_type}")
-async def reset_circuit_breaker(
-    breaker_type: str,
-    current_user: CurrentUser = Depends(get_current_user),
-    safety_repo: SafetyRepository = Depends(get_safety_repository)
-) -> Dict[str, Any]:
-    """Reset a circuit breaker."""
-    if breaker_type in _safety_state["circuit_breakers"]:
-        _safety_state["circuit_breakers"].remove(breaker_type)
-    
-    await safety_repo.log_safety_event(
-        event_type="circuit_breaker_reset",
-        severity="low",
-        reason=f"Circuit breaker {breaker_type} reset",
-        action="reset",
-        details={"breaker_type": breaker_type}
-    )
-    
-    return {
-        "success": True,
-        "message": f"Circuit breaker {breaker_type} reset",
-        "breaker_type": breaker_type
-    }
-
-
-@router.get("/status", response_model=SafetyStatusResponse)
-async def get_safety_status(
-    current_user: CurrentUser = Depends(get_current_user),
-    safety_repo: SafetyRepository = Depends(get_safety_repository)
-) -> SafetyStatusResponse:
-    """Get comprehensive safety system status."""
-    # Get recent events count
-    recent_events = await safety_repo.get_recent_events(limit=100)
-    
-    # Get blacklisted tokens count
-    blacklisted = await safety_repo.get_blacklisted_tokens()
-    
-    return SafetyStatusResponse(
-        safety_level=_safety_state["safety_level"].value,
-        emergency_stop=_safety_state["emergency_stop"],
-        active_circuit_breakers=_safety_state["circuit_breakers"],
-        blacklisted_tokens_count=len(blacklisted),
-        recent_events_count=len(recent_events)
-    )
-
-
-@router.get("/events", response_model=List[SafetyEventResponse])
-async def get_safety_events(
-    limit: int = Query(100, ge=1, le=1000),
-    severity: Optional[str] = None,
-    event_type: Optional[str] = None,
-    resolved: Optional[bool] = None,
-    current_user: CurrentUser = Depends(get_current_user),
-    safety_repo: SafetyRepository = Depends(get_safety_repository)
-) -> List[SafetyEventResponse]:
-    """Get recent safety events."""
-    events = await safety_repo.get_recent_events(
-        limit=limit,
-        severity=severity,
-        event_type=event_type,
-        resolved=resolved
-    )
-    
-    return [
-        SafetyEventResponse(
-            id=event.id,
-            event_type=event.event_type,
-            severity=event.severity,
-            reason=event.reason,
-            timestamp=event.timestamp,
-            chain=event.chain,
-            token_address=event.token_address,
-            resolved=event.resolved
+    # Mock discovery events for development
+    mock_events = [
+        DiscoveryEvent(
+            event_id="event_001",
+            event_type=DiscoveryEventType.NEW_PAIR,
+            chain=chain or "base",
+            dex="uniswap_v2",
+            pair_address="0x" + "1" * 40,
+            token_address="0x" + "a" * 40,
+            token_symbol="NEWCOIN",
+            token_name="New Coin Token",
+            timestamp=datetime.utcnow(),
+            block_number=12345678,
+            details={
+                "initial_liquidity_usd": 50000.0,
+                "deployer": "0x" + "d" * 40,
+                "paired_with": "WETH"
+            },
+            urgency="medium",
+            action_required=True,
+            risk_score=2.5
+        ),
+        DiscoveryEvent(
+            event_id="event_002",
+            event_type=DiscoveryEventType.LARGE_TRADE,
+            chain=chain or "ethereum",
+            dex="uniswap_v3",
+            pair_address="0x" + "2" * 40,
+            token_address="0x" + "b" * 40,
+            token_symbol="PEPE",
+            token_name="Pepe Token",
+            timestamp=datetime.utcnow() - timedelta(minutes=5),
+            block_number=12345677,
+            details={
+                "trade_amount_usd": 500000.0,
+                "price_impact": 2.5,
+                "trader": "0x" + "t" * 40
+            },
+            urgency="high",
+            action_required=False,
+            risk_score=1.8
         )
-        for event in events
     ]
-
-
-@router.put("/events/{event_id}/resolve")
-async def resolve_safety_event(
-    event_id: int,
-    notes: Optional[str] = None,
-    current_user: CurrentUser = Depends(get_current_user),
-    safety_repo: SafetyRepository = Depends(get_safety_repository)
-) -> Dict[str, Any]:
-    """Mark a safety event as resolved."""
-    await safety_repo.resolve_event(event_id, notes)
     
+    # Apply filters
+    filtered_events = mock_events
+    if event_type:
+        filtered_events = [e for e in filtered_events if e.event_type == event_type]
+    if urgency:
+        filtered_events = [e for e in filtered_events if e.urgency == urgency]
+    
+    return filtered_events[:limit]
+
+
+@router.post("/filter", response_model=List[DiscoveryEvent])
+async def filter_discovery_events(
+    filter_criteria: DiscoveryFilter,
+    current_user: CurrentUser = Depends(get_current_user)
+) -> List[DiscoveryEvent]:
+    """
+    Filter discovery events with advanced criteria.
+    
+    Args:
+        filter_criteria: Filter criteria
+        current_user: Current authenticated user
+        
+    Returns:
+        Filtered discovery events
+    """
+    # Mock filtered events
+    mock_filtered = [
+        DiscoveryEvent(
+            event_id="filtered_001",
+            event_type=DiscoveryEventType.NEW_PAIR,
+            chain="ethereum",
+            dex="uniswap_v2",
+            pair_address="0x" + "3" * 40,
+            token_address="0x" + "c" * 40,
+            token_symbol="FILTERED",
+            token_name="Filtered Token",
+            timestamp=datetime.utcnow(),
+            block_number=12345679,
+            details={
+                "initial_liquidity_usd": 100000.0,
+                "buy_tax": 2.0,
+                "sell_tax": 2.0
+            },
+            urgency="low",
+            action_required=False,
+            risk_score=1.5
+        )
+    ]
+    
+    return mock_filtered
+
+
+@router.get("/snapshot", response_model=List[MarketSnapshot])
+async def get_market_snapshot(
+    chains: Optional[List[str]] = Query(None, description="Chains to include"),
+    current_user: CurrentUser = Depends(get_current_user)
+) -> List[MarketSnapshot]:
+    """
+    Get current market snapshot across chains/DEXs.
+    
+    Args:
+        chains: List of chains to include
+        current_user: Current authenticated user
+        
+    Returns:
+        Market snapshots
+    """
+    target_chains = chains or ["ethereum", "bsc", "polygon", "base"]
+    
+    mock_snapshots = []
+    for chain in target_chains:
+        snapshot = MarketSnapshot(
+            chain=chain,
+            dex="uniswap_v2" if chain == "ethereum" else "pancakeswap",
+            timestamp=datetime.utcnow(),
+            active_pairs=1250,
+            new_pairs_24h=45,
+            total_liquidity_usd="50000000.00",
+            volume_24h_usd="25000000.00",
+            trending_tokens=[
+                {"symbol": "TREND", "price_change": 85.5},
+                {"symbol": "MOON", "price_change": 42.3}
+            ],
+            largest_liquidity_adds=[
+                {"token": "NEWTOKEN", "amount_usd": 500000.0}
+            ],
+            rugged_count_24h=3
+        )
+        mock_snapshots.append(snapshot)
+    
+    return mock_snapshots
+
+
+@router.get("/tokens/{token_address}", response_model=TokenDiscoveryInfo)
+async def get_token_discovery_info(
+    token_address: str,
+    chain: str = Query(..., description="Blockchain network"),
+    current_user: CurrentUser = Depends(get_current_user)
+) -> TokenDiscoveryInfo:
+    """
+    Get detailed discovery information for a specific token.
+    
+    Args:
+        token_address: Token contract address
+        chain: Blockchain network
+        current_user: Current authenticated user
+        
+    Returns:
+        Token discovery information
+    """
+    # Mock token discovery info
+    mock_info = TokenDiscoveryInfo(
+        token_address=token_address,
+        token_symbol="DISCOVERED",
+        token_name="Discovered Token",
+        chain=chain,
+        discovery_time=datetime.utcnow() - timedelta(hours=2),
+        initial_pairs=["0x" + "p1" * 20, "0x" + "p2" * 20],
+        deployer_address="0x" + "d" * 40,
+        contract_verified=True,
+        honeypot_status=False,
+        buy_tax=2.0,
+        sell_tax=2.0,
+        holder_count=850,
+        risk_assessment={
+            "overall_score": 2.5,
+            "liquidity_risk": "low",
+            "contract_risk": "low",
+            "market_risk": "medium"
+        }
+    )
+    
+    return mock_info
+
+
+@router.get("/trending", response_model=List[DiscoveryEvent])
+async def get_trending_discoveries(
+    period: str = Query("24h", description="Time period (1h, 6h, 24h)"),
+    metric: str = Query("volume", description="Trending metric"),
+    limit: int = Query(20, le=100),
+    current_user: CurrentUser = Depends(get_current_user)
+) -> List[DiscoveryEvent]:
+    """
+    Get trending discovery events.
+    
+    Args:
+        period: Time period for trending calculation
+        metric: Metric to determine trending
+        limit: Number of results
+        current_user: Current authenticated user
+        
+    Returns:
+        Trending discovery events
+    """
+    # Mock trending discoveries
+    mock_trending = [
+        DiscoveryEvent(
+            event_id="trending_001",
+            event_type=DiscoveryEventType.TRENDING,
+            chain="base",
+            dex="uniswap_v2",
+            pair_address="0x" + "4" * 40,
+            token_address="0x" + "t1" * 20,
+            token_symbol="VIRAL",
+            token_name="Viral Token",
+            timestamp=datetime.utcnow() - timedelta(hours=1),
+            block_number=12345680,
+            details={
+                "volume_24h": 2000000.0,
+                "price_change": 150.5,
+                "transaction_count": 5000
+            },
+            urgency="high",
+            action_required=True,
+            risk_score=3.0
+        )
+    ]
+    
+    return mock_trending[:limit]
+
+
+@router.websocket("/ws")
+async def discovery_websocket(
+    websocket: WebSocket,
+    current_user: CurrentUser = Depends(get_current_user)
+):
+    """
+    WebSocket endpoint for real-time discovery events.
+    
+    Args:
+        websocket: WebSocket connection
+        current_user: Current authenticated user
+    """
+    await websocket.accept()
+    
+    try:
+        while True:
+            # Send mock discovery event every 10 seconds
+            await asyncio.sleep(10)
+            
+            mock_event = {
+                "event_id": f"ws_event_{int(datetime.utcnow().timestamp())}",
+                "event_type": "new_pair",
+                "chain": "base",
+                "token_symbol": "LIVE",
+                "timestamp": datetime.utcnow().isoformat(),
+                "urgency": "medium"
+            }
+            
+            await websocket.send_json(mock_event)
+            
+    except WebSocketDisconnect:
+        pass
+
+
+@router.get("/stats", response_model=Dict[str, Any])
+async def get_discovery_stats(
+    current_user: CurrentUser = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """
+    Get discovery service statistics.
+    
+    Args:
+        current_user: Current authenticated user
+        
+    Returns:
+        Discovery statistics
+    """
     return {
-        "success": True,
-        "message": f"Event {event_id} resolved",
-        "event_id": event_id
+        "total_events_24h": 1250,
+        "new_pairs_24h": 45,
+        "honeypots_detected": 8,
+        "rugs_detected": 3,
+        "active_chains": ["ethereum", "bsc", "polygon", "base"],
+        "uptime_hours": 23.5,
+        "processing_speed_ms": 150.0
     }
 
 
 @router.get("/health")
-async def safety_system_health() -> Dict[str, Any]:
-    """Health check for safety system components."""
+async def discovery_health() -> Dict[str, str]:
+    """
+    Health check for discovery service.
+    
+    Returns:
+        Health status
+    """
     return {
-        "status": "healthy",
-        "safety_controls": {
-            "operational": True,
-            "safety_level": _safety_state["safety_level"].value,
-            "emergency_stop": _safety_state["emergency_stop"]
-        },
-        "circuit_breakers": {
-            "operational": True,
-            "active_count": len(_safety_state["circuit_breakers"])
-        }
+        "status": "OK",
+        "message": "Discovery service is operational",
+        "note": "Using mock discovery data for testing"
     }

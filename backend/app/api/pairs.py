@@ -12,7 +12,8 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from app.core.dependencies import get_current_user, CurrentUser
+# Fixed import - use relative path
+from ..core.dependencies import get_current_user, CurrentUser
 
 router = APIRouter(
     prefix="/api/pairs",
@@ -102,6 +103,10 @@ async def search_pairs(
         token: Token address or symbol to search
         min_liquidity: Minimum liquidity threshold
         limit: Maximum results to return
+        current_user: Current authenticated user
+        
+    Returns:
+        List of matching trading pairs
     """
     # Mock data for development
     mock_pairs = [
@@ -164,6 +169,15 @@ async def get_new_pairs(
     
     Monitors for new pair creation events and returns pairs
     created within the specified time window.
+    
+    Args:
+        chain: Filter by blockchain
+        minutes: Time window in minutes
+        min_liquidity: Minimum initial liquidity
+        current_user: Current authenticated user
+        
+    Returns:
+        List of new pair alerts
     """
     # Mock new pairs for development
     mock_new_pairs = [
@@ -203,6 +217,10 @@ async def get_trending_pairs(
         period: Time period for trending calculation
         metric: Metric to determine trending (volume, price change, etc)
         limit: Number of results
+        current_user: Current authenticated user
+        
+    Returns:
+        List of trending pairs
     """
     # Mock trending pairs
     mock_trending = [
@@ -240,6 +258,14 @@ async def analyze_pair(
     
     Provides liquidity analysis, price impact calculations,
     holder distribution, and risk assessment.
+    
+    Args:
+        pair_address: Trading pair contract address
+        chain: Blockchain network
+        current_user: Current authenticated user
+        
+    Returns:
+        Detailed pair analysis
     """
     # Mock analysis for development
     mock_analysis = PairAnalysis(
@@ -247,116 +273,84 @@ async def analyze_pair(
         chain=chain,
         dex="uniswap_v2",
         liquidity_depth={
-            "bids": {"1%": "50000", "2%": "100000", "5%": "250000"},
-            "asks": {"1%": "45000", "2%": "95000", "5%": "240000"}
+            "token0_reserves": "1000000.0",
+            "token1_reserves": "500.0",
+            "liquidity_usd": "1000000.0"
         },
         price_impact_buy={
             "100": 0.1,
             "1000": 0.5,
-            "10000": 2.5,
-            "100000": 15.0
+            "10000": 2.5
         },
         price_impact_sell={
             "100": 0.15,
             "1000": 0.6,
-            "10000": 3.0,
-            "100000": 18.0
+            "10000": 3.0
         },
         holder_distribution={
-            "top_10_percent": 45.0,
-            "top_50_percent": 85.0,
-            "unique_holders": 1500,
-            "whale_count": 5
+            "total_holders": 1250,
+            "whale_concentration": 15.5,
+            "top_10_percentage": 45.2
         },
-        risk_score=0.35,
-        risk_factors=[
-            "Moderate concentration in top holders",
-            "New pair (< 24 hours old)",
-            "High price volatility"
-        ],
+        risk_score=3.2,
+        risk_factors=["Moderate liquidity", "Recent launch"],
         trading_enabled=True,
-        recommended_position_size="500.00"
+        recommended_position_size="5000.00"
     )
     
     return mock_analysis
 
 
-@router.post("/watch/{pair_address}")
-async def add_to_watchlist(
-    pair_address: str,
-    chain: str,
-    alert_on_price_change: Optional[float] = None,
-    alert_on_liquidity_change: Optional[float] = None,
-    current_user: CurrentUser = Depends(get_current_user)
-) -> Dict[str, str]:
-    """
-    Add a pair to the watchlist with optional alerts.
-    
-    Args:
-        pair_address: Pair contract address
-        chain: Blockchain network
-        alert_on_price_change: Alert when price changes by this %
-        alert_on_liquidity_change: Alert when liquidity changes by this %
-    """
-    # Mock implementation
-    return {
-        "message": f"Pair {pair_address} added to watchlist",
-        "chain": chain,
-        "alerts_enabled": bool(alert_on_price_change or alert_on_liquidity_change)
-    }
-
-
-@router.delete("/watch/{pair_address}")
-async def remove_from_watchlist(
-    pair_address: str,
-    chain: str,
-    current_user: CurrentUser = Depends(get_current_user)
-) -> Dict[str, str]:
-    """Remove a pair from the watchlist."""
-    return {
-        "message": f"Pair {pair_address} removed from watchlist",
-        "chain": chain
-    }
-
-
-@router.get("/watchlist", response_model=List[PairInfo])
-async def get_watchlist(
+@router.post("/filter", response_model=List[PairInfo])
+async def filter_pairs(
+    filter_request: PairFilterRequest,
     current_user: CurrentUser = Depends(get_current_user)
 ) -> List[PairInfo]:
-    """Get all pairs in the user's watchlist."""
-    # Return empty list for now (mock)
-    return []
-
-
-@router.get("/opportunities")
-async def get_trading_opportunities(
-    strategy: str = Query("snipe", description="Strategy type (snipe, scalp, reentry)"),
-    risk_level: str = Query("medium", description="Risk level (low, medium, high)"),
-    chain: Optional[str] = None,
-    current_user: CurrentUser = Depends(get_current_user)
-) -> List[Dict[str, Any]]:
     """
-    Get trading opportunities based on strategy and risk level.
+    Filter pairs based on advanced criteria.
     
-    Analyzes current market conditions to identify
-    potential trading opportunities.
+    Args:
+        filter_request: Filter criteria
+        current_user: Current authenticated user
+        
+    Returns:
+        List of filtered pairs
     """
-    # Mock opportunities
-    return [
-        {
-            "pair_address": "0x" + "5" * 40,
-            "chain": chain or "base",
-            "token_symbol": "MEME",
-            "opportunity_type": "new_listing",
-            "confidence_score": 0.75,
-            "suggested_action": "buy",
-            "suggested_amount": "100.00",
-            "reasons": [
-                "Low initial market cap",
-                "High social interest",
-                "Locked liquidity"
-            ],
-            "risk_level": risk_level,
-            "expires_at": datetime.utcnow().isoformat()
-        }
+    # Mock filtered results
+    mock_filtered = [
+        PairInfo(
+            pair_address="0x" + "5" * 40,
+            chain=filter_request.chain or "ethereum",
+            dex="uniswap_v3",
+            token0_address="0x" + "i" * 40,
+            token0_symbol="FILTER",
+            token0_name="Filtered Token",
+            token1_address="0x" + "j" * 40,
+            token1_symbol="USDC",
+            token1_name="USD Coin",
+            liquidity_usd="750000.00",
+            volume_24h="375000.00",
+            price="2.50",
+            price_change_24h=12.8,
+            created_at=datetime.utcnow(),
+            pair_age_blocks=2500,
+            is_active=True
+        )
     ]
+    
+    return mock_filtered
+
+
+@router.get("/health")
+async def pairs_health() -> Dict[str, str]:
+    """
+    Health check for pairs service.
+    
+    Returns:
+        Health status
+    """
+    return {
+        "status": "OK",
+        "message": "Trading pairs service is operational",
+        "note": "Using mock pair data for testing"
+    }
