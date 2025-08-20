@@ -1,8 +1,8 @@
 """
-DEX Sniper Pro - Core Simulation Engine.
+DEX Sniper Pro - Enhanced Simulation Engine.
 
-Provides realistic simulation of trading strategies with market impact,
-latency modeling, and historical data replay.
+Core simulation engine with integrated latency modeling, market impact simulation,
+and enhanced historical data replay for realistic strategy backtesting.
 """
 
 from __future__ import annotations
@@ -13,17 +13,13 @@ import random
 from datetime import datetime, timedelta
 from decimal import Decimal
 from enum import Enum
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
-from backend.app.sim.historical_data import (
-    HistoricalDataManager,
-    MarketDataPoint,
-    PairSnapshot,
-    TimeFrame,
-    TokenSnapshot,
-)
+from backend.app.sim.historical_data import HistoricalDataManager, SimulationSnapshot
+from backend.app.sim.latency_model import LatencyModel, NetworkCondition
+from backend.app.sim.market_impact import MarketImpactModel, MarketCondition, TradeImpact
 from backend.app.strategy.risk_manager import RiskManager
 
 logger = logging.getLogger(__name__)
@@ -31,9 +27,10 @@ logger = logging.getLogger(__name__)
 
 class SimulationMode(str, Enum):
     """Simulation execution modes."""
-    FAST = "fast"  # Skip delays, process immediately
-    REALISTIC = "realistic"  # Include latency and delays
-    STRESS_TEST = "stress_test"  # Worst-case scenarios
+    FAST = "fast"          # Fast simulation with simplified models
+    REALISTIC = "realistic"  # Realistic simulation with full modeling
+    STRESS = "stress"      # Stress testing with adverse conditions
+    OPTIMISTIC = "optimistic"  # Best-case scenario simulation
 
 
 class SimulationState(str, Enum):
@@ -47,20 +44,30 @@ class SimulationState(str, Enum):
 
 
 class SimulatedTrade(BaseModel):
-    """Simulated trade execution result."""
+    """Individual simulated trade result."""
     trade_id: str = Field(description="Unique trade identifier")
-    timestamp: datetime = Field(description="Execution timestamp")
-    token_address: str = Field(description="Token contract address")
+    timestamp: datetime = Field(description="Trade execution timestamp")
+    pair_address: str = Field(description="Trading pair address")
     chain: str = Field(description="Blockchain network")
+    dex: str = Field(description="DEX name")
+    side: str = Field(description="Trade side (buy/sell)")
+    
+    # Trade amounts
     amount_in: Decimal = Field(description="Input amount")
     amount_out: Decimal = Field(description="Output amount")
-    price_impact: Decimal = Field(description="Price impact percentage")
-    gas_cost: Decimal = Field(description="Gas cost in native token")
-    execution_latency: float = Field(description="Execution latency in seconds")
+    expected_amount_out: Decimal = Field(description="Expected output amount")
+    
+    # Execution details
+    execution_time_ms: float = Field(description="Execution time in milliseconds")
+    gas_fee: Decimal = Field(description="Gas fee paid")
     slippage: Decimal = Field(description="Actual slippage percentage")
-    success: bool = Field(description="Trade execution success")
+    price_impact: Decimal = Field(description="Price impact percentage")
+    
+    # Result
+    success: bool = Field(description="Trade success status")
+    pnl: Decimal = Field(description="Profit/loss in GBP")
+    pnl_percentage: Decimal = Field(description="P&L percentage")
     failure_reason: Optional[str] = Field(None, description="Failure reason if unsuccessful")
-    market_conditions: Dict = Field(description="Market conditions at execution")
     
     class Config:
         """Pydantic config."""
@@ -71,24 +78,34 @@ class SimulatedTrade(BaseModel):
 
 
 class SimulationParameters(BaseModel):
-    """Simulation configuration parameters."""
+    """Enhanced simulation configuration parameters."""
     start_time: datetime = Field(description="Simulation start time")
     end_time: datetime = Field(description="Simulation end time")
     initial_balance: Decimal = Field(description="Starting balance in GBP")
     mode: SimulationMode = Field(default=SimulationMode.REALISTIC, description="Simulation mode")
     preset_name: str = Field(description="Trading preset name")
     
-    # Market condition overrides
-    base_latency_ms: float = Field(default=150.0, description="Base network latency")
+    # Market condition settings
+    market_condition: MarketCondition = Field(default=MarketCondition.NORMAL, description="Market volatility condition")
+    network_condition: NetworkCondition = Field(default=NetworkCondition.NORMAL, description="Network latency condition")
+    
+    # Multipliers for scenario testing
     gas_price_multiplier: Decimal = Field(default=Decimal("1.0"), description="Gas price multiplier")
     liquidity_multiplier: Decimal = Field(default=Decimal("1.0"), description="Liquidity multiplier")
     volatility_multiplier: Decimal = Field(default=Decimal("1.0"), description="Volatility multiplier")
+    congestion_factor: float = Field(default=1.0, description="Network congestion factor")
+    
+    # Simulation features
+    enable_latency_simulation: bool = Field(default=True, description="Enable latency modeling")
+    enable_market_impact: bool = Field(default=True, description="Enable market impact simulation")
+    enable_revert_simulation: bool = Field(default=True, description="Simulate transaction reverts")
+    enable_mev_simulation: bool = Field(default=False, description="Simulate MEV competition")
+    enable_slippage_variation: bool = Field(default=True, description="Add slippage randomness")
     
     # Advanced settings
-    enable_revert_simulation: bool = Field(default=True, description="Simulate transaction reverts")
-    enable_mev_simulation: bool = Field(default=True, description="Simulate MEV competition")
-    enable_slippage_variation: bool = Field(default=True, description="Add slippage randomness")
     random_seed: Optional[int] = Field(None, description="Random seed for deterministic runs")
+    time_step_minutes: int = Field(default=1, description="Simulation time step in minutes")
+    max_trades_per_hour: int = Field(default=100, description="Maximum trades per hour")
     
     class Config:
         """Pydantic config."""
@@ -122,10 +139,18 @@ class SimulationResult(BaseModel):
     max_drawdown: Decimal = Field(description="Maximum drawdown percentage")
     
     # Performance metrics
-    avg_execution_time: float = Field(description="Average execution time")
+    avg_execution_time: float = Field(description="Average execution time in ms")
     success_rate: Decimal = Field(description="Trade success rate percentage")
     profit_factor: Optional[Decimal] = Field(None, description="Gross profit / gross loss")
     sharpe_ratio: Optional[Decimal] = Field(None, description="Risk-adjusted return")
+    
+    # Enhanced metrics
+    total_slippage: Decimal = Field(description="Total slippage experienced")
+    avg_price_impact: Decimal = Field(description="Average price impact")
+    network_reliability: Decimal = Field(description="Network reliability percentage")
+    
+    # Portfolio progression
+    portfolio_snapshots: List[Tuple[datetime, Decimal]] = Field(description="Portfolio value over time")
     
     # Error details
     error_message: Optional[str] = Field(None, description="Error message if failed")
@@ -140,50 +165,59 @@ class SimulationResult(BaseModel):
 
 class SimulationEngine:
     """
-    Core simulation engine for strategy backtesting.
+    Enhanced simulation engine for realistic strategy backtesting.
     
-    Provides realistic simulation of trading strategies with market impact,
-    latency modeling, network conditions, and historical data replay.
+    Integrates latency modeling, market impact simulation, and enhanced
+    historical data replay for comprehensive strategy validation.
     """
     
     def __init__(self) -> None:
-        """Initialize simulation engine."""
+        """Initialize enhanced simulation engine."""
+        # Core components
         self.historical_data = HistoricalDataManager()
         self.risk_manager = RiskManager()
+        
+        # Phase 8 components
+        self.latency_model = LatencyModel()
+        self.market_impact_model = MarketImpactModel()
         
         # Simulation state
         self.current_simulation: Optional[str] = None
         self.simulation_state = SimulationState.PREPARING
         self.active_trades: Dict[str, SimulatedTrade] = {}
         
-        logger.info("Simulation engine initialized")
+        # Performance tracking
+        self.total_latency_ms = 0.0
+        self.total_operations = 0
+        
+        logger.info("Enhanced simulation engine initialized with Phase 8 components")
     
     async def run_simulation(
         self,
         parameters: SimulationParameters
     ) -> SimulationResult:
         """
-        Execute a complete simulation run.
+        Execute a complete enhanced simulation run.
         
         Args:
             parameters: Simulation configuration
             
         Returns:
-            Complete simulation results
+            Complete simulation results with enhanced metrics
         """
         simulation_id = f"sim_{int(datetime.now().timestamp())}"
         self.current_simulation = simulation_id
-        result: Optional[SimulationResult] = None
+        start_time = datetime.now()
         
         try:
-            logger.info(f"Starting simulation {simulation_id}")
+            logger.info(f"Starting enhanced simulation {simulation_id}")
             
             # Initialize result
             result = SimulationResult(
                 simulation_id=simulation_id,
                 parameters=parameters,
                 state=SimulationState.PREPARING,
-                start_time=datetime.now(),
+                start_time=start_time,
                 end_time=None,
                 duration_seconds=None,
                 trades_executed=[],
@@ -198,461 +232,353 @@ class SimulationEngine:
                 success_rate=Decimal("0"),
                 profit_factor=None,
                 sharpe_ratio=None,
+                total_slippage=Decimal("0"),
+                avg_price_impact=Decimal("0"),
+                network_reliability=Decimal("100"),
+                portfolio_snapshots=[],
                 error_message=None
             )
             
             # Set random seed for deterministic runs
             if parameters.random_seed is not None:
                 random.seed(parameters.random_seed)
+                logger.debug(f"Random seed set to: {parameters.random_seed}")
+            
+            # Configure simulation components
+            await self._configure_simulation_components(parameters)
             
             # Prepare simulation environment
             await self._prepare_simulation(parameters)
             result.state = SimulationState.RUNNING
             
-            # Load historical data for simulation period
-            historical_snapshots = await self._load_historical_data(
-                parameters.start_time,
-                parameters.end_time
+            # Get historical data for replay
+            data_iterator = await self.historical_data.get_data_replay_iterator(
+                start_time=parameters.start_time,
+                end_time=parameters.end_time,
+                time_step=timedelta(minutes=parameters.time_step_minutes)
             )
             
-            if not historical_snapshots:
-                raise ValueError("No historical data available for simulation period")
-            
-            # Execute simulation
+            # Initialize portfolio tracking
             current_balance = parameters.initial_balance
-            current_time = parameters.start_time
+            portfolio_snapshots = [(parameters.start_time, current_balance)]
+            trades_executed = []
             peak_balance = current_balance
+            max_drawdown = Decimal("0")
             
-            for snapshot_time, market_data in historical_snapshots:
-                if self.simulation_state == SimulationState.CANCELLED:
+            # Execute simulation loop
+            total_operations = 0
+            total_latency = 0.0
+            
+            async for current_time, market_snapshots in data_iterator:
+                if self.simulation_state != SimulationState.RUNNING:
                     break
                 
-                # Update simulation time
-                current_time = snapshot_time
-                
-                # Check for trading opportunities
-                opportunities = await self._identify_opportunities(
-                    market_data,
-                    parameters.preset_name
-                )
-                
-                # Execute trades based on opportunities
-                for opportunity in opportunities:
-                    if current_balance <= Decimal("10"):  # Minimum balance check
-                        break
+                # Process market opportunities
+                for snapshot in market_snapshots:
+                    if len(trades_executed) >= parameters.max_trades_per_hour:
+                        continue
                     
-                    trade_result = await self._simulate_trade(
-                        opportunity,
-                        current_balance,
-                        parameters,
-                        market_data
+                    # Simulate trade opportunity
+                    trade = await self._simulate_trade_opportunity(
+                        snapshot, current_balance, parameters
                     )
                     
-                    if trade_result:
-                        result.trades_executed.append(trade_result)
-                        result.total_trades += 1
+                    if trade:
+                        trades_executed.append(trade)
+                        total_operations += 1
+                        total_latency += trade.execution_time_ms
                         
-                        if trade_result.success:
-                            result.successful_trades += 1
-                            # Update balance (simplified)
-                            pnl = self._calculate_trade_pnl(trade_result)
-                            current_balance += pnl
-                            result.total_pnl += pnl
-                        else:
-                            result.failed_trades += 1
-                        
-                        # Update fees
-                        result.total_fees += trade_result.gas_cost
-                        
-                        # Track drawdown
-                        if current_balance > peak_balance:
-                            peak_balance = current_balance
-                        else:
-                            drawdown = ((peak_balance - current_balance) / peak_balance) * 100
-                            if drawdown > result.max_drawdown:
-                                result.max_drawdown = drawdown
+                        # Update balance
+                        if trade.success:
+                            current_balance += trade.pnl
+                        current_balance -= trade.gas_fee
                 
-                # Add realistic delay based on mode
-                if parameters.mode == SimulationMode.REALISTIC:
-                    await asyncio.sleep(0.01)  # Small delay for realistic simulation
+                # Update portfolio tracking
+                portfolio_snapshots.append((current_time, current_balance))
+                
+                # Calculate drawdown
+                if current_balance > peak_balance:
+                    peak_balance = current_balance
+                else:
+                    drawdown = (peak_balance - current_balance) / peak_balance * 100
+                    max_drawdown = max(max_drawdown, drawdown)
+                
+                # Progress logging
+                if total_operations % 100 == 0 and total_operations > 0:
+                    logger.debug(f"Processed {total_operations} operations, balance: {current_balance}")
             
-            # Finalize results
-            result.state = SimulationState.COMPLETED
-            result.end_time = datetime.now()
-            result.duration_seconds = (result.end_time - result.start_time).total_seconds()
-            result.final_balance = current_balance
+            # Finalize simulation
+            end_time = datetime.now()
+            duration = (end_time - start_time).total_seconds()
             
             # Calculate performance metrics
-            if result.total_trades > 0:
-                result.success_rate = (Decimal(result.successful_trades) / Decimal(result.total_trades)) * 100
-                result.avg_execution_time = sum(
-                    trade.execution_latency for trade in result.trades_executed
-                ) / len(result.trades_executed)
-                
-                # Calculate profit factor
-                gross_profit = sum(
-                    self._calculate_trade_pnl(trade) for trade in result.trades_executed
-                    if trade.success and self._calculate_trade_pnl(trade) > 0
-                )
-                gross_loss = abs(sum(
-                    self._calculate_trade_pnl(trade) for trade in result.trades_executed
-                    if trade.success and self._calculate_trade_pnl(trade) < 0
-                ))
-                
-                if gross_loss > 0:
-                    result.profit_factor = Decimal(str(gross_profit / gross_loss))
+            successful_trades = [t for t in trades_executed if t.success]
+            failed_trades = [t for t in trades_executed if not t.success]
             
-            logger.info(f"Simulation {simulation_id} completed successfully")
+            total_pnl = sum(t.pnl for t in trades_executed)
+            total_fees = sum(t.gas_fee for t in trades_executed)
+            total_slippage = sum(t.slippage for t in trades_executed) if trades_executed else Decimal("0")
+            avg_price_impact = sum(t.price_impact for t in trades_executed) / len(trades_executed) if trades_executed else Decimal("0")
+            
+            success_rate = len(successful_trades) / len(trades_executed) * 100 if trades_executed else Decimal("0")
+            avg_execution_time = total_latency / len(trades_executed) if trades_executed else 0.0
+            
+            # Calculate profit factor
+            gross_profit = sum(t.pnl for t in successful_trades)
+            gross_loss = abs(sum(t.pnl for t in failed_trades))
+            profit_factor = gross_profit / gross_loss if gross_loss > 0 else None
+            
+            # Network reliability (based on failed operations due to network issues)
+            network_failures = len([t for t in failed_trades if "network" in (t.failure_reason or "").lower()])
+            network_reliability = (1 - network_failures / len(trades_executed)) * 100 if trades_executed else Decimal("100")
+            
+            # Update result
+            result.state = SimulationState.COMPLETED
+            result.end_time = end_time
+            result.duration_seconds = duration
+            result.trades_executed = trades_executed
+            result.total_trades = len(trades_executed)
+            result.successful_trades = len(successful_trades)
+            result.failed_trades = len(failed_trades)
+            result.final_balance = current_balance
+            result.total_pnl = total_pnl
+            result.total_fees = total_fees
+            result.max_drawdown = max_drawdown
+            result.avg_execution_time = avg_execution_time
+            result.success_rate = success_rate
+            result.profit_factor = profit_factor
+            result.total_slippage = total_slippage
+            result.avg_price_impact = avg_price_impact
+            result.network_reliability = network_reliability
+            result.portfolio_snapshots = portfolio_snapshots
+            
+            logger.info(f"Enhanced simulation {simulation_id} completed: {len(trades_executed)} trades, "
+                       f"{success_rate:.1f}% success rate, {total_pnl:.2f} GBP P&L")
+            
             return result
             
         except Exception as e:
-            logger.error(f"Simulation {simulation_id} failed: {e}")
-            if result is None:
-                result = SimulationResult(
-                    simulation_id=simulation_id,
-                    parameters=parameters,
-                    state=SimulationState.FAILED,
-                    start_time=datetime.now(),
-                    end_time=None,
-                    duration_seconds=None,
-                    trades_executed=[],
-                    total_trades=0,
-                    successful_trades=0,
-                    failed_trades=0,
-                    final_balance=parameters.initial_balance,
-                    total_pnl=Decimal("0"),
-                    total_fees=Decimal("0"),
-                    max_drawdown=Decimal("0"),
-                    avg_execution_time=0.0,
-                    success_rate=Decimal("0"),
-                    profit_factor=None,
-                    sharpe_ratio=None,
-                    error_message=None
-                )
+            logger.error(f"Enhanced simulation {simulation_id} failed: {e}")
+            
+            # Return failed result
             result.state = SimulationState.FAILED
-            result.error_message = str(e)
             result.end_time = datetime.now()
+            result.duration_seconds = (result.end_time - start_time).total_seconds()
+            result.error_message = str(e)
+            
             return result
         
         finally:
             self.current_simulation = None
             self.simulation_state = SimulationState.PREPARING
     
-    async def cancel_simulation(self) -> bool:
+    async def _configure_simulation_components(self, parameters: SimulationParameters) -> None:
+        """Configure simulation components based on parameters."""
+        try:
+            # Configure latency model
+            if parameters.enable_latency_simulation:
+                self.latency_model.update_network_condition(parameters.network_condition)
+                self.latency_model.set_congestion_factor(parameters.congestion_factor)
+                logger.debug(f"Latency model configured: {parameters.network_condition}, factor: {parameters.congestion_factor}")
+            
+            # Configure market impact model (no direct configuration needed)
+            logger.debug("Market impact model ready")
+            
+        except Exception as e:
+            logger.error(f"Failed to configure simulation components: {e}")
+            raise
+    
+    async def _prepare_simulation(self, parameters: SimulationParameters) -> None:
+        """Prepare simulation environment."""
+        try:
+            # Validate time range
+            if parameters.end_time <= parameters.start_time:
+                raise ValueError("End time must be after start time")
+            
+            # Validate balance
+            if parameters.initial_balance <= 0:
+                raise ValueError("Initial balance must be positive")
+            
+            # Reset state
+            self.active_trades.clear()
+            self.total_latency_ms = 0.0
+            self.total_operations = 0
+            
+            logger.debug("Simulation environment prepared")
+            
+        except Exception as e:
+            logger.error(f"Failed to prepare simulation: {e}")
+            raise
+    
+    async def _simulate_trade_opportunity(
+        self,
+        snapshot: SimulationSnapshot,
+        current_balance: Decimal,
+        parameters: SimulationParameters
+    ) -> Optional[SimulatedTrade]:
         """
-        Cancel the currently running simulation.
+        Simulate a single trade opportunity.
         
+        Args:
+            snapshot: Market snapshot
+            current_balance: Current portfolio balance
+            parameters: Simulation parameters
+            
         Returns:
-            True if cancelled successfully
+            Simulated trade result or None if no trade
         """
-        if self.current_simulation and self.simulation_state == SimulationState.RUNNING:
-            self.simulation_state = SimulationState.CANCELLED
-            logger.info(f"Cancelled simulation {self.current_simulation}")
+        try:
+            # Simple opportunity detection (in reality, this would use strategy logic)
+            if random.random() > 0.05:  # 5% chance of trade opportunity
+                return None
+            
+            # Generate trade parameters
+            trade_id = f"trade_{int(datetime.now().timestamp() * 1000)}"
+            trade_size_usd = min(
+                float(current_balance) * 0.1,  # 10% of balance
+                1000.0  # Max $1000 per trade
+            )
+            
+            if trade_size_usd < 10:  # Minimum trade size
+                return None
+            
+            side = random.choice(["buy", "sell"])
+            
+            # Simulate latency if enabled
+            execution_time_ms = 100.0  # Default
+            network_success = True
+            
+            if parameters.enable_latency_simulation:
+                latency_measurement = await self.latency_model.simulate_latency(
+                    chain=snapshot.chain,
+                    provider="quicknode",  # Default provider
+                    operation_type="swap",
+                    market_volatility=float(parameters.volatility_multiplier)
+                )
+                execution_time_ms = latency_measurement.latency_ms
+                network_success = latency_measurement.success
+            
+            # Simulate market impact if enabled
+            slippage = Decimal("0.005")  # Default 0.5%
+            price_impact = Decimal("0.002")  # Default 0.2%
+            
+            if parameters.enable_market_impact:
+                impact_result = await self.market_impact_model.calculate_trade_impact(
+                    pair_address=snapshot.pair_address,
+                    trade_size_usd=Decimal(str(trade_size_usd)),
+                    side=side,
+                    market_condition=parameters.market_condition
+                )
+                slippage = impact_result.slippage
+                price_impact = impact_result.price_impact
+            
+            # Calculate trade result
+            amount_in = Decimal(str(trade_size_usd))
+            expected_amount_out = amount_in * (Decimal("1") - Decimal("0.003"))  # 0.3% fee
+            actual_amount_out = expected_amount_out * (Decimal("1") - slippage)
+            
+            # Determine success
+            success = network_success and random.random() > 0.02  # 2% random failure rate
+            failure_reason = None
+            
+            if not network_success:
+                failure_reason = "Network timeout"
+                success = False
+            elif not success:
+                failure_reason = "Transaction reverted"
+            
+            # Calculate P&L
+            pnl = Decimal("0")
+            if success:
+                if side == "buy":
+                    pnl = (actual_amount_out - amount_in) * random.uniform(0.95, 1.05)  # Random market movement
+                else:
+                    pnl = (amount_in - actual_amount_out) * random.uniform(0.95, 1.05)
+            
+            # Calculate gas fee
+            base_gas_fee = Decimal("5.0")  # Base $5 gas fee
+            gas_fee = base_gas_fee * parameters.gas_price_multiplier
+            
+            # Calculate P&L percentage
+            pnl_percentage = (pnl / amount_in * 100) if amount_in > 0 else Decimal("0")
+            
+            return SimulatedTrade(
+                trade_id=trade_id,
+                timestamp=snapshot.timestamp,
+                pair_address=snapshot.pair_address,
+                chain=snapshot.chain,
+                dex=snapshot.dex,
+                side=side,
+                amount_in=amount_in,
+                amount_out=actual_amount_out,
+                expected_amount_out=expected_amount_out,
+                execution_time_ms=execution_time_ms,
+                gas_fee=gas_fee,
+                slippage=slippage,
+                price_impact=price_impact,
+                success=success,
+                pnl=pnl,
+                pnl_percentage=pnl_percentage,
+                failure_reason=failure_reason
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to simulate trade opportunity: {e}")
+            return None
+    
+    async def pause_simulation(self) -> bool:
+        """Pause the currently running simulation."""
+        if self.simulation_state == SimulationState.RUNNING:
+            self.simulation_state = SimulationState.PAUSED
+            logger.info("Simulation paused")
             return True
         return False
     
-    async def _prepare_simulation(self, parameters: SimulationParameters) -> None:
-        """
-        Prepare simulation environment.
-        
-        Args:
-            parameters: Simulation parameters
-        """
-        logger.debug("Preparing simulation environment")
-        
-        # Clear any previous state
-        self.active_trades.clear()
-        
-        logger.debug("Simulation environment prepared")
+    async def resume_simulation(self) -> bool:
+        """Resume a paused simulation."""
+        if self.simulation_state == SimulationState.PAUSED:
+            self.simulation_state = SimulationState.RUNNING
+            logger.info("Simulation resumed")
+            return True
+        return False
     
-    async def _load_historical_data(
-        self,
-        start_time: datetime,
-        end_time: datetime
-    ) -> List[Tuple[datetime, Dict]]:
-        """
-        Load historical market data for simulation period.
-        
-        Args:
-            start_time: Start of simulation period
-            end_time: End of simulation period
+    async def cancel_simulation(self) -> bool:
+        """Cancel the currently running simulation."""
+        if self.simulation_state in [SimulationState.RUNNING, SimulationState.PAUSED]:
+            self.simulation_state = SimulationState.CANCELLED
+            logger.info("Simulation cancelled")
+            return True
+        return False
+    
+    def get_simulation_progress(self) -> Dict[str, any]:
+        """Get current simulation progress information."""
+        return {
+            "simulation_id": self.current_simulation,
+            "state": self.simulation_state.value if self.simulation_state else None,
+            "total_operations": self.total_operations,
+            "avg_latency_ms": self.total_latency_ms / max(1, self.total_operations),
+            "active_trades": len(self.active_trades)
+        }
+    
+    async def get_performance_summary(self) -> Dict[str, any]:
+        """Get performance summary of simulation components."""
+        try:
+            latency_summary = self.latency_model.get_performance_summary()
+            impact_summary = self.market_impact_model.get_impact_summary()
             
-        Returns:
-            List of (timestamp, market_data) tuples
-        """
-        logger.debug(f"Loading historical data from {start_time} to {end_time}")
-        
-        # For now, generate synthetic data
-        # In production, this would load real historical data
-        snapshots = []
-        current_time = start_time
-        
-        while current_time <= end_time:
-            # Generate synthetic market snapshot
-            market_data = {
-                "timestamp": current_time,
-                "eth_price": Decimal("2000") + Decimal(str(random.uniform(-100, 100))),
-                "gas_price": Decimal("20") + Decimal(str(random.uniform(-5, 15))),
-                "new_pairs": self._generate_synthetic_pairs(current_time),
-                "trending_tokens": self._generate_trending_tokens(current_time)
+            return {
+                "engine_status": "healthy",
+                "total_operations": self.total_operations,
+                "avg_operation_latency_ms": self.total_latency_ms / max(1, self.total_operations),
+                "latency_model": latency_summary,
+                "market_impact_model": impact_summary,
+                "current_simulation": self.current_simulation,
+                "simulation_state": self.simulation_state.value
             }
             
-            snapshots.append((current_time, market_data))
-            current_time += timedelta(minutes=5)  # 5-minute intervals
-        
-        logger.debug(f"Loaded {len(snapshots)} market snapshots")
-        return snapshots
-    
-    async def _identify_opportunities(
-        self,
-        market_data: Dict,
-        preset_name: str
-    ) -> List[Dict]:
-        """
-        Identify trading opportunities from market data.
-        
-        Args:
-            market_data: Current market state
-            preset_config: Trading configuration
-            
-        Returns:
-            List of trading opportunities
-        """
-        opportunities = []
-        
-        # Check for new pair opportunities
-        if "new_pairs" in market_data:
-            for pair in market_data["new_pairs"]:
-                if self._evaluate_new_pair_opportunity(pair, preset_name):
-                    opportunities.append({
-                        "type": "new_pair_snipe",
-                        "pair": pair,
-                        "confidence": random.uniform(0.6, 0.95)
-                    })
-        
-        # Check for trending token opportunities
-        if "trending_tokens" in market_data:
-            for token in market_data["trending_tokens"]:
-                if self._evaluate_trending_opportunity(token, preset_name):
-                    opportunities.append({
-                        "type": "trending_reentry",
-                        "token": token,
-                        "confidence": random.uniform(0.5, 0.85)
-                    })
-        
-        return opportunities
-    
-    async def _simulate_trade(
-        self,
-        opportunity: Dict,
-        available_balance: Decimal,
-        parameters: SimulationParameters,
-        market_data: Dict
-    ) -> Optional[SimulatedTrade]:
-        """
-        Simulate execution of a trading opportunity.
-        
-        Args:
-            opportunity: Trading opportunity data
-            available_balance: Available balance for trading
-            parameters: Simulation parameters
-            market_data: Current market conditions
-            
-        Returns:
-            Simulated trade result or None
-        """
-        try:
-            trade_id = f"trade_{int(datetime.now().timestamp())}"
-            timestamp = market_data["timestamp"]
-            
-            # Determine trade size based on preset
-            trade_size = min(
-                available_balance * Decimal("0.1"),  # Max 10% of balance
-                Decimal("100")  # Max 100 GBP per trade
-            )
-            
-            # Simulate network latency
-            execution_latency = self._simulate_latency(
-                "ethereum",  # Assume Ethereum for simulation
-                parameters.mode,
-                parameters.base_latency_ms
-            )
-            
-            # Simulate market impact and slippage
-            market_impact_data = self._calculate_market_impact(
-                trade_size,
-                Decimal("10000"),  # Assume 10k liquidity
-                parameters.volatility_multiplier
-            )
-            
-            # Determine if trade succeeds
-            success_probability = opportunity.get("confidence", 0.7)
-            if parameters.enable_revert_simulation:
-                success_probability *= 0.9  # Account for revert risk
-            
-            success = random.random() < success_probability
-            failure_reason = None
-            
-            if not success:
-                failure_reason = random.choice([
-                    "insufficient_liquidity",
-                    "excessive_slippage",
-                    "transaction_reverted",
-                    "gas_limit_exceeded",
-                    "mev_frontrun"
-                ])
-            
-            # Calculate trade amounts
-            amount_in = trade_size
-            amount_out = amount_in * Decimal("1.05") if success else Decimal("0")  # 5% profit if successful
-            
-            # Calculate gas cost
-            base_gas_cost = Decimal("0.01")  # Base gas cost in GBP
-            gas_cost = base_gas_cost * parameters.gas_price_multiplier
-            
-            trade = SimulatedTrade(
-                trade_id=trade_id,
-                timestamp=timestamp,
-                token_address=opportunity.get("pair", {}).get("token_address", "0x123"),
-                chain="ethereum",
-                amount_in=amount_in,
-                amount_out=amount_out,
-                price_impact=market_impact_data["price_impact"],
-                gas_cost=gas_cost,
-                execution_latency=execution_latency,
-                slippage=market_impact_data["slippage"],
-                success=success,
-                failure_reason=failure_reason,
-                market_conditions=market_data
-            )
-            
-            logger.debug(f"Simulated trade {trade_id}: success={success}")
-            return trade
-            
         except Exception as e:
-            logger.error(f"Failed to simulate trade: {e}")
-            return None
-    
-    def _evaluate_new_pair_opportunity(
-        self,
-        pair: Dict,
-        preset_name: str
-    ) -> bool:
-        """Evaluate if a new pair presents a trading opportunity."""
-        # Simplified evaluation logic
-        liquidity = pair.get("liquidity_usd", 0)
-        return liquidity >= 1000  # Minimum liquidity threshold
-    
-    def _evaluate_trending_opportunity(
-        self,
-        token: Dict,
-        preset_name: str
-    ) -> bool:
-        """Evaluate if a trending token presents a trading opportunity."""
-        # Simplified evaluation logic
-        volume_24h = token.get("volume_24h", 0)
-        return volume_24h >= 10000  # Minimum volume threshold
-    
-    def _generate_synthetic_pairs(self, timestamp: datetime) -> List[Dict]:
-        """Generate synthetic new pairs for simulation."""
-        pairs = []
-        
-        # Randomly generate 0-3 new pairs per time period
-        num_pairs = random.randint(0, 3)
-        
-        for i in range(num_pairs):
-            pairs.append({
-                "token_address": f"0x{random.randint(100000, 999999):06x}",
-                "pair_address": f"0x{random.randint(100000, 999999):06x}",
-                "liquidity_usd": random.uniform(500, 50000),
-                "created_at": timestamp
-            })
-        
-        return pairs
-    
-    def _generate_trending_tokens(self, timestamp: datetime) -> List[Dict]:
-        """Generate synthetic trending tokens for simulation."""
-        tokens = []
-        
-        # Randomly generate 0-5 trending tokens per time period
-        num_tokens = random.randint(0, 5)
-        
-        for i in range(num_tokens):
-            tokens.append({
-                "token_address": f"0x{random.randint(100000, 999999):06x}",
-                "price_change_24h": random.uniform(-50, 200),  # -50% to +200%
-                "volume_24h": random.uniform(1000, 100000),
-                "market_cap": random.uniform(10000, 1000000)
-            })
-        
-        return tokens
-    
-    def _calculate_trade_pnl(self, trade: SimulatedTrade) -> Decimal:
-        """Calculate profit/loss for a trade."""
-        if not trade.success:
-            return -trade.gas_cost  # Only lose gas fees
-        
-        pnl = trade.amount_out - trade.amount_in - trade.gas_cost
-        return pnl
-    
-    def _simulate_latency(
-        self,
-        chain: str,
-        mode: SimulationMode,
-        base_latency_ms: float
-    ) -> float:
-        """
-        Simulate network latency for trade execution.
-        
-        Args:
-            chain: Blockchain network
-            mode: Simulation mode
-            base_latency_ms: Base latency in milliseconds
-            
-        Returns:
-            Simulated latency in seconds
-        """
-        if mode == SimulationMode.FAST:
-            return 0.001  # 1ms for fast mode
-        
-        # Add random variation
-        variation = random.uniform(0.5, 2.0)  # 50% to 200% of base
-        latency_ms = base_latency_ms * variation
-        
-        # Convert to seconds
-        return latency_ms / 1000.0
-    
-    def _calculate_market_impact(
-        self,
-        trade_size: Decimal,
-        pool_liquidity: Decimal,
-        volatility_multiplier: Decimal
-    ) -> Dict[str, Decimal]:
-        """
-        Calculate market impact and slippage for trade.
-        
-        Args:
-            trade_size: Size of trade in GBP
-            pool_liquidity: Available pool liquidity
-            volatility_multiplier: Volatility adjustment factor
-            
-        Returns:
-            Dictionary with price_impact and slippage
-        """
-        # Calculate impact as percentage of liquidity
-        impact_ratio = trade_size / pool_liquidity
-        
-        # Base price impact (simplified model)
-        price_impact = impact_ratio * Decimal("100") * volatility_multiplier
-        
-        # Add slippage (usually higher than price impact)
-        slippage = price_impact * Decimal("1.2")
-        
-        # Cap maximum impact
-        price_impact = min(price_impact, Decimal("15.0"))  # Max 15%
-        slippage = min(slippage, Decimal("20.0"))  # Max 20%
-        
-        return {
-            "price_impact": price_impact,
-            "slippage": slippage
-        }
+            logger.error(f"Failed to get performance summary: {e}")
+            return {
+                "engine_status": "error",
+                "error": str(e)
+            }

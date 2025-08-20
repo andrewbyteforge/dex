@@ -65,6 +65,9 @@ except ImportError as e:
     logger.warning(f"⚠️  Working Presets API not available: {e}")
     print(f"⚠️  Working Presets API not available: {e}")
 
+# **PHASE 8: SIMULATION & BACKTESTING** - NEW
+_register_router("sim", description="Simulation & Backtesting")
+
 # **COMMENTED OUT BROKEN MODULES UNTIL FIXED**
 # These have circular imports or missing dependencies:
 _register_router("database", description="Database Operations")      # Missing LedgerEntry

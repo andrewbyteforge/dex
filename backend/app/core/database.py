@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sess
 from sqlalchemy.orm import sessionmaker, Session, scoped_session
 from sqlalchemy.pool import QueuePool, NullPool
 
-from app.storage.models import Base
+from backend.app.storage.models import Base  # ✅ Correct import path
 
 # Configure logging
 logger = logging.getLogger(__name__)

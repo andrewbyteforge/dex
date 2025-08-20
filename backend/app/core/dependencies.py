@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
-from app.core.database import get_db_session
+from backend.app.core.database import get_db_session
 from app.storage.models import User
 
 
