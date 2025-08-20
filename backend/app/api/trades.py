@@ -10,23 +10,37 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Query
 from pydantic import BaseModel, Field, validator
 
-from ..core.config import settings
+from ..core.settings import settings  # Fixed: Import from settings.py, not config.py
 from ..core.dependencies import get_chain_clients, get_trade_executor
 from ..core.logging import get_logger
-from ..trading.executor import TradeExecutor
-from ..trading.models import (
-    TradeRequest,
-    TradeResult,
-    TradePreview,
-    TradeStatus,
-    TradeType
-)
-from ..strategy.risk_manager import RiskManager
-from ..chains.evm_client import EvmClient
-from ..chains.solana_client import SolanaClient
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/trades", tags=["trades"])
+
+# Mock dependencies to avoid circular imports for now
+try:
+    from ..trading.executor import TradeExecutor
+    from ..trading.models import (
+        TradeRequest,
+        TradeResult,
+        TradePreview,
+        TradeStatus as ImportedTradeStatus,
+        TradeType as ImportedTradeType
+    )
+    from ..strategy.risk_manager import RiskManager
+    from ..chains.evm_client import EvmClient
+    from ..chains.solana_client import SolanaClient
+except ImportError:
+    # Use local definitions if imports fail
+    TradeExecutor = None
+    TradeRequest = None
+    TradeResult = None
+    TradePreview = None
+    ImportedTradeStatus = None
+    ImportedTradeType = None
+    RiskManager = None
+    EvmClient = None
+    SolanaClient = None
 
 
 # Define models locally to avoid circular imports

@@ -17,8 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
-from backend.app.core.database import get_db_session
-from app.storage.models import User
+from ..storage.database import get_db_session
+from ..storage.models import User
 
 
 # Security scheme for JWT Bearer tokens

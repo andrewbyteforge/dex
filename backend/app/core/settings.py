@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     mainnet_enabled: bool = False  # Enable mainnet trading
     autotrade_enabled: bool = False  # Enable autotrade bot
     enable_debug_routes: bool = True  # Enable debug endpoints
+    global_service_mode: str = "free"  # free, paid, premium
     
     # Server
     host: str = "127.0.0.1"
@@ -48,17 +49,20 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_retention_days: int = 90
     ledger_retention_days: int = 730
+    log_export_enabled: bool = False
     
     # JWT/Auth (if needed by bootstrap)
     secret_key: str = "dev-secret-key-change-in-production"
     access_token_expire_minutes: int = 30
     
     # Trading defaults (GBP-based)
+    base_currency: str = "GBP"
     default_per_trade_cap_gbp: float = 75.0
     default_daily_cap_gbp: float = 500.0
     default_slippage_new_pair: float = 0.07  # 7%
     default_slippage_normal: float = 0.03    # 3%
     default_gas_multiplier_cap: float = 1.25 # +25%
+    daily_loss_action: str = "disable_autotrade"  # disable_autotrade, stop_all, notify_only
     
     # Take profit / Stop loss defaults
     default_take_profit: float = 0.40   # +40%
@@ -87,10 +91,23 @@ class Settings(BaseSettings):
     base_rpc_url: Optional[str] = None
     arbitrum_rpc_url: Optional[str] = None
     
+    # EVM RPC URL lists (for compatibility with existing .env)
+    evm_rpc_urls_ethereum: Optional[str] = None
+    evm_rpc_urls_bsc: Optional[str] = None
+    evm_rpc_urls_polygon: Optional[str] = None
+    sol_rpc_urls: Optional[str] = None
+    
+    # Legacy single RPC URLs (for compatibility)
+    ethereum_rpc_url: Optional[str] = None
+    bsc_rpc_url: Optional[str] = None
+    polygon_rpc_url: Optional[str] = None
+    solana_rpc_url: Optional[str] = None
+    
     # API Keys (optional)
     coingecko_api_key: Optional[str] = None
     zerox_api_key: Optional[str] = None
     oneinch_api_key: Optional[str] = None
+    walletconnect_project_id: Optional[str] = None
     
     # Security
     hot_wallet_max_balance_gbp: float = 1000.0
@@ -98,6 +115,10 @@ class Settings(BaseSettings):
     
     # AI features
     ai_auto_tune_enabled: bool = False  # Advisory by default
+    
+    # Preset system
+    preset_default: str = "standard"
+    preset_allow_overrides: bool = True
     
     # Data paths
     data_dir: Path = Field(default_factory=lambda: Path("data"))
@@ -115,17 +136,35 @@ class Settings(BaseSettings):
         Returns:
             List of RPC URLs for the chain
         """
+        # Try the new format first
         url_mapping = {
             "eth": self.ethereum_rpc_url,
+            "ethereum": self.ethereum_rpc_url,
             "bsc": self.bsc_rpc_url,
             "polygon": self.polygon_rpc_url,
             "sol": self.solana_rpc_url,
+            "solana": self.solana_rpc_url,
             "base": self.base_rpc_url,
             "arbitrum": self.arbitrum_rpc_url
         }
         
         url = url_mapping.get(chain)
-        return [url] if url else []
+        if url:
+            return [url]
+        
+        # Fallback to legacy list formats
+        list_mapping = {
+            "ethereum": self.evm_rpc_urls_ethereum,
+            "bsc": self.evm_rpc_urls_bsc,
+            "polygon": self.evm_rpc_urls_polygon,
+            "solana": self.sol_rpc_urls
+        }
+        
+        url_list = list_mapping.get(chain)
+        if url_list:
+            return [url.strip() for url in url_list.split(",") if url.strip()]
+        
+        return []
     
     @field_validator("data_dir", "logs_dir", "ledgers_dir", "sims_dir", mode="before")
     @classmethod
@@ -157,7 +196,9 @@ class Settings(BaseSettings):
         "extra": "allow",  # Allow extra fields from .env
         "env_file": ".env",
         "env_file_encoding": "utf-8",
-        "case_sensitive": False
+        "case_sensitive": False,
+        "validate_assignment": True,
+        "str_strip_whitespace": True,
     }
 
 
