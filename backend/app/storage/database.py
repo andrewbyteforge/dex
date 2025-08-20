@@ -150,28 +150,26 @@ class DatabaseManager:
             logger.info("Database connections closed")
     
     @asynccontextmanager
-    async def get_session(self) -> AsyncGenerator[AsyncSession, None]:
+    async def get_session() -> AsyncGenerator[AsyncSession, None]:
         """
-        Get database session with automatic cleanup.
+        Get database session for dependency injection.
         
         Yields:
             AsyncSession: Database session
-            
-        Raises:
-            RuntimeError: If database not initialized
         """
-        if not self._is_initialized or not self.session_factory:
-            raise RuntimeError("Database not initialized")
-        
-        async with self.session_factory() as session:
+        async with AsyncSessionLocal() as session:
             try:
                 yield session
+                await session.commit()
             except Exception:
                 await session.rollback()
                 raise
             finally:
                 await session.close()
-    
+
+
+
+
     async def health_check(self) -> dict[str, str]:
         """
         Perform database health check.
@@ -245,14 +243,14 @@ async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
 
 
 # Direct session context manager for use in repositories
-def get_session_context():
+async def get_session_context() -> AsyncSession:
     """
-    Get session context manager for direct use in repositories.
+    Get database session for direct use (non-dependency injection).
     
     Returns:
-        Async context manager for database session
+        AsyncSession: Database session
     """
-    return db_manager.get_session()
+    return AsyncSessionLocal()
 
 
 async def init_database() -> None:
