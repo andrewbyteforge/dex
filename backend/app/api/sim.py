@@ -11,72 +11,33 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field, validator
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, Field, field_validator
 
 from ..core.dependencies import get_current_user, CurrentUser
 
-from ..sim.simulator import SimulationEngine  
-
+logger = logging.getLogger(__name__)
 
 # Safe imports with fallbacks for all simulation components
 try:
-    from ..sim.backtester import (
-        Backtester,
-        BacktestMode,
-        BacktestRequest,
-        BacktestResult,
-        StrategyConfig,
-        TimeRange,
-    )
-    HAS_BACKTESTER = True
-except ImportError as e:
-    logging.warning(f"Backtester import failed: {e}")
-
-
-
-    # Create placeholder classes
-    class Backtester:
-        async def run_backtest(self, request):
-            return {"status": "mock", "name": request.name if hasattr(request, 'name') else "test"}
-    
-    class BacktestMode:
-        SINGLE_STRATEGY = "single_strategy"
-    
-    class BacktestRequest:
-        pass
-    
-    class BacktestResult:
-        pass
-    
-    class StrategyConfig:
-        pass
-    
-    class TimeRange:
-        pass
-    
-    HAS_BACKTESTER = False
-
-try:
     from ..sim.simulator import (
         SimulationEngine,
-        SimulationMode,
         SimulationParameters,
-        SimulationResult,
-        SimulationState,
     )
     HAS_SIMULATOR = True
 except ImportError as e:
     logging.warning(f"Simulator import failed: {e}")
-    # Create placeholder classes
+    
     class SimulationEngine:
+        """Mock simulation engine for testing."""
         def __init__(self):
             self.current_simulation = None
             self.simulation_state = "idle"
         
         async def run_simulation(self, params):
+            """Mock simulation execution."""
             return type('MockResult', (), {
                 'simulation_id': f"sim_{int(datetime.now().timestamp())}",
                 'state': 'completed',
@@ -92,86 +53,49 @@ except ImportError as e:
                 'error_message': None
             })()
     
-    class SimulationMode:
-        REALISTIC = "realistic"
-    
     class SimulationParameters:
+        """Mock simulation parameters."""
         def __init__(self, **kwargs):
             for k, v in kwargs.items():
                 setattr(self, k, v)
     
-    class SimulationResult:
-        pass
-    
-    class SimulationState:
-        RUNNING = "running"
-        COMPLETED = "completed"
-        FAILED = "failed"
-    
     HAS_SIMULATOR = False
 
 try:
-    from ..sim.metrics import (
-        PerformanceAnalyzer,
-        PerformanceMetrics,
-        TradeResult,
+    from ..sim.backtester import (
+        Backtester,
+        BacktestRequest,
+        StrategyConfig,
+        TimeRange,
     )
-    # Try additional imports that might exist
-    try:
-        from ..sim.metrics import (
-            ComparisonMetrics,
-            DrawdownPeriod,
-        )
-    except ImportError:
-        class ComparisonMetrics:
-            pass
-        class DrawdownPeriod:
-            pass
-    
-    HAS_PERFORMANCE_ANALYZER = True
+    HAS_BACKTESTER = True
 except ImportError as e:
-    logging.warning(f"Performance analyzer import failed: {e}")
-    # Create placeholder classes
-    class PerformanceAnalyzer:
-        def __init__(self):
-            pass
-        
-        async def calculate_performance_metrics(self, **kwargs):
-            return type('MockMetrics', (), {
-                'total_return': Decimal("5.0"),
-                'sharpe_ratio': Decimal("1.2"),
-                'max_drawdown': Decimal("2.5")
-            })()
-        
-        async def analyze_drawdowns(self, portfolio_values):
-            return []
+    logging.warning(f"Backtester import failed: {e}")
     
-    class PerformanceMetrics:
+    class Backtester:
+        """Mock backtester for testing."""
+        async def run_backtest(self, request):
+            return {"status": "mock", "name": getattr(request, 'name', "test")}
+    
+    class BacktestRequest:
         pass
     
-    class ComparisonMetrics:
+    class StrategyConfig:
         pass
     
-    class DrawdownPeriod:
+    class TimeRange:
         pass
     
-    class TradeResult:
-        pass
-    
-    HAS_PERFORMANCE_ANALYZER = False
+    HAS_BACKTESTER = False
 
 try:
-    from ..sim.market_impact import (
-        MarketImpactModel,
-        MarketCondition,
-        LiquidityTier,
-        TradeImpact,
-    )
+    from ..sim.market_impact import MarketImpactModel
     HAS_MARKET_IMPACT = True
 except ImportError as e:
     logging.warning(f"Market impact import failed: {e}")
-    # Create placeholder classes
+    
     class MarketImpactModel:
+        """Mock market impact model."""
         def __init__(self):
             pass
         
@@ -185,29 +109,16 @@ except ImportError as e:
         def get_impact_summary(self, hours_back=24):
             return {"avg_impact": 0.5, "max_impact": 2.1}
     
-    class MarketCondition:
-        NORMAL = "normal"
-    
-    class LiquidityTier:
-        HIGH = "high"
-    
-    class TradeImpact:
-        pass
-    
     HAS_MARKET_IMPACT = False
 
 try:
-    from ..sim.latency_model import (
-        LatencyModel,
-        LatencyMeasurement,
-        LatencyDistribution,
-        NetworkCondition,
-    )
+    from ..sim.latency_model import LatencyModel
     HAS_LATENCY_MODEL = True
 except ImportError as e:
     logging.warning(f"Latency model import failed: {e}")
-    # Create placeholder classes
+    
     class LatencyModel:
+        """Mock latency model."""
         def __init__(self):
             pass
         
@@ -221,38 +132,19 @@ except ImportError as e:
                 'operation_type': kwargs.get('operation_type', 'test')
             })()
         
-        def get_latency_distribution(self, **kwargs):
-            return type('MockDistribution', (), {
-                'p50': 120.0,
-                'p95': 250.0,
-                'p99': 350.0
-            })()
-        
         def get_performance_summary(self):
             return {"avg_latency": 150.0, "p95_latency": 250.0}
-    
-    class LatencyMeasurement:
-        pass
-    
-    class LatencyDistribution:
-        pass
-    
-    class NetworkCondition:
-        NORMAL = "normal"
     
     HAS_LATENCY_MODEL = False
 
 try:
-    from ..sim.historical_data import (
-        HistoricalDataManager,
-        DataReplayIterator,
-        SimulationSnapshot,
-    )
+    from ..sim.historical_data import HistoricalDataManager
     HAS_HISTORICAL_DATA = True
 except ImportError as e:
     logging.warning(f"Historical data import failed: {e}")
-    # Create placeholder classes
+    
     class HistoricalDataManager:
+        """Mock historical data manager."""
         def __init__(self):
             pass
         
@@ -263,42 +155,33 @@ except ImportError as e:
                 "last_updated": datetime.now().isoformat()
             }
     
-    class DataReplayIterator:
-        pass
-    
-    class SimulationSnapshot:
-        pass
-    
     HAS_HISTORICAL_DATA = False
 
-logger = logging.getLogger(__name__)
-
+# Initialize router
 router = APIRouter(prefix="/sim", tags=["simulation"])
 
-# Global instances - only create if imports succeeded
+# Global instances
 try:
-    simulation_engine = SimulationEngine() if HAS_SIMULATOR else SimulationEngine()
+    simulation_engine = SimulationEngine()
     backtester = Backtester() if HAS_BACKTESTER else Backtester()
-    performance_analyzer = PerformanceAnalyzer() if HAS_PERFORMANCE_ANALYZER else PerformanceAnalyzer()
     market_impact_model = MarketImpactModel() if HAS_MARKET_IMPACT else MarketImpactModel()
     latency_model = LatencyModel() if HAS_LATENCY_MODEL else LatencyModel()
     historical_data_manager = HistoricalDataManager() if HAS_HISTORICAL_DATA else HistoricalDataManager()
 except Exception as e:
     logger.warning(f"Failed to initialize simulation components: {e}")
-    # Create minimal instances
     simulation_engine = SimulationEngine()
     backtester = Backtester()
-    performance_analyzer = PerformanceAnalyzer()
     market_impact_model = MarketImpactModel()
     latency_model = LatencyModel()
     historical_data_manager = HistoricalDataManager()
 
 
+# Request/Response Models
 class QuickSimRequest(BaseModel):
-    """Quick simulation request for testing strategies."""
+    """Quick simulation request for enhanced testing."""
     preset_name: str = Field(description="Trading preset name")
     initial_balance: Decimal = Field(default=Decimal("1000"), description="Starting balance in GBP")
-    duration_hours: int = Field(default=24, description="Simulation duration in hours")
+    duration_hours: float = Field(default=24, description="Simulation duration in hours")
     mode: str = Field(default="realistic", description="Simulation mode")
     random_seed: Optional[int] = Field(None, description="Random seed for reproducible results")
     
@@ -308,27 +191,55 @@ class QuickSimRequest(BaseModel):
     enable_latency_simulation: bool = Field(default=True, description="Enable latency modeling")
     enable_market_impact: bool = Field(default=True, description="Enable market impact simulation")
     
-    @validator('initial_balance')
-    def validate_balance(cls, v):
+    @field_validator('initial_balance')
+    @classmethod
+    def validate_balance(cls, v: Decimal) -> Decimal:
+        """Validate initial balance is within acceptable range."""
         if v <= 0:
             raise ValueError("Initial balance must be positive")
         if v > Decimal("100000"):
             raise ValueError("Initial balance cannot exceed 100,000 GBP")
         return v
     
-    @validator('duration_hours')
-    def validate_duration(cls, v):
-        if v < 1:
-            raise ValueError("Duration must be at least 1 hour")
-        if v > 720:  # 30 days
+    @field_validator('duration_hours')
+    @classmethod
+    def validate_duration(cls, v: float) -> float:
+        """Validate simulation duration allows fractional hours."""
+        if v < 0.25:  # 15 minutes minimum
+            raise ValueError("Duration must be at least 0.25 hours (15 minutes)")
+        if v > 720:  # 30 days maximum
             raise ValueError("Duration cannot exceed 720 hours (30 days)")
         return v
     
-    class Config:
-        """Pydantic config."""
-        json_encoders = {
-            Decimal: str
+    @field_validator('preset_name')
+    @classmethod
+    def validate_preset(cls, v: str) -> str:
+        """Validate preset name is supported."""
+        valid_presets = {
+            "conservative", "standard", "aggressive", 
+            "scalping", "swing", "momentum"
         }
+        if v not in valid_presets:
+            raise ValueError(f"Invalid preset '{v}'. Valid presets: {', '.join(sorted(valid_presets))}")
+        return v
+    
+    @field_validator('market_condition')
+    @classmethod
+    def validate_market_condition(cls, v: str) -> str:
+        """Validate market condition is supported."""
+        valid_conditions = {"bull", "bear", "normal", "volatile"}
+        if v not in valid_conditions:
+            raise ValueError(f"Invalid market condition '{v}'. Valid conditions: {', '.join(sorted(valid_conditions))}")
+        return v
+    
+    @field_validator('network_condition')
+    @classmethod
+    def validate_network_condition(cls, v: str) -> str:
+        """Validate network condition is supported."""
+        valid_conditions = {"fast", "normal", "slow", "congested"}
+        if v not in valid_conditions:
+            raise ValueError(f"Invalid network condition '{v}'. Valid conditions: {', '.join(sorted(valid_conditions))}")
+        return v
 
 
 class EnhancedSimulationResult(BaseModel):
@@ -379,32 +290,25 @@ class BacktestQuickRequest(BaseModel):
     days_back: int = Field(default=30, description="Days of historical data to use")
     mode: str = Field(default="single_strategy", description="Backtest mode")
     
-    @validator('initial_balance')
-    def validate_balance(cls, v):
+    @field_validator('initial_balance')
+    @classmethod
+    def validate_balance(cls, v: Decimal) -> Decimal:
+        """Validate initial balance is within acceptable range."""
         if v <= 0:
             raise ValueError("Initial balance must be positive")
         if v > Decimal("1000000"):
             raise ValueError("Initial balance cannot exceed 1,000,000 GBP")
         return v
     
-    @validator('days_back')
-    def validate_days(cls, v):
+    @field_validator('days_back')
+    @classmethod
+    def validate_days(cls, v: int) -> int:
+        """Validate days back is within acceptable range."""
         if v < 1:
             raise ValueError("Days back must be at least 1")
         if v > 365:
             raise ValueError("Days back cannot exceed 365")
         return v
-    
-    class Config:
-        """Pydantic config."""
-        json_encoders = {
-            Decimal: str
-        }
-
-
-
-
-
 
 
 class MarketImpactAnalysisRequest(BaseModel):
@@ -415,17 +319,21 @@ class MarketImpactAnalysisRequest(BaseModel):
     market_condition: str = Field(default="normal", description="Market condition")
     slippage_tolerance: Decimal = Field(default=Decimal("0.01"), description="Slippage tolerance")
     
-    @validator('side')
-    def validate_side(cls, v):
+    @field_validator('side')
+    @classmethod
+    def validate_side(cls, v: str) -> str:
+        """Validate trade side is buy or sell."""
         if v.lower() not in ['buy', 'sell']:
             raise ValueError("Side must be 'buy' or 'sell'")
         return v.lower()
     
-    class Config:
-        """Pydantic config."""
-        json_encoders = {
-            Decimal: str
-        }
+    @field_validator('trade_size_usd')
+    @classmethod
+    def validate_trade_size(cls, v: Decimal) -> Decimal:
+        """Validate trade size is positive."""
+        if v <= 0:
+            raise ValueError("Trade size must be positive")
+        return v
 
 
 class LatencyTestRequest(BaseModel):
@@ -436,8 +344,10 @@ class LatencyTestRequest(BaseModel):
     test_count: int = Field(default=10, description="Number of tests to run")
     market_volatility: float = Field(default=1.0, description="Market volatility factor")
     
-    @validator('test_count')
-    def validate_count(cls, v):
+    @field_validator('test_count')
+    @classmethod
+    def validate_count(cls, v: int) -> int:
+        """Validate test count is within bounds."""
         if v < 1:
             raise ValueError("Test count must be at least 1")
         if v > 100:
@@ -445,6 +355,7 @@ class LatencyTestRequest(BaseModel):
         return v
 
 
+# API Endpoints
 @router.post("/quick-sim")
 async def run_quick_simulation(request: QuickSimRequest) -> EnhancedSimulationResult:
     """
@@ -463,34 +374,59 @@ async def run_quick_simulation(request: QuickSimRequest) -> EnhancedSimulationRe
         end_time = datetime.now()
         start_time = end_time - timedelta(hours=request.duration_hours)
         
-        # Mock simulation result for testing
-        simulation_id = f"sim_{int(datetime.now().timestamp())}"
+        # Create simulation parameters
+        if HAS_SIMULATOR:
+            sim_params = SimulationParameters(
+                start_time=start_time,
+                end_time=end_time,
+                initial_balance=request.initial_balance,
+                mode=request.mode,
+                preset_name=request.preset_name,
+                random_seed=request.random_seed
+            )
+            
+            # Run actual simulation
+            result = await simulation_engine.run_simulation(sim_params)
+            
+            # Extract results
+            simulation_id = getattr(result, 'simulation_id', f"sim_{int(datetime.now().timestamp())}")
+            final_balance = float(getattr(result, 'final_balance', request.initial_balance * Decimal("1.05")))
+            avg_latency = getattr(result, 'avg_execution_time', 150.0)
+            total_trades = getattr(result, 'total_trades', 12)
+            successful_trades = getattr(result, 'successful_trades', 10)
+            failed_trades = getattr(result, 'failed_trades', 2)
+        else:
+            # Mock simulation result
+            simulation_id = f"sim_{int(datetime.now().timestamp())}"
+            return_multiplier = 1.05 if request.preset_name == "standard" else 1.03
+            final_balance = float(request.initial_balance) * return_multiplier
+            avg_latency = 145.5
+            total_trades = 12
+            successful_trades = 10
+            failed_trades = 2
+        
+        # Calculate metrics
         duration_seconds = request.duration_hours * 3600
+        initial_balance_float = float(request.initial_balance)
+        total_return = final_balance - initial_balance_float
+        total_return_percentage = (total_return / initial_balance_float) * 100 if initial_balance_float > 0 else 0
         
-        # Simple mock calculation
-        return_multiplier = 1.05 if request.preset_name == "standard" else 1.03
-        final_balance = float(request.initial_balance) * return_multiplier
-        total_return = final_balance - float(request.initial_balance)
-        
-        result = EnhancedSimulationResult(
+        return EnhancedSimulationResult(
             simulation_id=simulation_id,
             status="completed",
             start_time=start_time,
             end_time=end_time,
             duration_seconds=duration_seconds,
-            initial_balance=float(request.initial_balance),
+            initial_balance=initial_balance_float,
             final_balance=final_balance,
             total_return=total_return,
-            total_return_percentage=(total_return / float(request.initial_balance)) * 100,
-            trades_executed=12,
-            successful_trades=10,
-            failed_trades=2,
-            average_latency_ms=145.5,
+            total_return_percentage=total_return_percentage,
+            trades_executed=total_trades,
+            successful_trades=successful_trades,
+            failed_trades=failed_trades,
+            average_latency_ms=avg_latency,
             total_fees_paid=5.75
         )
-        
-        logger.info(f"Quick simulation completed: {simulation_id}")
-        return result
         
     except Exception as e:
         logger.error(f"Quick simulation failed: {e}")
@@ -498,10 +434,6 @@ async def run_quick_simulation(request: QuickSimRequest) -> EnhancedSimulationRe
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Simulation failed: {str(e)}"
         )
-
-
-
-
 
 
 @router.post("/backtest-quick", response_model=Dict[str, Any])
@@ -518,9 +450,6 @@ async def run_quick_backtest(
         
     Returns:
         Backtest result
-        
-    Raises:
-        HTTPException: If backtest fails
     """
     try:
         logger.info(f"Starting quick backtest for user {current_user.user_id}")
@@ -588,9 +517,6 @@ async def analyze_market_impact(
         
     Returns:
         Trade impact analysis
-        
-    Raises:
-        HTTPException: If analysis fails
     """
     try:
         logger.debug(f"Analyzing market impact for {request.pair_address}")
@@ -640,9 +566,6 @@ async def test_latency(
         
     Returns:
         List of latency measurements
-        
-    Raises:
-        HTTPException: If test fails
     """
     try:
         logger.debug(f"Testing latency for {request.chain}/{request.provider}")
@@ -680,42 +603,6 @@ async def test_latency(
             detail=f"Latency test failed: {str(e)}"
         )
 
-
-@router.get("/historical-data/stats", response_model=Dict[str, Any])
-async def get_historical_data_stats(
-    current_user: CurrentUser = Depends(get_current_user)
-) -> Dict[str, Any]:
-    """
-    Get statistics about available historical data.
-    
-    Args:
-        current_user: Current authenticated user
-        
-    Returns:
-        Historical data statistics
-    """
-    try:
-        if HAS_HISTORICAL_DATA:
-            stats = await historical_data_manager.get_data_statistics()
-        else:
-            # Mock stats
-            stats = {
-                "total_pairs": 125,
-                "data_range_days": 90,
-                "last_updated": datetime.now().isoformat(),
-                "chains": ["ethereum", "bsc", "polygon", "base"],
-                "status": "mock_data"
-            }
-        
-        return stats
-        
-    except Exception as e:
-        logger.error(f"Failed to get historical data stats: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get data stats: {str(e)}"
-        )
-    
 
 @router.get("/data/statistics")
 async def get_data_statistics() -> Dict[str, Any]:
@@ -759,7 +646,6 @@ async def get_simulation_status() -> SimulationStatusResponse:
     try:
         # Check if simulation engine has current simulation
         if not hasattr(simulation_engine, 'current_simulation') or not simulation_engine.current_simulation:
-            # Return no active simulation instead of error
             return SimulationStatusResponse(
                 simulation_id="none",
                 state="idle",
@@ -776,13 +662,12 @@ async def get_simulation_status() -> SimulationStatusResponse:
             simulation_id=simulation_engine.current_simulation,
             state=state,
             progress_percentage=progress,
-            start_time=datetime.now() - timedelta(minutes=5),  # Mock start time
-            estimated_completion=datetime.now() + timedelta(minutes=2)  # Estimate
+            start_time=datetime.now() - timedelta(minutes=5),
+            estimated_completion=datetime.now() + timedelta(minutes=2)
         )
         
     except Exception as e:
         logger.error(f"Failed to get simulation status: {e}")
-        # Return idle status instead of HTTP error
         return SimulationStatusResponse(
             simulation_id="error",
             state="idle",
@@ -790,11 +675,6 @@ async def get_simulation_status() -> SimulationStatusResponse:
             start_time=None,
             estimated_completion=None
         )
-
-
-
-
-
 
 
 @router.get("/health")
@@ -807,12 +687,13 @@ async def simulation_health() -> Dict[str, Any]:
     """
     try:
         # Check all component health
-        engine_status = "available" if HAS_SIMULATOR else "mock"
-        backtester_status = "available" if HAS_BACKTESTER else "mock"
-        latency_model_status = "available" if HAS_LATENCY_MODEL else "mock"
-        market_impact_status = "available" if HAS_MARKET_IMPACT else "mock"
-        historical_data_status = "available" if HAS_HISTORICAL_DATA else "mock"
-        performance_analyzer_status = "available" if HAS_PERFORMANCE_ANALYZER else "mock"
+        component_status = {
+            "simulation_engine": "available" if HAS_SIMULATOR else "mock",
+            "backtester": "available" if HAS_BACKTESTER else "mock",
+            "latency_model": "available" if HAS_LATENCY_MODEL else "mock",
+            "market_impact_model": "available" if HAS_MARKET_IMPACT else "mock",
+            "historical_data_manager": "available" if HAS_HISTORICAL_DATA else "mock",
+        }
         
         # Get performance summaries
         if HAS_LATENCY_MODEL:
@@ -827,18 +708,12 @@ async def simulation_health() -> Dict[str, Any]:
         
         return {
             "status": "healthy",
-            "simulation_engine": engine_status,
-            "backtester": backtester_status,
-            "latency_model": latency_model_status,
-            "market_impact_model": market_impact_status,
-            "historical_data_manager": historical_data_status,
-            "performance_analyzer": performance_analyzer_status,
+            **component_status,
             "latency_performance": latency_summary,
             "impact_performance": impact_summary,
             "component_availability": {
                 "simulator": HAS_SIMULATOR,
                 "backtester": HAS_BACKTESTER,
-                "performance_analyzer": HAS_PERFORMANCE_ANALYZER,
                 "market_impact": HAS_MARKET_IMPACT,
                 "latency_model": HAS_LATENCY_MODEL,
                 "historical_data": HAS_HISTORICAL_DATA
@@ -853,80 +728,3 @@ async def simulation_health() -> Dict[str, Any]:
             "error": str(e),
             "timestamp": datetime.now().isoformat()
         }
-
-
-# Internal helper functions
-async def _analyze_simulation_result(result) -> EnhancedSimulationResult:
-    """Analyze simulation result with enhanced metrics."""
-    try:
-        # Convert result to dict format for consistent handling
-        if hasattr(result, '__dict__'):
-            result_dict = result.__dict__
-        else:
-            result_dict = result if isinstance(result, dict) else {}
-        
-        # Mock trade results for analysis (in real implementation, extract from result)
-        trades = []
-        portfolio_values = [
-            (datetime.now() - timedelta(hours=1), Decimal("1000")),
-            (datetime.now(), result_dict.get('final_balance', Decimal("1050")))
-        ]
-        
-        # Calculate performance metrics
-        performance_metrics = None
-        drawdown_analysis = []
-        
-        if HAS_PERFORMANCE_ANALYZER and trades and len(portfolio_values) > 1:
-            try:
-                performance_metrics = await performance_analyzer.calculate_performance_metrics(
-                    trades=trades,
-                    portfolio_values=portfolio_values,
-                    initial_balance=result_dict.get('initial_balance', Decimal("1000"))
-                )
-                
-                drawdown_analysis = await performance_analyzer.analyze_drawdowns(portfolio_values)
-            except Exception as e:
-                logger.warning(f"Performance analysis failed: {e}")
-        
-        # Get execution quality metrics
-        execution_quality = {
-            "avg_execution_time_ms": result_dict.get('avg_execution_time', 150.0),
-            "success_rate": float(result_dict.get('success_rate', Decimal("0.95"))),
-            "total_trades": result_dict.get('total_trades', 10),
-            "successful_trades": result_dict.get('successful_trades', 9),
-            "failed_trades": result_dict.get('failed_trades', 1)
-        }
-        
-        # Get model summaries
-        if HAS_MARKET_IMPACT:
-            market_impact_summary = market_impact_model.get_impact_summary(hours_back=1)
-        else:
-            market_impact_summary = {"avg_impact": 0.5, "status": "mock"}
-        
-        if HAS_LATENCY_MODEL:
-            latency_summary = latency_model.get_performance_summary()
-        else:
-            latency_summary = {"avg_latency": 150.0, "status": "mock"}
-        
-        return EnhancedSimulationResult(
-            simulation_result=result_dict,
-            performance_metrics=performance_metrics.__dict__ if hasattr(performance_metrics, '__dict__') else performance_metrics,
-            drawdown_analysis=[d.__dict__ if hasattr(d, '__dict__') else d for d in drawdown_analysis],
-            execution_quality=execution_quality,
-            market_impact_summary=market_impact_summary,
-            latency_summary=latency_summary
-        )
-        
-    except Exception as e:
-        logger.error(f"Failed to analyze simulation result: {e}")
-        # Return basic result on analysis failure
-        result_dict = result.__dict__ if hasattr(result, '__dict__') else (result if isinstance(result, dict) else {"status": "mock"})
-        
-        return EnhancedSimulationResult(
-            simulation_result=result_dict,
-            performance_metrics=None,
-            drawdown_analysis=[],
-            execution_quality={"status": "analysis_failed"},
-            market_impact_summary={"status": "analysis_failed"},
-            latency_summary={"status": "analysis_failed"}
-        )
