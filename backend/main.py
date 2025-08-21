@@ -32,23 +32,25 @@ try:
     from app.api import api_router
     app.include_router(api_router)
     logger.info("✅ Centralized API router registered")
+    
+    # Explicitly register simulation router for debugging
+    try:
+        from app.api.sim import router as sim_router
+        app.include_router(sim_router)
+        logger.info("✅ Simulation router explicitly registered")
+    except ImportError as e:
+        logger.error(f"❌ Failed to explicitly load simulation router: {e}")
+        
 except ImportError as e:
     logger.error(f"❌ Failed to load centralized API router: {e}")
 
     # Fallback to individual routers if centralized fails
     try:
-        from app.api.presets_working import router as presets_router
-        app.include_router(presets_router, prefix="/api/v1")
-        logger.info("✅ Working Presets API registered")
+        from app.api.sim import router as sim_router
+        app.include_router(sim_router)
+        logger.info("✅ Simulation API registered (fallback)")
     except ImportError as e:
-        logger.warning(f"⚠️  Working Presets API failed: {e}")
-
-    try:
-        from app.api.autotrade import router as autotrade_router
-        app.include_router(autotrade_router, prefix="/api/v1")
-        logger.info("✅ Autotrade API registered")
-    except ImportError as e:
-        logger.warning(f"⚠️  Autotrade API failed: {e}")
+        logger.warning(f"⚠️  Simulation API failed: {e}")
 
 
 @app.get("/")
@@ -65,6 +67,8 @@ async def root():
             "autotrade": "/api/v1/autotrade/",
             "trades": "/api/v1/trades/",
             "websocket": "/ws/autotrade",
+            "simulation": "/api/v1/sim/",
+            "sim_health": "/api/v1/sim/health",
         },
     }
 
@@ -81,6 +85,7 @@ async def health_check():
             "presets": "available",
             "autotrade": "available",
             "trades": "available",
+            "simulation": "available",
         },
     }
 

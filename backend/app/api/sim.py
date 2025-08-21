@@ -273,7 +273,7 @@ except ImportError as e:
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1/sim", tags=["simulation"])
+router = APIRouter(prefix="/sim", tags=["simulation"])
 
 # Global instances - only create if imports succeeded
 try:
