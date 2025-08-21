@@ -37,11 +37,31 @@ class ExplanationStyle(Enum):
 class RiskSeverity(Enum):
     """Risk severity levels for messaging."""
     
-    SAFE = "safe"
-    LOW = "low"
-    MODERATE = "moderate"
-    HIGH = "high"
-    CRITICAL = "critical"
+    SAFE = 1
+    LOW = 2
+    MODERATE = 3
+    HIGH = 4
+    CRITICAL = 5
+
+    def __lt__(self, other):
+        if self.__class__ is other.__class__:
+            return self.value < other.value
+        return NotImplemented
+    
+    def __le__(self, other):
+        if self.__class__ is other.__class__:
+            return self.value <= other.value
+        return NotImplemented
+    
+    def __gt__(self, other):
+        if self.__class__ is other.__class__:
+            return self.value > other.value
+        return NotImplemented
+    
+    def __ge__(self, other):
+        if self.__class__ is other.__class__:
+            return self.value >= other.value
+        return NotImplemented
 
 
 @dataclass
@@ -717,13 +737,22 @@ class RiskExplainer:
         warnings = []
         
         for factor in risk_factors:
-            if factor.severity == RiskSeverity.CRITICAL:
-                warnings.append(f"🚨 CRITICAL: {factor.name} - {factor.explanation}")
-            elif factor.severity == RiskSeverity.HIGH:
-                warnings.append(f"⚠️ HIGH RISK: {factor.name} - {factor.explanation}")
+            if factor.severity.value >= 5:  # CRITICAL
+                warnings.append(f"CRITICAL: {factor.name} - {factor.explanation}")
+            elif factor.severity.value >= 4:  # HIGH
+                warnings.append(f"HIGH RISK: {factor.name} - {factor.explanation}")
         
         return warnings
-    
+
+
+
+
+
+
+
+
+
+
     def _generate_educational_notes(self, risk_factors: List[RiskFactor]) -> List[str]:
         """Generate educational content based on detected risks."""
         if self.explanation_style == ExplanationStyle.EXPERT:

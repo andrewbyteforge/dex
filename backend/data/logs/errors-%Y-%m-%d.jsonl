@@ -9,3 +9,4 @@
 {"timestamp":"2025-08-21T11:48:12.700755Z","level":"ERROR","logger":"app.bootstrap","message":"\u274c Failed to initialize AI systems: No module named 'scipy'","module":"bootstrap"}
 {"timestamp":"2025-08-21T11:48:39.177755Z","level":"ERROR","logger":"app.bootstrap","message":"\u274c Failed to initialize AI systems: No module named 'scipy'","module":"bootstrap"}
 {"timestamp":"2025-08-21T11:49:20.539090Z","level":"ERROR","logger":"app.bootstrap","message":"\u274c Failed to initialize AI systems: No module named 'scipy'","module":"bootstrap"}
+{"timestamp":"2025-08-21T11:56:51.619742Z","level":"ERROR","logger":"app.api.ai","message":"Error generating risk explanation: '>=' not supported between instances of 'RiskSeverity' and 'RiskSeverity'","module":"ai"}
