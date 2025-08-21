@@ -68,6 +68,10 @@ except ImportError as e:
 # **PHASE 8: SIMULATION & BACKTESTING** - FIXED IMPORTS
 _register_router("sim", description="Simulation & Backtesting")
 
+# **PHASE 9.3: PRODUCTION READINESS & OPERATIONS** - NEW COMPONENTS
+_register_router("monitoring", description="Monitoring & Alerting")
+_register_router("diagnostics", description="Self-Diagnostic Tools")
+
 # **TEMPORARILY ENABLE THESE FOR TESTING** - Comment out when fixed
 _register_router("database", description="Database Operations")
 _register_router("wallet", description="Wallet Management")
