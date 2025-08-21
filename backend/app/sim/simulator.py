@@ -17,10 +17,10 @@ from typing import Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
-from backend.app.sim.historical_data import HistoricalDataManager, SimulationSnapshot
-from backend.app.sim.latency_model import LatencyModel, NetworkCondition
-from backend.app.sim.market_impact import MarketImpactModel, MarketCondition, TradeImpact
-from backend.app.strategy.risk_manager import RiskManager
+from .historical_data import HistoricalDataManager, SimulationSnapshot
+from .latency_model import LatencyModel, NetworkCondition
+from .market_impact import MarketImpactModel, MarketCondition, TradeImpact
+from ..strategy.risk_manager import RiskManager
 
 logger = logging.getLogger(__name__)
 

@@ -34,6 +34,9 @@ try:
     HAS_BACKTESTER = True
 except ImportError as e:
     logging.warning(f"Backtester import failed: {e}")
+
+
+
     # Create placeholder classes
     class Backtester:
         async def run_backtest(self, request):
