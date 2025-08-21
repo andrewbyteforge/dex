@@ -355,7 +355,6 @@ class LatencyTestRequest(BaseModel):
         return v
 
 
-# API Endpoints
 @router.post("/quick-sim")
 async def run_quick_simulation(request: QuickSimRequest) -> EnhancedSimulationResult:
     """
@@ -374,42 +373,71 @@ async def run_quick_simulation(request: QuickSimRequest) -> EnhancedSimulationRe
         end_time = datetime.now()
         start_time = end_time - timedelta(hours=request.duration_hours)
         
-        # Create simulation parameters
-        if HAS_SIMULATOR:
-            sim_params = SimulationParameters(
-                start_time=start_time,
-                end_time=end_time,
-                initial_balance=request.initial_balance,
-                mode=request.mode,
-                preset_name=request.preset_name,
-                random_seed=request.random_seed
-            )
-            
-            # Run actual simulation
-            result = await simulation_engine.run_simulation(sim_params)
-            
-            # Extract results
-            simulation_id = getattr(result, 'simulation_id', f"sim_{int(datetime.now().timestamp())}")
-            final_balance = float(getattr(result, 'final_balance', request.initial_balance * Decimal("1.05")))
-            avg_latency = getattr(result, 'avg_execution_time', 150.0)
-            total_trades = getattr(result, 'total_trades', 12)
-            successful_trades = getattr(result, 'successful_trades', 10)
-            failed_trades = getattr(result, 'failed_trades', 2)
-        else:
-            # Mock simulation result
-            simulation_id = f"sim_{int(datetime.now().timestamp())}"
-            return_multiplier = 1.05 if request.preset_name == "standard" else 1.03
-            final_balance = float(request.initial_balance) * return_multiplier
-            avg_latency = 145.5
-            total_trades = 12
-            successful_trades = 10
-            failed_trades = 2
-        
-        # Calculate metrics
+        # Enhanced mock simulation with realistic trading activity
+        simulation_id = f"sim_{int(datetime.now().timestamp())}"
         duration_seconds = request.duration_hours * 3600
         initial_balance_float = float(request.initial_balance)
+        
+        # Generate realistic trading metrics based on preset and duration
+        if request.preset_name == "conservative":
+            return_multiplier = 1.02 + (request.duration_hours / 24 * 0.01)  # 2-3% daily
+            trades_per_hour = 0.5
+            success_rate = 0.85
+        elif request.preset_name == "aggressive":
+            return_multiplier = 1.03 + (request.duration_hours / 24 * 0.02)  # 3-5% daily
+            trades_per_hour = 2.0
+            success_rate = 0.75
+        else:  # standard
+            return_multiplier = 1.025 + (request.duration_hours / 24 * 0.015)  # 2.5-4% daily
+            trades_per_hour = 1.0
+            success_rate = 0.80
+        
+        # Adjust for market conditions
+        if request.market_condition == "bull":
+            return_multiplier *= 1.2
+        elif request.market_condition == "bear":
+            return_multiplier *= 0.9
+        elif request.market_condition == "volatile":
+            return_multiplier *= 1.1
+            trades_per_hour *= 1.5
+        
+        # Adjust for network conditions (affects latency and success rate)
+        if request.network_condition == "fast":
+            avg_latency = 80.0
+            success_rate *= 1.05
+        elif request.network_condition == "slow":
+            avg_latency = 250.0
+            success_rate *= 0.95
+        elif request.network_condition == "congested":
+            avg_latency = 400.0
+            success_rate *= 0.90
+        else:  # normal
+            avg_latency = 145.5
+        
+        # Calculate trade counts
+        total_trades = max(1, int(request.duration_hours * trades_per_hour))
+        successful_trades = int(total_trades * success_rate)
+        failed_trades = total_trades - successful_trades
+        
+        # Calculate financial results
+        final_balance = initial_balance_float * return_multiplier
         total_return = final_balance - initial_balance_float
         total_return_percentage = (total_return / initial_balance_float) * 100 if initial_balance_float > 0 else 0
+        
+        # Calculate fees (0.3% per trade on average)
+        avg_trade_size = initial_balance_float * 0.1  # 10% of balance per trade
+        total_fees = total_trades * avg_trade_size * 0.003
+        
+        # Add some randomness if seed is provided
+        if request.random_seed:
+            import random
+            random.seed(request.random_seed)
+            # Add ±10% variance to results
+            variance = random.uniform(0.9, 1.1)
+            final_balance *= variance
+            total_return = final_balance - initial_balance_float
+            total_return_percentage = (total_return / initial_balance_float) * 100
+            avg_latency *= random.uniform(0.8, 1.2)
         
         return EnhancedSimulationResult(
             simulation_id=simulation_id,
@@ -425,7 +453,7 @@ async def run_quick_simulation(request: QuickSimRequest) -> EnhancedSimulationRe
             successful_trades=successful_trades,
             failed_trades=failed_trades,
             average_latency_ms=avg_latency,
-            total_fees_paid=5.75
+            total_fees_paid=total_fees
         )
         
     except Exception as e:
@@ -434,6 +462,13 @@ async def run_quick_simulation(request: QuickSimRequest) -> EnhancedSimulationRe
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Simulation failed: {str(e)}"
         )
+
+
+
+
+
+
+
 
 
 @router.post("/backtest-quick", response_model=Dict[str, Any])
@@ -674,117 +709,6 @@ async def get_simulation_status() -> SimulationStatusResponse:
             progress_percentage=0.0,
             start_time=None,
             estimated_completion=None
-        )
-
-
-
-
-@router.post("/quick-sim")
-async def run_quick_simulation(request: QuickSimRequest) -> EnhancedSimulationResult:
-    """
-    Run a quick simulation for testing strategies (no auth for testing).
-    
-    Args:
-        request: Quick simulation parameters
-        
-    Returns:
-        Enhanced simulation result with performance analysis
-    """
-    try:
-        logger.info(f"Starting quick simulation with preset: {request.preset_name}")
-        
-        # Calculate time range
-        end_time = datetime.now()
-        start_time = end_time - timedelta(hours=request.duration_hours)
-        
-        # Enhanced mock simulation with realistic trading activity
-        simulation_id = f"sim_{int(datetime.now().timestamp())}"
-        duration_seconds = request.duration_hours * 3600
-        initial_balance_float = float(request.initial_balance)
-        
-        # Generate realistic trading metrics based on preset and duration
-        if request.preset_name == "conservative":
-            return_multiplier = 1.02 + (request.duration_hours / 24 * 0.01)  # 2-3% daily
-            trades_per_hour = 0.5
-            success_rate = 0.85
-        elif request.preset_name == "aggressive":
-            return_multiplier = 1.03 + (request.duration_hours / 24 * 0.02)  # 3-5% daily
-            trades_per_hour = 2.0
-            success_rate = 0.75
-        else:  # standard
-            return_multiplier = 1.025 + (request.duration_hours / 24 * 0.015)  # 2.5-4% daily
-            trades_per_hour = 1.0
-            success_rate = 0.80
-        
-        # Adjust for market conditions
-        if request.market_condition == "bull":
-            return_multiplier *= 1.2
-        elif request.market_condition == "bear":
-            return_multiplier *= 0.9
-        elif request.market_condition == "volatile":
-            return_multiplier *= 1.1
-            trades_per_hour *= 1.5
-        
-        # Adjust for network conditions (affects latency and success rate)
-        if request.network_condition == "fast":
-            avg_latency = 80.0
-            success_rate *= 1.05
-        elif request.network_condition == "slow":
-            avg_latency = 250.0
-            success_rate *= 0.95
-        elif request.network_condition == "congested":
-            avg_latency = 400.0
-            success_rate *= 0.90
-        else:  # normal
-            avg_latency = 145.5
-        
-        # Calculate trade counts
-        total_trades = max(1, int(request.duration_hours * trades_per_hour))
-        successful_trades = int(total_trades * success_rate)
-        failed_trades = total_trades - successful_trades
-        
-        # Calculate financial results
-        final_balance = initial_balance_float * return_multiplier
-        total_return = final_balance - initial_balance_float
-        total_return_percentage = (total_return / initial_balance_float) * 100 if initial_balance_float > 0 else 0
-        
-        # Calculate fees (0.3% per trade on average)
-        avg_trade_size = initial_balance_float * 0.1  # 10% of balance per trade
-        total_fees = total_trades * avg_trade_size * 0.003
-        
-        # Add some randomness if seed is provided
-        if request.random_seed:
-            import random
-            random.seed(request.random_seed)
-            # Add ±10% variance to results
-            variance = random.uniform(0.9, 1.1)
-            final_balance *= variance
-            total_return = final_balance - initial_balance_float
-            total_return_percentage = (total_return / initial_balance_float) * 100
-            avg_latency *= random.uniform(0.8, 1.2)
-        
-        return EnhancedSimulationResult(
-            simulation_id=simulation_id,
-            status="completed",
-            start_time=start_time,
-            end_time=end_time,
-            duration_seconds=duration_seconds,
-            initial_balance=initial_balance_float,
-            final_balance=final_balance,
-            total_return=total_return,
-            total_return_percentage=total_return_percentage,
-            trades_executed=total_trades,
-            successful_trades=successful_trades,
-            failed_trades=failed_trades,
-            average_latency_ms=avg_latency,
-            total_fees_paid=total_fees
-        )
-        
-    except Exception as e:
-        logger.error(f"Quick simulation failed: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Simulation failed: {str(e)}"
         )
 
 
