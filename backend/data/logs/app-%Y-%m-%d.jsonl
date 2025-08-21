@@ -2408,3 +2408,57 @@
 {"timestamp":"2025-08-21T15:54:51.456026Z","level":"INFO","logger":"app.bootstrap","message":"\u2705 AI Decision Journal initialized","module":"bootstrap"}
 {"timestamp":"2025-08-21T15:54:51.456026Z","level":"INFO","logger":"app.bootstrap","message":"\ud83e\udd16 All AI systems initialized successfully","module":"bootstrap"}
 {"timestamp":"2025-08-21T15:54:51.456026Z","level":"INFO","logger":"app.bootstrap","message":"Skipping RPC/chain client initialization for testing","module":"bootstrap"}
+{"timestamp":"2025-08-21T15:57:30.826995Z","level":"INFO","logger":"app.bootstrap","message":"Shutting down DEX Sniper Pro - MINIMAL VERSION WITH AI","module":"bootstrap","uptime_sec":159.390284}
+{"timestamp":"2025-08-21T15:57:30.827993Z","level":"INFO","logger":"app.storage.database","message":"Database connections closed","module":"database"}
+{"timestamp":"2025-08-21T15:57:30.827993Z","level":"INFO","logger":"app.bootstrap","message":"Database connections closed","module":"bootstrap"}
+{"timestamp":"2025-08-21T15:57:32.705006Z","level":"INFO","logger":"root","message":"Logging system initialized","module":"logging","log_level":"INFO","debug":false,"environment":"development"}
+{"timestamp":"2025-08-21T15:57:32.705964Z","level":"INFO","logger":"app.bootstrap","message":"Starting DEX Sniper Pro - MINIMAL VERSION WITH AI","module":"bootstrap","environment":"development","service_mode":"free","debug":false}
+{"timestamp":"2025-08-21T15:57:32.705964Z","level":"INFO","logger":"app.storage.database","message":"Initializing database at: data\\app.db","module":"database"}
+{"timestamp":"2025-08-21T15:57:32.720489Z","level":"INFO","logger":"app.storage.database","message":"Database initialized successfully with WAL mode","module":"database"}
+{"timestamp":"2025-08-21T15:57:32.724546Z","level":"INFO","logger":"app.storage.database","message":"Database tables created successfully","module":"database"}
+{"timestamp":"2025-08-21T15:57:32.724546Z","level":"INFO","logger":"app.storage.database","message":"Database initialization completed","module":"database"}
+{"timestamp":"2025-08-21T15:57:32.724546Z","level":"INFO","logger":"app.bootstrap","message":"Database initialized successfully with WAL mode","module":"bootstrap"}
+{"timestamp":"2025-08-21T15:57:32.724546Z","level":"INFO","logger":"app.ai.tuner","message":"Initialized auto-tuner in advisory mode","module":"tuner"}
+{"timestamp":"2025-08-21T15:57:32.724546Z","level":"INFO","logger":"app.bootstrap","message":"\u2705 AI Auto-Tuner initialized in advisory mode","module":"bootstrap"}
+{"timestamp":"2025-08-21T15:57:32.724546Z","level":"INFO","logger":"app.bootstrap","message":"\u2705 AI Risk Explainer initialized","module":"bootstrap"}
+{"timestamp":"2025-08-21T15:57:32.724546Z","level":"INFO","logger":"app.bootstrap","message":"\u2705 AI Anomaly Detector initialized","module":"bootstrap"}
+{"timestamp":"2025-08-21T15:57:32.724546Z","level":"INFO","logger":"app.bootstrap","message":"\u2705 AI Decision Journal initialized","module":"bootstrap"}
+{"timestamp":"2025-08-21T15:57:32.724546Z","level":"INFO","logger":"app.bootstrap","message":"\ud83e\udd16 All AI systems initialized successfully","module":"bootstrap"}
+{"timestamp":"2025-08-21T15:57:32.724546Z","level":"INFO","logger":"app.bootstrap","message":"Skipping RPC/chain client initialization for testing","module":"bootstrap"}
+{"timestamp":"2025-08-21T16:03:06.766744Z","level":"INFO","logger":"app.bootstrap","message":"Shutting down DEX Sniper Pro - MINIMAL VERSION WITH AI","module":"bootstrap","uptime_sec":334.061089}
+{"timestamp":"2025-08-21T16:03:06.767742Z","level":"INFO","logger":"app.storage.database","message":"Database connections closed","module":"database"}
+{"timestamp":"2025-08-21T16:03:06.767742Z","level":"INFO","logger":"app.bootstrap","message":"Database connections closed","module":"bootstrap"}
+{"timestamp":"2025-08-21T16:03:10.200136Z","level":"INFO","logger":"root","message":"Logging system initialized","module":"logging","log_level":"INFO","debug":false,"environment":"development"}
+{"timestamp":"2025-08-21T16:03:10.200136Z","level":"INFO","logger":"app.bootstrap","message":"Starting DEX Sniper Pro - MINIMAL VERSION WITH AI","module":"bootstrap","environment":"development","service_mode":"free","debug":false}
+{"timestamp":"2025-08-21T16:03:10.200449Z","level":"INFO","logger":"app.storage.database","message":"Initializing database at: data\\app.db","module":"database"}
+{"timestamp":"2025-08-21T16:03:10.212732Z","level":"INFO","logger":"app.storage.database","message":"Database initialized successfully with WAL mode","module":"database"}
+{"timestamp":"2025-08-21T16:03:10.217862Z","level":"INFO","logger":"app.storage.database","message":"Database tables created successfully","module":"database"}
+{"timestamp":"2025-08-21T16:03:10.217862Z","level":"INFO","logger":"app.storage.database","message":"Database initialization completed","module":"database"}
+{"timestamp":"2025-08-21T16:03:10.217862Z","level":"INFO","logger":"app.bootstrap","message":"Database initialized successfully with WAL mode","module":"bootstrap"}
+{"timestamp":"2025-08-21T16:03:10.217862Z","level":"INFO","logger":"app.ai.tuner","message":"Initialized auto-tuner in advisory mode","module":"tuner"}
+{"timestamp":"2025-08-21T16:03:10.217862Z","level":"INFO","logger":"app.bootstrap","message":"\u2705 AI Auto-Tuner initialized in advisory mode","module":"bootstrap"}
+{"timestamp":"2025-08-21T16:03:10.218859Z","level":"INFO","logger":"app.bootstrap","message":"\u2705 AI Risk Explainer initialized","module":"bootstrap"}
+{"timestamp":"2025-08-21T16:03:10.218859Z","level":"INFO","logger":"app.bootstrap","message":"\u2705 AI Anomaly Detector initialized","module":"bootstrap"}
+{"timestamp":"2025-08-21T16:03:10.218859Z","level":"INFO","logger":"app.bootstrap","message":"\u2705 AI Decision Journal initialized","module":"bootstrap"}
+{"timestamp":"2025-08-21T16:03:10.218859Z","level":"INFO","logger":"app.bootstrap","message":"\ud83e\udd16 All AI systems initialized successfully","module":"bootstrap"}
+{"timestamp":"2025-08-21T16:03:10.218859Z","level":"INFO","logger":"app.bootstrap","message":"Skipping RPC/chain client initialization for testing","module":"bootstrap"}
+{"timestamp":"2025-08-21T16:06:34.826736Z","level":"INFO","logger":"app.bootstrap","message":"Shutting down DEX Sniper Pro - MINIMAL VERSION WITH AI","module":"bootstrap","uptime_sec":204.6276}
+{"timestamp":"2025-08-21T16:06:34.828124Z","level":"INFO","logger":"app.storage.database","message":"Database connections closed","module":"database"}
+{"timestamp":"2025-08-21T16:06:34.828124Z","level":"INFO","logger":"app.bootstrap","message":"Database connections closed","module":"bootstrap"}
+{"timestamp":"2025-08-21T16:06:37.566094Z","level":"INFO","logger":"root","message":"Logging system initialized","module":"logging","log_level":"INFO","debug":false,"environment":"development"}
+{"timestamp":"2025-08-21T16:06:37.567188Z","level":"INFO","logger":"app.bootstrap","message":"Starting DEX Sniper Pro - MINIMAL VERSION WITH AI","module":"bootstrap","environment":"development","service_mode":"free","debug":false}
+{"timestamp":"2025-08-21T16:06:37.567188Z","level":"INFO","logger":"app.storage.database","message":"Initializing database at: data\\app.db","module":"database"}
+{"timestamp":"2025-08-21T16:06:37.580890Z","level":"INFO","logger":"app.storage.database","message":"Database initialized successfully with WAL mode","module":"database"}
+{"timestamp":"2025-08-21T16:06:37.585046Z","level":"INFO","logger":"app.storage.database","message":"Database tables created successfully","module":"database"}
+{"timestamp":"2025-08-21T16:06:37.585046Z","level":"INFO","logger":"app.storage.database","message":"Database initialization completed","module":"database"}
+{"timestamp":"2025-08-21T16:06:37.585046Z","level":"INFO","logger":"app.bootstrap","message":"Database initialized successfully with WAL mode","module":"bootstrap"}
+{"timestamp":"2025-08-21T16:06:37.585046Z","level":"INFO","logger":"app.ai.tuner","message":"Initialized auto-tuner in advisory mode","module":"tuner"}
+{"timestamp":"2025-08-21T16:06:37.585046Z","level":"INFO","logger":"app.bootstrap","message":"\u2705 AI Auto-Tuner initialized in advisory mode","module":"bootstrap"}
+{"timestamp":"2025-08-21T16:06:37.585046Z","level":"INFO","logger":"app.bootstrap","message":"\u2705 AI Risk Explainer initialized","module":"bootstrap"}
+{"timestamp":"2025-08-21T16:06:37.585046Z","level":"INFO","logger":"app.bootstrap","message":"\u2705 AI Anomaly Detector initialized","module":"bootstrap"}
+{"timestamp":"2025-08-21T16:06:37.585046Z","level":"INFO","logger":"app.bootstrap","message":"\u2705 AI Decision Journal initialized","module":"bootstrap"}
+{"timestamp":"2025-08-21T16:06:37.585046Z","level":"INFO","logger":"app.bootstrap","message":"\ud83e\udd16 All AI systems initialized successfully","module":"bootstrap"}
+{"timestamp":"2025-08-21T16:06:37.585046Z","level":"INFO","logger":"app.bootstrap","message":"Skipping RPC/chain client initialization for testing","module":"bootstrap"}
+{"timestamp":"2025-08-21T16:06:43.828863Z","level":"INFO","logger":"app.bootstrap","message":"Shutting down DEX Sniper Pro - MINIMAL VERSION WITH AI","module":"bootstrap","uptime_sec":6.262769}
+{"timestamp":"2025-08-21T16:06:43.832233Z","level":"INFO","logger":"app.storage.database","message":"Database connections closed","module":"database"}
+{"timestamp":"2025-08-21T16:06:43.832233Z","level":"INFO","logger":"app.bootstrap","message":"Database connections closed","module":"bootstrap"}

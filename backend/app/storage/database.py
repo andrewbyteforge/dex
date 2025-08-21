@@ -265,6 +265,129 @@ async def close_database() -> None:
     await db_manager.close()
 
 
+# FastAPI dependency functions
+async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
+    """
+    FastAPI dependency to get async database session.
+    
+    Yields:
+        AsyncSession: Database session
+    """
+    async with db_manager.get_session() as session:
+        yield session
+
+
+@asynccontextmanager
+async def get_session_context() -> AsyncGenerator[AsyncSession, None]:
+    """
+    Get session context manager for direct use (non-dependency injection).
+    
+    Yields:
+        AsyncSession: Database session
+    """
+    async with db_manager.get_session() as session:
+        yield session
+
+
+def get_sync_db_session():
+    """
+    Synchronous database session for compatibility.
+    
+    Note: Currently not implemented as this is an async-only database setup.
+    Most APIs should use get_db_session() instead.
+    """
+    raise NotImplementedError(
+        "Sync sessions not implemented. Use get_db_session() for async operations."
+    )
+
+
+class DatabaseHealth:
+    """Database health check utilities for monitoring and diagnostics."""
+    
+    @staticmethod
+    async def check_connection() -> bool:
+        """
+        Check if database connection is healthy.
+        
+        Returns:
+            True if connection is healthy, False otherwise
+        """
+        try:
+            async with db_manager.get_session() as session:
+                await session.execute(text("SELECT 1"))
+            return True
+        except Exception as e:
+            logger.error(f"Database health check failed: {e}")
+            return False
+    
+    @staticmethod
+    async def check_async_connection() -> bool:
+        """
+        Check if async database connection is healthy.
+        
+        Returns:
+            True if connection is healthy, False otherwise
+        """
+        return await DatabaseHealth.check_connection()
+    
+    @staticmethod
+    async def get_table_stats() -> dict[str, int]:
+        """
+        Get table row counts for monitoring.
+        
+        Returns:
+            Dictionary mapping table names to row counts
+        """
+        stats = {}
+        try:
+            async with db_manager.get_session() as session:
+                # Get table names from metadata
+                for table_name in Base.metadata.tables.keys():
+                    try:
+                        result = await session.execute(text(f"SELECT COUNT(*) FROM {table_name}"))
+                        count = result.scalar()
+                        stats[table_name] = count or 0
+                    except Exception:
+                        stats[table_name] = 0
+        except Exception as e:
+            logger.error(f"Failed to get table stats: {e}")
+        return stats
+    
+    @staticmethod
+    async def get_database_info() -> dict[str, any]:
+        """
+        Get comprehensive database information.
+        
+        Returns:
+            Dictionary with database status and metadata
+        """
+        try:
+            health_status = await db_manager.health_check()
+            table_stats = await DatabaseHealth.get_table_stats()
+            
+            return {
+                "status": health_status.get("status", "UNKNOWN"),
+                "message": health_status.get("message", "No message"),
+                "initialized": db_manager._is_initialized,
+                "database_path": str(db_manager.database_path) if db_manager.database_path else None,
+                "table_count": len(Base.metadata.tables),
+                "table_stats": table_stats,
+                "engine_available": db_manager.engine is not None,
+                "session_factory_available": db_manager.session_factory is not None
+            }
+        except Exception as e:
+            logger.error(f"Failed to get database info: {e}")
+            return {
+                "status": "ERROR",
+                "message": f"Failed to get database info: {str(e)}",
+                "initialized": False
+            }
+
+
+# Compatibility aliases for older code
+get_database_session = get_db_session
+
+
 # Export commonly used items
 __all__ = [
     "Base",
@@ -273,6 +396,11 @@ __all__ = [
     "get_database",
     "create_tables",
     "test_database_connection",
+    "get_db_session",
+    "get_sync_db_session",
+    "get_session_context",
+    "get_database_session",
+    "DatabaseHealth",
     "init_database",
     "close_database"
 ]
