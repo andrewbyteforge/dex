@@ -145,45 +145,13 @@ class GasEstimator:
             # Return conservative default
             return 100000
     
-    async def get_gas_price(self, chain: str) -> Tuple[Optional[int], Optional[int], Optional[int]]:
-        """
-        Get current gas pricing information.
-        
-        Args:
-            chain: Chain name
-            
-        Returns:
-            Tuple of (gas_price, max_fee_per_gas, max_priority_fee_per_gas)
-            Returns legacy gas_price OR EIP-1559 fees depending on chain support
-        """
-        try:
-            # Try EIP-1559 first
-            if await self._supports_eip1559(chain):
-                return await self._get_eip1559_fees(chain)
-            else:
-                gas_price = await self._get_legacy_gas_price(chain)
-                return gas_price, None, None
-                
-        except Exception as e:
-            logger.warning(f"Failed to get gas price for {chain}: {e}")
-            # Return safe defaults
-            default_prices = {
-                "ethereum": 20_000_000_000,  # 20 gwei
-                "bsc": 5_000_000_000,        # 5 gwei
-                "polygon": 30_000_000_000,   # 30 gwei
-                "base": 1_000_000_000,       # 1 gwei
-                "arbitrum": 1_000_000_000,   # 1 gwei
-            }
-            default_price = default_prices.get(chain, 10_000_000_000)
-            return default_price, None, None
-    
     async def _supports_eip1559(self, chain: str) -> bool:
         """Check if chain supports EIP-1559."""
         # Chains known to support EIP-1559
         eip1559_chains = {"ethereum", "polygon", "base", "arbitrum"}
         return chain in eip1559_chains
-    
-    async def _get_eip1559_fees(self, chain: str) -> Tuple[None, int, int]:
+
+    async def _get_eip1559_fees(self, chain: str) -> Tuple[Optional[int], Optional[int], Optional[int]]:
         """Get EIP-1559 gas fees."""
         try:
             # Get fee history to determine base fee and priority fee
@@ -213,6 +181,8 @@ class GasEstimator:
             gas_price = await self._get_legacy_gas_price(chain)
             return gas_price, None, None
     
+    
+
     async def _get_legacy_gas_price(self, chain: str) -> int:
         """Get legacy gas price."""
         result = await rpc_pool.make_request(
@@ -581,7 +551,17 @@ class EvmClient:
                 "tracked_addresses": len(self.nonce_manager._nonces)
             }
         }
+    
+    async def close(self) -> None:
+        """Close the EVM client and cleanup resources."""
+        if self._initialized:
+            logger.info("Closing EVM Client")
+            
+            # Mark as not initialized
+            self._initialized = False
+            logger.info("EVM Client closed successfully")
 
 
 # Global EVM client instance
-evm_client = EvmClient()
+EVMClient = EvmClient
+
