@@ -1,375 +1,688 @@
 /**
- * DEX Sniper Pro - PWA Installation Prompt Handler
+ * PWA Installation Prompt Handler
  * 
- * Manages PWA installation prompts and provides a smooth
- * installation experience across different platforms.
+ * Manages the installation prompt for Progressive Web App functionality,
+ * providing a seamless installation experience for DEX Sniper Pro.
+ * 
+ * Features:
+ * - Smart prompt timing based on user engagement
+ * - Cross-platform installation support
+ * - Installation analytics and tracking
+ * - Customizable installation UI
  */
 
-class PWAInstallPrompt {
-  constructor() {
-    this.deferredPrompt = null;
-    this.isInstalled = false;
-    this.isStandalone = false;
-    this.platform = this.detectPlatform();
-    
+class PWAInstallManager {
+  constructor(options = {}) {
+    this.options = {
+      // Timing configuration
+      minSessionTime: 30000,        // 30 seconds minimum before showing prompt
+      minPageViews: 3,              // Minimum page interactions
+      maxPromptAttempts: 3,         // Maximum times to show prompt
+      promptCooldown: 86400000,     // 24 hours between prompts
+      
+      // User engagement thresholds
+      minTradeAttempts: 1,          // User tried to trade at least once
+      minTimeSpent: 120000,         // 2 minutes total time spent
+      
+      // UI configuration
+      showInlinePrompt: true,       // Show custom installation banner
+      showToast: true,              // Show toast notifications
+      customButtonSelector: null,   // Custom install button selector
+      
+      // Analytics
+      enableAnalytics: true,
+      analyticsCallback: null,
+      
+      // Callbacks
+      onInstallPromptShow: null,
+      onInstallSuccess: null,
+      onInstallError: null,
+      onInstallDismiss: null,
+      
+      ...options
+    };
+
+    // State management
+    this.state = {
+      deferredPrompt: null,
+      isInstallable: false,
+      isInstalled: false,
+      promptShown: false,
+      userEngagement: {
+        sessionStart: Date.now(),
+        pageViews: 0,
+        tradeAttempts: 0,
+        timeSpent: 0,
+        lastActivity: Date.now()
+      }
+    };
+
+    // Storage keys
+    this.storageKeys = {
+      promptAttempts: 'pwa_prompt_attempts',
+      lastPromptTime: 'pwa_last_prompt',
+      installDeclined: 'pwa_install_declined',
+      userEngagement: 'pwa_user_engagement'
+    };
+
     this.init();
   }
 
   /**
-   * Initialize PWA installation handlers
+   * Initialize the PWA install manager
    */
   init() {
-    // Check if app is already installed/standalone
+    this.loadStoredData();
+    this.setupEventListeners();
+    this.trackUserEngagement();
+    
+    // Check if already installed
     this.checkInstallationStatus();
     
+    console.log('[PWA Install] Manager initialized');
+  }
+
+  /**
+   * Load stored user data and preferences
+   */
+  loadStoredData() {
+    try {
+      const storedEngagement = localStorage.getItem(this.storageKeys.userEngagement);
+      if (storedEngagement) {
+        const parsed = JSON.parse(storedEngagement);
+        this.state.userEngagement = {
+          ...this.state.userEngagement,
+          ...parsed,
+          sessionStart: Date.now() // Reset session start
+        };
+      }
+    } catch (error) {
+      console.warn('[PWA Install] Failed to load stored data:', error);
+    }
+  }
+
+  /**
+   * Save user engagement data
+   */
+  saveEngagementData() {
+    try {
+      localStorage.setItem(
+        this.storageKeys.userEngagement,
+        JSON.stringify({
+          ...this.state.userEngagement,
+          timeSpent: this.getTotalTimeSpent()
+        })
+      );
+    } catch (error) {
+      console.warn('[PWA Install] Failed to save engagement data:', error);
+    }
+  }
+
+  /**
+   * Setup event listeners for PWA events
+   */
+  setupEventListeners() {
     // Listen for beforeinstallprompt event
-    window.addEventListener('beforeinstallprompt', (e) => {
-      console.log('[PWA] beforeinstallprompt fired');
+    window.addEventListener('beforeinstallprompt', (event) => {
+      console.log('[PWA Install] Install prompt available');
       
-      // Prevent Chrome 67 and earlier from automatically showing the prompt
-      e.preventDefault();
+      // Prevent the mini-infobar from appearing
+      event.preventDefault();
       
       // Store the event for later use
-      this.deferredPrompt = e;
+      this.state.deferredPrompt = event;
+      this.state.isInstallable = true;
       
-      // Show custom install UI
-      this.showInstallBanner();
+      // Check if we should show the prompt
+      this.evaluateInstallPrompt();
     });
 
-    // Listen for app installed event
-    window.addEventListener('appinstalled', (e) => {
-      console.log('[PWA] App was installed');
-      this.isInstalled = true;
-      this.hideInstallBanner();
-      this.showInstalledToast();
+    // Listen for app installation
+    window.addEventListener('appinstalled', (event) => {
+      console.log('[PWA Install] App installed successfully');
+      
+      this.state.isInstalled = true;
+      this.state.deferredPrompt = null;
+      
+      // Clear stored prompt data
+      this.clearPromptData();
+      
+      // Analytics tracking
+      this.trackEvent('pwa_installed', {
+        method: 'browser_prompt',
+        engagement_score: this.calculateEngagementScore()
+      });
+      
+      // Callback
+      if (this.options.onInstallSuccess) {
+        this.options.onInstallSuccess(event);
+      }
     });
 
-    // Handle iOS installation instructions
-    if (this.platform === 'ios' && !this.isStandalone) {
-      this.showIOSInstallInstructions();
+    // Track page visibility changes
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        this.state.userEngagement.lastActivity = Date.now();
+        this.saveEngagementData();
+      } else {
+        this.state.userEngagement.sessionStart = Date.now();
+      }
+    });
+
+    // Track page navigation
+    window.addEventListener('popstate', () => {
+      this.trackPageView();
+    });
+
+    // Custom install button handling
+    if (this.options.customButtonSelector) {
+      const customButton = document.querySelector(this.options.customButtonSelector);
+      if (customButton) {
+        customButton.addEventListener('click', () => {
+          this.showInstallPrompt();
+        });
+      }
     }
   }
 
   /**
-   * Detect the platform for platform-specific handling
+   * Track user engagement metrics
    */
-  detectPlatform() {
-    const userAgent = navigator.userAgent.toLowerCase();
+  trackUserEngagement() {
+    // Track page views
+    this.trackPageView();
     
-    if (/iphone|ipad|ipod/.test(userAgent)) {
-      return 'ios';
-    } else if (/android/.test(userAgent)) {
-      return 'android';
-    } else if (/windows/.test(userAgent)) {
-      return 'windows';
-    } else if (/mac/.test(userAgent)) {
-      return 'mac';
-    }
+    // Track trade attempts (would integrate with trading components)
+    this.setupTradeTracking();
     
-    return 'unknown';
+    // Periodic engagement updates
+    this.engagementInterval = setInterval(() => {
+      this.updateEngagement();
+    }, 10000); // Update every 10 seconds
   }
 
   /**
-   * Check if the app is already installed or running in standalone mode
+   * Track page view
+   */
+  trackPageView() {
+    this.state.userEngagement.pageViews++;
+    this.state.userEngagement.lastActivity = Date.now();
+    
+    console.log('[PWA Install] Page view tracked:', this.state.userEngagement.pageViews);
+  }
+
+  /**
+   * Track trade attempts (integration point for trading components)
+   */
+  setupTradeTracking() {
+    // This would integrate with your trading components
+    // For now, we'll listen for custom events
+    
+    window.addEventListener('trade_attempt', () => {
+      this.state.userEngagement.tradeAttempts++;
+      console.log('[PWA Install] Trade attempt tracked:', this.state.userEngagement.tradeAttempts);
+    });
+    
+    window.addEventListener('quote_request', () => {
+      this.state.userEngagement.lastActivity = Date.now();
+    });
+  }
+
+  /**
+   * Update engagement metrics
+   */
+  updateEngagement() {
+    if (!document.hidden) {
+      this.state.userEngagement.timeSpent = this.getTotalTimeSpent();
+      this.state.userEngagement.lastActivity = Date.now();
+    }
+  }
+
+  /**
+   * Get total time spent in the app
+   */
+  getTotalTimeSpent() {
+    const sessionTime = Date.now() - this.state.userEngagement.sessionStart;
+    return this.state.userEngagement.timeSpent + sessionTime;
+  }
+
+  /**
+   * Calculate user engagement score
+   */
+  calculateEngagementScore() {
+    const {
+      pageViews,
+      tradeAttempts,
+      timeSpent
+    } = this.state.userEngagement;
+    
+    // Weighted scoring system
+    const score = (
+      (pageViews * 10) +
+      (tradeAttempts * 50) +
+      (timeSpent / 1000) // Convert ms to seconds
+    );
+    
+    return Math.min(score, 1000); // Cap at 1000
+  }
+
+  /**
+   * Check if already installed
    */
   checkInstallationStatus() {
     // Check if running in standalone mode
-    this.isStandalone = window.matchMedia('(display-mode: standalone)').matches ||
-                      window.navigator.standalone === true;
-    
-    // Check if PWA is installed (Chrome/Edge)
-    if ('getInstalledRelatedApps' in navigator) {
-      navigator.getInstalledRelatedApps().then((relatedApps) => {
-        this.isInstalled = relatedApps.length > 0;
-      });
-    }
-  }
-
-  /**
-   * Show custom install banner
-   */
-  showInstallBanner() {
-    if (this.isInstalled || this.isStandalone) return;
-    
-    // Remove existing banner
-    this.hideInstallBanner();
-    
-    const banner = document.createElement('div');
-    banner.id = 'pwa-install-banner';
-    banner.className = 'pwa-install-banner';
-    banner.innerHTML = `
-      <div class="pwa-banner-content">
-        <div class="pwa-banner-icon">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-            <path d="M2 17L12 22L22 17" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-            <path d="M2 12L12 17L22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-        </div>
-        <div class="pwa-banner-text">
-          <strong>Install DEX Sniper Pro</strong>
-          <small>Get quick access and offline features</small>
-        </div>
-        <div class="pwa-banner-actions">
-          <button id="pwa-install-btn" class="btn btn-primary btn-sm">Install</button>
-          <button id="pwa-dismiss-btn" class="btn btn-outline-secondary btn-sm">Later</button>
-        </div>
-      </div>
-    `;
-    
-    // Add styles
-    const style = document.createElement('style');
-    style.textContent = `
-      .pwa-install-banner {
-        position: fixed;
-        bottom: 20px;
-        left: 20px;
-        right: 20px;
-        background: white;
-        border: 1px solid #dee2e6;
-        border-radius: 8px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-        z-index: 1050;
-        animation: slideUp 0.3s ease-out;
-      }
-      
-      .pwa-banner-content {
-        display: flex;
-        align-items: center;
-        padding: 16px;
-        gap: 12px;
-      }
-      
-      .pwa-banner-icon {
-        color: #0d6efd;
-        flex-shrink: 0;
-      }
-      
-      .pwa-banner-text {
-        flex-grow: 1;
-        min-width: 0;
-      }
-      
-      .pwa-banner-text strong {
-        display: block;
-        font-size: 14px;
-        color: #212529;
-      }
-      
-      .pwa-banner-text small {
-        display: block;
-        font-size: 12px;
-        color: #6c757d;
-        margin-top: 2px;
-      }
-      
-      .pwa-banner-actions {
-        display: flex;
-        gap: 8px;
-        flex-shrink: 0;
-      }
-      
-      @keyframes slideUp {
-        from {
-          transform: translateY(100%);
-          opacity: 0;
-        }
-        to {
-          transform: translateY(0);
-          opacity: 1;
-        }
-      }
-      
-      @media (max-width: 767px) {
-        .pwa-install-banner {
-          left: 10px;
-          right: 10px;
-          bottom: 90px; /* Account for mobile navigation */
-        }
-        
-        .pwa-banner-content {
-          padding: 12px;
-        }
-        
-        .pwa-banner-actions {
-          flex-direction: column;
-        }
-      }
-    `;
-    
-    document.head.appendChild(style);
-    document.body.appendChild(banner);
-    
-    // Add event listeners
-    document.getElementById('pwa-install-btn').addEventListener('click', () => {
-      this.triggerInstall();
-    });
-    
-    document.getElementById('pwa-dismiss-btn').addEventListener('click', () => {
-      this.hideInstallBanner();
-      this.setInstallDismissed();
-    });
-  }
-
-  /**
-   * Hide install banner
-   */
-  hideInstallBanner() {
-    const banner = document.getElementById('pwa-install-banner');
-    if (banner) {
-      banner.remove();
-    }
-  }
-
-  /**
-   * Trigger PWA installation
-   */
-  async triggerInstall() {
-    if (!this.deferredPrompt) {
-      console.warn('[PWA] No deferred prompt available');
+    if (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) {
+      this.state.isInstalled = true;
+      console.log('[PWA Install] App is running in standalone mode');
       return;
     }
+    
+    // Check for iOS installation
+    if (window.navigator && window.navigator.standalone) {
+      this.state.isInstalled = true;
+      console.log('[PWA Install] App is installed on iOS');
+      return;
+    }
+    
+    // Check for Android installation indicators
+    if (document.referrer.includes('android-app://')) {
+      this.state.isInstalled = true;
+      console.log('[PWA Install] App is installed on Android');
+      return;
+    }
+  }
 
-    // Show the install prompt
-    this.deferredPrompt.prompt();
-
-    // Wait for the user to respond to the prompt
-    const { outcome } = await this.deferredPrompt.userChoice;
-    console.log(`[PWA] User response to install prompt: ${outcome}`);
-
-    if (outcome === 'accepted') {
-      console.log('[PWA] User accepted the install prompt');
-    } else {
-      console.log('[PWA] User dismissed the install prompt');
+  /**
+   * Evaluate whether to show install prompt
+   */
+  evaluateInstallPrompt() {
+    if (!this.state.isInstallable || this.state.isInstalled || this.state.promptShown) {
+      return false;
     }
 
-    // Clear the deferred prompt
-    this.deferredPrompt = null;
-    this.hideInstallBanner();
+    // Check if user has declined too many times
+    const promptAttempts = this.getPromptAttempts();
+    if (promptAttempts >= this.options.maxPromptAttempts) {
+      console.log('[PWA Install] Max prompt attempts reached');
+      return false;
+    }
+
+    // Check cooldown period
+    const lastPromptTime = this.getLastPromptTime();
+    if (lastPromptTime && (Date.now() - lastPromptTime) < this.options.promptCooldown) {
+      console.log('[PWA Install] Still in cooldown period');
+      return false;
+    }
+
+    // Check user engagement
+    if (!this.meetsEngagementCriteria()) {
+      console.log('[PWA Install] Engagement criteria not met');
+      return false;
+    }
+
+    // Show the prompt
+    this.schedulePromptDisplay();
+    return true;
   }
 
   /**
-   * Show iOS installation instructions
+   * Check if user meets engagement criteria
    */
-  showIOSInstallInstructions() {
-    if (this.getInstallDismissed()) return;
+  meetsEngagementCriteria() {
+    const {
+      pageViews,
+      tradeAttempts,
+      timeSpent
+    } = this.state.userEngagement;
     
-    // Show after a delay to not overwhelm user
-    setTimeout(() => {
-      const modal = document.createElement('div');
-      modal.id = 'ios-install-modal';
-      modal.className = 'modal fade';
-      modal.innerHTML = `
-        <div class="modal-dialog modal-dialog-centered">
-          <div class="modal-content">
-            <div class="modal-header">
-              <h5 class="modal-title">Install DEX Sniper Pro</h5>
-              <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body text-center">
-              <div class="mb-3">
-                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2" stroke="currentColor" stroke-width="2" fill="none"/>
-                  <line x1="12" y1="8" x2="12" y2="16" stroke="currentColor" stroke-width="2"/>
-                  <line x1="8" y1="12" x2="16" y2="12" stroke="currentColor" stroke-width="2"/>
-                </svg>
-              </div>
-              <p>To install this app on your iOS device:</p>
-              <ol class="text-start">
-                <li>Tap the Share button <strong>⎋</strong> in Safari</li>
-                <li>Scroll down and tap <strong>"Add to Home Screen"</strong></li>
-                <li>Tap <strong>"Add"</strong> to confirm</li>
-              </ol>
-              <p class="text-muted small">The app will appear on your home screen and work offline!</p>
-            </div>
-            <div class="modal-footer">
-              <button type="button" class="btn btn-primary" data-bs-dismiss="modal">Got it</button>
-            </div>
-          </div>
-        </div>
-      `;
-      
-      document.body.appendChild(modal);
-      
-      // Show modal (requires Bootstrap JS)
-      if (window.bootstrap) {
-        const bsModal = new window.bootstrap.Modal(modal);
-        bsModal.show();
-        
-        modal.addEventListener('hidden.bs.modal', () => {
-          modal.remove();
-          this.setInstallDismissed();
-        });
-      }
-    }, 5000); // Show after 5 seconds
+    const sessionTime = Date.now() - this.state.userEngagement.sessionStart;
+    
+    return (
+      sessionTime >= this.options.minSessionTime &&
+      pageViews >= this.options.minPageViews &&
+      (tradeAttempts >= this.options.minTradeAttempts || timeSpent >= this.options.minTimeSpent)
+    );
   }
 
   /**
-   * Show installed success toast
+   * Schedule prompt display with delay
    */
-  showInstalledToast() {
-    // Create toast notification
-    const toast = document.createElement('div');
-    toast.className = 'toast-container position-fixed bottom-0 end-0 p-3';
-    toast.innerHTML = `
-      <div class="toast show" role="alert">
-        <div class="toast-header">
-          <strong class="me-auto">DEX Sniper Pro</strong>
-          <button type="button" class="btn-close" data-bs-dismiss="toast"></button>
-        </div>
-        <div class="toast-body">
-          Successfully installed! You can now access the app from your home screen.
-        </div>
-      </div>
+  schedulePromptDisplay() {
+    setTimeout(() => {
+      if (this.options.showInlinePrompt) {
+        this.showInlinePrompt();
+      }
+      
+      if (this.options.showToast) {
+        this.showToastPrompt();
+      }
+    }, 2000); // 2 second delay for better UX
+  }
+
+  /**
+   * Show inline installation prompt
+   */
+  showInlinePrompt() {
+    const promptContainer = this.createPromptElement();
+    
+    // Insert at top of page
+    const body = document.body;
+    if (body.firstChild) {
+      body.insertBefore(promptContainer, body.firstChild);
+    } else {
+      body.appendChild(promptContainer);
+    }
+    
+    // Auto-hide after 10 seconds
+    setTimeout(() => {
+      if (promptContainer.parentNode) {
+        promptContainer.remove();
+      }
+    }, 10000);
+    
+    this.trackEvent('pwa_prompt_shown', { type: 'inline' });
+  }
+
+  /**
+   * Create prompt UI element
+   */
+  createPromptElement() {
+    const container = document.createElement('div');
+    container.className = 'pwa-install-prompt';
+    container.style.cssText = `
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      background: linear-gradient(135deg, #0d6efd, #6610f2);
+      color: white;
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      z-index: 9999;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 14px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
     `;
     
-    document.body.appendChild(toast);
+    const message = document.createElement('div');
+    message.style.cssText = 'flex: 1; margin-right: 16px;';
+    message.innerHTML = `
+      <strong>📱 Install DEX Sniper Pro</strong><br>
+      <small>Get instant access and offline functionality</small>
+    `;
     
-    // Auto-remove after 5 seconds
-    setTimeout(() => {
-      toast.remove();
-    }, 5000);
+    const actions = document.createElement('div');
+    actions.style.cssText = 'display: flex; gap: 8px; align-items: center;';
+    
+    const installButton = document.createElement('button');
+    installButton.textContent = 'Install';
+    installButton.style.cssText = `
+      background: white;
+      color: #0d6efd;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 4px;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 14px;
+    `;
+    
+    const dismissButton = document.createElement('button');
+    dismissButton.textContent = '✕';
+    dismissButton.style.cssText = `
+      background: transparent;
+      color: white;
+      border: 1px solid rgba(255,255,255,0.3);
+      padding: 8px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+    `;
+    
+    // Event handlers
+    installButton.addEventListener('click', () => {
+      this.showInstallPrompt();
+      container.remove();
+    });
+    
+    dismissButton.addEventListener('click', () => {
+      this.dismissPrompt();
+      container.remove();
+    });
+    
+    actions.appendChild(installButton);
+    actions.appendChild(dismissButton);
+    container.appendChild(message);
+    container.appendChild(actions);
+    
+    return container;
   }
 
   /**
-   * Check if install prompt was dismissed
+   * Show toast notification prompt
    */
-  getInstallDismissed() {
-    return localStorage.getItem('pwa-install-dismissed') === 'true';
+  showToastPrompt() {
+    // This would integrate with your notification system
+    console.log('[PWA Install] Toast prompt would be shown here');
   }
 
   /**
-   * Mark install prompt as dismissed
+   * Show the browser's native install prompt
    */
-  setInstallDismissed() {
-    localStorage.setItem('pwa-install-dismissed', 'true');
+  async showInstallPrompt() {
+    if (!this.state.deferredPrompt) {
+      console.warn('[PWA Install] No deferred prompt available');
+      return false;
+    }
+
+    try {
+      // Show the prompt
+      this.state.deferredPrompt.prompt();
+      
+      // Wait for the user's response
+      const choiceResult = await this.state.deferredPrompt.userChoice;
+      
+      console.log('[PWA Install] User choice:', choiceResult.outcome);
+      
+      if (choiceResult.outcome === 'accepted') {
+        this.trackEvent('pwa_prompt_accepted');
+        if (this.options.onInstallSuccess) {
+          this.options.onInstallSuccess();
+        }
+      } else {
+        this.trackEvent('pwa_prompt_dismissed');
+        this.handlePromptDismissal();
+      }
+      
+      // Clear the deferred prompt
+      this.state.deferredPrompt = null;
+      this.state.promptShown = true;
+      
+      return choiceResult.outcome === 'accepted';
+    } catch (error) {
+      console.error('[PWA Install] Error showing prompt:', error);
+      this.trackEvent('pwa_prompt_error', { error: error.message });
+      
+      if (this.options.onInstallError) {
+        this.options.onInstallError(error);
+      }
+      
+      return false;
+    }
   }
 
   /**
-   * Reset install prompt (for testing)
+   * Handle prompt dismissal
    */
-  resetInstallPrompt() {
-    localStorage.removeItem('pwa-install-dismissed');
+  dismissPrompt() {
+    this.handlePromptDismissal();
+    this.trackEvent('pwa_prompt_dismissed', { method: 'manual' });
+    
+    if (this.options.onInstallDismiss) {
+      this.options.onInstallDismiss();
+    }
   }
 
   /**
-   * Check if PWA features are supported
+   * Handle prompt dismissal logic
    */
-  static isSupported() {
-    return 'serviceWorker' in navigator && 'caches' in window;
+  handlePromptDismissal() {
+    // Increment prompt attempts
+    const attempts = this.getPromptAttempts() + 1;
+    localStorage.setItem(this.storageKeys.promptAttempts, attempts.toString());
+    
+    // Set last prompt time
+    localStorage.setItem(this.storageKeys.lastPromptTime, Date.now().toString());
+    
+    this.state.promptShown = true;
   }
 
   /**
-   * Get installation status
+   * Get number of prompt attempts
    */
-  getStatus() {
-    return {
-      isInstalled: this.isInstalled,
-      isStandalone: this.isStandalone,
-      platform: this.platform,
-      hasDeferred: !!this.deferredPrompt
+  getPromptAttempts() {
+    try {
+      return parseInt(localStorage.getItem(this.storageKeys.promptAttempts) || '0', 10);
+    } catch {
+      return 0;
+    }
+  }
+
+  /**
+   * Get last prompt time
+   */
+  getLastPromptTime() {
+    try {
+      const time = localStorage.getItem(this.storageKeys.lastPromptTime);
+      return time ? parseInt(time, 10) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Clear prompt-related data
+   */
+  clearPromptData() {
+    Object.values(this.storageKeys).forEach(key => {
+      try {
+        localStorage.removeItem(key);
+      } catch (error) {
+        console.warn('[PWA Install] Failed to clear storage key:', key);
+      }
+    });
+  }
+
+  /**
+   * Track analytics events
+   */
+  trackEvent(eventName, properties = {}) {
+    if (!this.options.enableAnalytics) return;
+    
+    const eventData = {
+      event: eventName,
+      timestamp: Date.now(),
+      engagement_score: this.calculateEngagementScore(),
+      ...properties
     };
+    
+    console.log('[PWA Install] Analytics:', eventData);
+    
+    if (this.options.analyticsCallback) {
+      this.options.analyticsCallback(eventData);
+    }
+  }
+
+  /**
+   * Manual trigger for installation prompt
+   */
+  triggerInstallPrompt() {
+    if (this.state.isInstallable && !this.state.isInstalled) {
+      return this.showInstallPrompt();
+    }
+    return false;
+  }
+
+  /**
+   * Check if installation is available
+   */
+  isInstallAvailable() {
+    return this.state.isInstallable && !this.state.isInstalled;
+  }
+
+  /**
+   * Get current state
+   */
+  getState() {
+    return {
+      ...this.state,
+      engagementScore: this.calculateEngagementScore(),
+      promptAttempts: this.getPromptAttempts()
+    };
+  }
+
+  /**
+   * Cleanup
+   */
+  destroy() {
+    if (this.engagementInterval) {
+      clearInterval(this.engagementInterval);
+    }
+    
+    this.saveEngagementData();
+    console.log('[PWA Install] Manager destroyed');
   }
 }
 
-export default PWAInstallPrompt;
+// Export for use in React components
+export default PWAInstallManager;
+
+// Helper hook for React integration
+export function usePWAInstall(options = {}) {
+  const [manager, setManager] = React.useState(null);
+  const [installState, setInstallState] = React.useState({
+    isInstallable: false,
+    isInstalled: false,
+    promptShown: false
+  });
+
+  React.useEffect(() => {
+    const pwaManager = new PWAInstallManager({
+      ...options,
+      onInstallPromptShow: () => {
+        setInstallState(prev => ({ ...prev, promptShown: true }));
+        options.onInstallPromptShow?.();
+      },
+      onInstallSuccess: () => {
+        setInstallState(prev => ({ ...prev, isInstalled: true }));
+        options.onInstallSuccess?.();
+      }
+    });
+
+    setManager(pwaManager);
+
+    // Update state periodically
+    const stateInterval = setInterval(() => {
+      const state = pwaManager.getState();
+      setInstallState({
+        isInstallable: state.isInstallable,
+        isInstalled: state.isInstalled,
+        promptShown: state.promptShown
+      });
+    }, 1000);
+
+    return () => {
+      clearInterval(stateInterval);
+      pwaManager.destroy();
+    };
+  }, []);
+
+  return {
+    ...installState,
+    triggerInstall: () => manager?.triggerInstallPrompt(),
+    isInstallAvailable: () => manager?.isInstallAvailable(),
+    getEngagementScore: () => manager?.calculateEngagementScore()
+  };
+}

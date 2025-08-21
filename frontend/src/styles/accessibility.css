@@ -1,0 +1,576 @@
+/**
+ * Accessibility Styles for DEX Sniper Pro
+ * 
+ * WCAG 2.1 AA compliant styles for screen readers,
+ * keyboard navigation, and inclusive design patterns.
+ */
+
+/* ========================================
+   Screen Reader Utilities
+======================================== */
+
+/* Screen reader only content */
+.sr-only {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+/* Make screen reader content visible when focused */
+.sr-only:focus {
+  position: static !important;
+  width: auto !important;
+  height: auto !important;
+  padding: 0.25rem 0.5rem !important;
+  margin: 0 !important;
+  overflow: visible !important;
+  clip: auto !important;
+  white-space: normal !important;
+  background: #0d6efd !important;
+  color: white !important;
+  border-radius: 0.25rem !important;
+  z-index: 9999 !important;
+}
+
+/* Live region for dynamic content announcements */
+.live-region {
+  position: absolute;
+  left: -10000px;
+  top: auto;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
+
+/* ========================================
+   Focus Management
+======================================== */
+
+/* Skip to main content link */
+.skip-link {
+  position: absolute;
+  top: -40px;
+  left: 6px;
+  background: #0d6efd;
+  color: white;
+  padding: 8px;
+  text-decoration: none;
+  border-radius: 0 0 4px 4px;
+  z-index: 9999;
+  font-weight: 600;
+}
+
+.skip-link:focus {
+  top: 0;
+}
+
+/* Enhanced focus indicators */
+:focus {
+  outline: 3px solid #0d6efd;
+  outline-offset: 2px;
+}
+
+/* Custom focus styles for interactive elements */
+.btn:focus,
+.form-control:focus,
+.form-select:focus,
+.dropdown-toggle:focus {
+  outline: 3px solid #0d6efd;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.25);
+}
+
+/* Focus within for containers */
+.card:focus-within {
+  box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.25);
+}
+
+/* Keyboard-only focus (not mouse) */
+.js-focus-visible :focus:not(.focus-visible) {
+  outline: none;
+  box-shadow: none;
+}
+
+.js-focus-visible .focus-visible {
+  outline: 3px solid #0d6efd;
+  outline-offset: 2px;
+}
+
+/* ========================================
+   High Contrast Mode Support
+======================================== */
+
+@media (prefers-contrast: high) {
+  /* Ensure sufficient contrast in high contrast mode */
+  .btn {
+    border: 2px solid;
+  }
+  
+  .btn-primary {
+    background: #0000ff;
+    border-color: #0000ff;
+    color: #ffffff;
+  }
+  
+  .btn-secondary {
+    background: #666666;
+    border-color: #666666;
+    color: #ffffff;
+  }
+  
+  .btn-success {
+    background: #008000;
+    border-color: #008000;
+    color: #ffffff;
+  }
+  
+  .btn-danger {
+    background: #ff0000;
+    border-color: #ff0000;
+    color: #ffffff;
+  }
+  
+  .card {
+    border: 2px solid #000000;
+  }
+  
+  .alert {
+    border: 2px solid;
+  }
+  
+  .alert-info {
+    background: #e6f3ff;
+    border-color: #0066cc;
+    color: #000000;
+  }
+  
+  .alert-warning {
+    background: #fff3cd;
+    border-color: #ff8800;
+    color: #000000;
+  }
+  
+  .alert-danger {
+    background: #ffe6e6;
+    border-color: #ff0000;
+    color: #000000;
+  }
+  
+  .alert-success {
+    background: #e6ffe6;
+    border-color: #008000;
+    color: #000000;
+  }
+}
+
+/* ========================================
+   Reduced Motion Support
+======================================== */
+
+@media (prefers-reduced-motion: reduce) {
+  /* Disable animations for users who prefer reduced motion */
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  
+  /* Keep essential animations but make them instant */
+  .loading-spinner {
+    animation: none;
+  }
+  
+  .loading-spinner::after {
+    content: "Loading...";
+    display: block;
+    text-align: center;
+  }
+  
+  /* Remove parallax and transform animations */
+  .parallax {
+    transform: none !important;
+  }
+}
+
+/* ========================================
+   Color and Contrast
+======================================== */
+
+/* Ensure WCAG AA compliance for text contrast */
+.text-muted {
+  color: #495057 !important; /* Increased from Bootstrap default for better contrast */
+}
+
+.text-light {
+  color: #495057 !important; /* Darkened for better contrast on light backgrounds */
+}
+
+/* Color-blind friendly indicators */
+.status-indicator {
+  position: relative;
+}
+
+.status-indicator::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 4px;
+  height: 100%;
+  background: currentColor;
+}
+
+.status-positive {
+  color: #198754;
+}
+
+.status-positive::after {
+  content: '↗';
+  margin-left: 0.25rem;
+  font-weight: bold;
+}
+
+.status-negative {
+  color: #dc3545;
+}
+
+.status-negative::after {
+  content: '↘';
+  margin-left: 0.25rem;
+  font-weight: bold;
+}
+
+/* ========================================
+   Trading-Specific Accessibility
+======================================== */
+
+/* Price change indicators with text alternatives */
+.price-change {
+  position: relative;
+}
+
+.price-change[data-change="positive"]::before {
+  content: 'Price increased: ';
+  position: absolute;
+  left: -10000px;
+}
+
+.price-change[data-change="negative"]::before {
+  content: 'Price decreased: ';
+  position: absolute;
+  left: -10000px;
+}
+
+/* Trading button accessibility */
+.btn-trade {
+  position: relative;
+}
+
+.btn-trade[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.btn-trade[aria-disabled="true"]::after {
+  content: attr(data-disabled-reason);
+  position: absolute;
+  left: -10000px;
+}
+
+/* Order book accessibility */
+.order-book-table {
+  border-collapse: collapse;
+}
+
+.order-book-table th {
+  background: #f8f9fa;
+  border: 1px solid #dee2e6;
+  padding: 0.5rem;
+  text-align: left;
+}
+
+.order-book-table td {
+  border: 1px solid #dee2e6;
+  padding: 0.5rem;
+}
+
+.order-book-table .bid-row {
+  background: rgba(25, 135, 84, 0.1);
+}
+
+.order-book-table .ask-row {
+  background: rgba(220, 53, 69, 0.1);
+}
+
+/* Chart accessibility */
+.chart-container {
+  position: relative;
+}
+
+.chart-description {
+  position: absolute;
+  left: -10000px;
+}
+
+.chart-container:focus .chart-description {
+  position: static;
+  background: white;
+  border: 1px solid #dee2e6;
+  padding: 1rem;
+  margin-top: 1rem;
+  border-radius: 0.25rem;
+}
+
+/* ========================================
+   Form Accessibility
+======================================== */
+
+/* Required field indicators */
+.required::after {
+  content: ' *';
+  color: #dc3545;
+  font-weight: bold;
+}
+
+.required .sr-only-required::after {
+  content: ' (required)';
+  position: absolute;
+  left: -10000px;
+}
+
+/* Error states */
+.form-control.is-invalid {
+  border-color: #dc3545;
+  background-image: none; /* Remove Bootstrap's background image */
+}
+
+.form-control.is-invalid:focus {
+  border-color: #dc3545;
+  box-shadow: 0 0 0 0.2rem rgba(220, 53, 69, 0.25);
+}
+
+.invalid-feedback {
+  display: block;
+  font-size: 0.875rem;
+  color: #dc3545;
+  margin-top: 0.25rem;
+}
+
+.invalid-feedback::before {
+  content: 'Error: ';
+  font-weight: bold;
+}
+
+/* Success states */
+.form-control.is-valid {
+  border-color: #198754;
+}
+
+.form-control.is-valid:focus {
+  border-color: #198754;
+  box-shadow: 0 0 0 0.2rem rgba(25, 135, 84, 0.25);
+}
+
+.valid-feedback {
+  display: block;
+  font-size: 0.875rem;
+  color: #198754;
+  margin-top: 0.25rem;
+}
+
+.valid-feedback::before {
+  content: 'Success: ';
+  font-weight: bold;
+}
+
+/* ========================================
+   Modal and Dialog Accessibility
+======================================== */
+
+/* Modal focus management */
+.modal {
+  scrollbar-width: thin;
+}
+
+.modal-backdrop {
+  background-color: rgba(0, 0, 0, 0.5);
+}
+
+.modal-dialog {
+  margin: 1.75rem auto;
+}
+
+.modal-content {
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  border-radius: 0.5rem;
+  box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+}
+
+.modal-header {
+  border-bottom: 1px solid #dee2e6;
+  padding: 1rem;
+}
+
+.modal-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.modal-body {
+  padding: 1rem;
+}
+
+/* Close button accessibility */
+.btn-close {
+  width: 1em;
+  height: 1em;
+  padding: 0.25em;
+  background: transparent url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='%23000'%3e%3cpath d='m.235 1.027 1.027-.235L8 7.029l6.738-6.237 1.027.235L9.027 8l6.738 6.737-1.027 1.027L8 9.027l-6.737 6.738-1.027-1.027L7.029 8 .235 1.027Z'/%3e%3c/svg%3e") center/1em auto no-repeat;
+  border: 0;
+  border-radius: 0.25rem;
+  opacity: 0.5;
+}
+
+.btn-close:hover {
+  opacity: 0.75;
+}
+
+.btn-close:focus {
+  outline: 3px solid #0d6efd;
+  outline-offset: 2px;
+  opacity: 1;
+}
+
+/* ========================================
+   Tooltip and Popover Accessibility
+======================================== */
+
+/* Tooltip improvements */
+.tooltip {
+  font-size: 0.875rem;
+  max-width: 200px;
+}
+
+.tooltip-inner {
+  padding: 0.5rem 0.75rem;
+  background-color: #000;
+  color: #fff;
+  border-radius: 0.375rem;
+}
+
+/* Popover improvements */
+.popover {
+  max-width: 276px;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  border-radius: 0.5rem;
+  box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+}
+
+.popover-header {
+  padding: 0.5rem 0.75rem;
+  background-color: #f7f7f7;
+  border-bottom: 1px solid #ebebeb;
+  border-radius: calc(0.5rem - 1px) calc(0.5rem - 1px) 0 0;
+  font-weight: 600;
+}
+
+.popover-body {
+  padding: 0.5rem 0.75rem;
+  color: #212529;
+}
+
+/* ========================================
+   Loading States Accessibility
+======================================== */
+
+/* Loading spinner with text alternative */
+.spinner-border {
+  display: inline-block;
+  width: 2rem;
+  height: 2rem;
+  vertical-align: -0.125em;
+  border: 0.25em solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spinner-border 0.75s linear infinite;
+}
+
+@keyframes spinner-border {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spinner-border-sm {
+  width: 1rem;
+  height: 1rem;
+  border-width: 0.125em;
+}
+
+/* Loading text for screen readers */
+.loading-text {
+  position: absolute;
+  left: -10000px;
+}
+
+.loading-container:focus .loading-text {
+  position: static;
+  margin-top: 0.5rem;
+  font-style: italic;
+  color: #6c757d;
+}
+
+/* ========================================
+   Print Accessibility
+======================================== */
+
+@media print {
+  /* Ensure important information is visible when printed */
+  .sr-only {
+    position: static !important;
+    width: auto !important;
+    height: auto !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: visible !important;
+    clip: auto !important;
+    white-space: normal !important;
+    border: 0 !important;
+  }
+  
+  /* Hide interactive elements */
+  .btn,
+  .dropdown,
+  .nav,
+  .navbar {
+    display: none !important;
+  }
+  
+  /* Ensure sufficient contrast */
+  * {
+    color: #000 !important;
+    background: transparent !important;
+  }
+  
+  /* Show URLs for links */
+  a[href]:after {
+    content: " (" attr(href) ")";
+  }
+  
+  /* Ensure important trading information is emphasized */
+  .price-display,
+  .trading-summary {
+    border: 2px solid #000 !important;
+    padding: 1rem !important;
+    margin: 1rem 0 !important;
+  }
+}
