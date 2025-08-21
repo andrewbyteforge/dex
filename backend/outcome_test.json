@@ -1,1 +1,0 @@
-{"decision_id": "test_001", "outcome": "good", "actual_pnl": "150", "expected_pnl": "100", "risk_realized": "0.02", "risk_expected": "0.025", "execution_quality": 0.9, "time_to_outcome_hours": 2.5, "external_factors": ["favorable_market"], "lessons_learned": ["timing_was_good"]} 
