@@ -98,3 +98,4 @@
 {"timestamp":"2025-08-21T17:29:52.875457Z","level":"ERROR","logger":"app.bootstrap","message":"Error stopping alert monitoring: type object 'AlertChannel' has no attribute 'CONSOLE'","module":"bootstrap"}
 {"timestamp":"2025-08-21T17:29:58.206557Z","level":"ERROR","logger":"app.bootstrap","message":"Failed to initialize monitoring systems: type object 'AlertChannel' has no attribute 'CONSOLE'","module":"bootstrap"}
 {"timestamp":"2025-08-21T17:29:58.207554Z","level":"ERROR","logger":"app.bootstrap","message":"Error stopping alert monitoring: type object 'AlertChannel' has no attribute 'CONSOLE'","module":"bootstrap"}
+{"timestamp":"2025-08-21T17:30:03.577102Z","level":"ERROR","logger":"app.bootstrap","message":"Failed to initialize monitoring systems: type object 'AlertChannel' has no attribute 'CONSOLE'","module":"bootstrap"}
