@@ -47,6 +47,39 @@ def _normalize_cors(origins: Optional[List[str]]) -> List[str]:
     return [o.strip() for o in str(origins).split(",") if o.strip()]
 
 
+async def initialize_ai_systems() -> None:
+    """Initialize all AI systems during application startup."""
+    log = logging.getLogger("app.bootstrap")
+    
+    try:
+        # Initialize Auto-Tuner
+        from ..ai.tuner import initialize_auto_tuner, TuningMode
+        await initialize_auto_tuner(TuningMode.ADVISORY)
+        log.info("✅ AI Auto-Tuner initialized in advisory mode")
+        
+        # Initialize Risk Explainer (already lazy-loaded)
+        from ..ai.risk_explainer import get_risk_explainer
+        await get_risk_explainer()
+        log.info("✅ AI Risk Explainer initialized")
+        
+        # Initialize Anomaly Detector (already lazy-loaded)
+        from ..ai.anomaly_detector import get_anomaly_detector
+        await get_anomaly_detector()
+        log.info("✅ AI Anomaly Detector initialized")
+        
+        # Initialize Decision Journal (already lazy-loaded)
+        from ..ai.decision_journal import get_decision_journal
+        await get_decision_journal()
+        log.info("✅ AI Decision Journal initialized")
+        
+        log.info("🤖 All AI systems initialized successfully")
+        
+    except Exception as e:
+        log.error(f"❌ Failed to initialize AI systems: {e}")
+        # Don't raise - allow app to start for testing
+        log.warning("Continuing without AI systems for testing")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """
@@ -65,7 +98,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.service_mode = getattr(settings, "global_service_mode", "free")
 
     log.info(
-        "Starting DEX Sniper Pro - MINIMAL VERSION",
+        "Starting DEX Sniper Pro - MINIMAL VERSION WITH AI",
         extra={
             "extra_data": {
                 "environment": app.state.environment,
@@ -84,6 +117,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         # Don't raise - allow app to start for testing
         log.warning("Continuing without database for testing")
 
+    # Initialize AI systems (Phase 9.1)
+    await initialize_ai_systems()
+
     # Skip RPC initialization for now
     app.state.rpc_pool = None
     app.state.evm_client = None
@@ -95,7 +131,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     finally:
         # --- Shutdown ---
         log.info(
-            "Shutting down DEX Sniper Pro - MINIMAL VERSION",
+            "Shutting down DEX Sniper Pro - MINIMAL VERSION WITH AI",
             extra={
                 "extra_data": {
                     "uptime_sec": (datetime.now(timezone.utc) - app.state.started_at).total_seconds()
@@ -115,16 +151,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 def create_app() -> FastAPI:
     """
-    Create and configure FastAPI application - MINIMAL VERSION.
+    Create and configure FastAPI application - MINIMAL VERSION WITH AI.
     """
     # Environment-aware docs: disable in prod unless debug is true
     env = getattr(settings, "environment", "development").lower()
     docs_enabled = settings.debug or env != "production"
 
     app = FastAPI(
-        title="DEX Sniper Pro - Testing",
-        description="Multi-chain DEX sniping platform - Minimal testing version",
-        version="1.0.0-testing",
+        title="DEX Sniper Pro - Testing with AI",
+        description="Multi-chain DEX sniping platform - Minimal testing version with AI integration",
+        version="1.0.0-testing-ai",
         debug=settings.debug,
         lifespan=lifespan,
         docs_url="/docs",  # Force enable docs
@@ -169,13 +205,22 @@ def create_app() -> FastAPI:
         return {
             "status": "OK",
             "service": "DEX Sniper Pro",
-            "version": "1.0.0-testing",
+            "version": "1.0.0-testing-ai",
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "uptime_seconds": 100.0
+            "uptime_seconds": 100.0,
+            "ai_systems": "enabled"
         }
     
     api_router.include_router(health_router)
     logging.getLogger("app.bootstrap").info("Health API (inline) loaded successfully")
+
+    # AI API (Phase 9.1) - NEW ADDITION
+    try:
+        from ..api.ai import router as ai_router
+        api_router.include_router(ai_router)
+        logging.getLogger("app.bootstrap").info("AI API loaded successfully")
+    except Exception as e:
+        logging.getLogger("app.bootstrap").warning(f"AI API not available: {e}")
 
     # Presets API - Define inline to avoid import issues
     presets_router = APIRouter(prefix="/presets", tags=["Presets"])
@@ -701,17 +746,24 @@ def create_app() -> FastAPI:
     @app.get("/", tags=["Meta"])
     async def root() -> dict:
         return {
-            "app": "DEX Sniper Pro - Testing",
-            "version": "1.0.0-testing",
+            "app": "DEX Sniper Pro - Testing with AI",
+            "version": "1.0.0-testing-ai",
             "environment": env,
             "service_mode": getattr(settings, "global_service_mode", "free"),
             "started_at": getattr(app.state, "started_at", None),
-            "status": "minimal_testing_version_with_analytics",
+            "status": "minimal_testing_version_with_ai_and_analytics",
             "docs_url": "http://127.0.0.1:8000/docs",
             "available_apis": [
                 "/api/v1/health",
                 "/api/v1/presets",
-                "/api/v1/analytics"
+                "/api/v1/analytics",
+                "/api/v1/ai"
+            ],
+            "ai_features": [
+                "auto-tuning",
+                "risk-explanation",
+                "anomaly-detection", 
+                "decision-journal"
             ]
         }
 
@@ -719,9 +771,10 @@ def create_app() -> FastAPI:
     @app.get("/test", tags=["Meta"])
     async def test_endpoint() -> dict:
         return {
-            "message": "API is working!",
+            "message": "API is working with AI integration!",
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "docs_available": True
+            "docs_available": True,
+            "ai_enabled": True
         }
 
     return app
