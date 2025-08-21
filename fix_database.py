@@ -1,4 +1,15 @@
-"""
+# fix_database.py
+import shutil
+from pathlib import Path
+
+# Backup the current file
+db_file = Path("backend/app/storage/database.py")
+if db_file.exists():
+    shutil.copy(db_file, "backend/app/storage/database.py.backup")
+    print("Backed up original database.py")
+
+# Write the clean version
+clean_content = '''"""
 Database configuration and session management for SQLite with WAL mode.
 """
 from __future__ import annotations
@@ -174,17 +185,10 @@ async def test_database_connection() -> bool:
         return False
 
 __all__ = ["get_database", "create_tables", "test_database_connection", "db_manager"]
- 
-async def init_database() > None: 
-    """Initialize database for application startup.""" 
-    try: 
-        await db_manager.initialize() 
-        await create_tables() 
-        logger.info("Database initialization completed") 
-    except Exception as e: 
-        logger.error(f"Database initialization failed: {e}") 
-        raise 
- 
-async def close_database() > None: 
-    """Close database for application shutdown.""" 
-    await db_manager.close() 
+'''
+
+with open(db_file, 'w', encoding='utf-8') as f:
+    f.write(clean_content)
+
+print("✅ Fixed database.py")
+print("Now run: python test_system.py")

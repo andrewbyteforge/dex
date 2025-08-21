@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     cors_allow_headers: List[str] = ["*"]
     
     # Database
-    database_url: str = "sqlite:///./data/app.db"
+    database_url: str = "sqlite+aiosqlite:///./data/app.db"
     database_echo: bool = False
     
     # Logging
@@ -96,12 +96,6 @@ class Settings(BaseSettings):
     evm_rpc_urls_bsc: Optional[str] = None
     evm_rpc_urls_polygon: Optional[str] = None
     sol_rpc_urls: Optional[str] = None
-    
-    # Legacy single RPC URLs (for compatibility)
-    ethereum_rpc_url: Optional[str] = None
-    bsc_rpc_url: Optional[str] = None
-    polygon_rpc_url: Optional[str] = None
-    solana_rpc_url: Optional[str] = None
     
     # API Keys (optional)
     coingecko_api_key: Optional[str] = None
@@ -204,3 +198,38 @@ class Settings(BaseSettings):
 
 # Global settings instance
 settings = Settings()
+
+
+# Add the missing get_settings function that the database module needs
+def get_settings() -> Settings:
+    """
+    Get the global settings instance.
+    
+    This function provides compatibility with modules that expect a get_settings() function.
+    
+    Returns:
+        Settings: The global settings instance
+    """
+    return settings
+
+
+# For backward compatibility, also provide these aliases
+def reload_settings() -> Settings:
+    """
+    Reload settings from environment.
+    
+    Returns:
+        Settings: Reloaded settings instance
+    """
+    global settings
+    settings = Settings()
+    return settings
+
+
+# Export commonly used items
+__all__ = [
+    "Settings",
+    "settings", 
+    "get_settings",
+    "reload_settings"
+]

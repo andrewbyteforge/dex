@@ -1,9 +1,16 @@
 """
-DEX Sniper Pro - Main Application.
+DEX Sniper Pro - Main FastAPI Application
 
-Professional DEX trading and automation platform with AI integration.
+This is the main FastAPI application entry point with complete API integration.
+Matches the existing backend/main.py structure but as a module.
 """
+
+from __future__ import annotations
+
 import logging
+from contextlib import asynccontextmanager
+from typing import AsyncGenerator
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -11,9 +18,30 @@ from fastapi.middleware.cors import CORSMiddleware
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    """Application lifespan manager for startup and shutdown tasks."""
+    logger.info("Starting DEX Sniper Pro application")
+    
+    try:
+        # Initialize the application for testing/development
+        from .core.bootstrap import initialize_for_testing
+        await initialize_for_testing()
+        logger.info("✅ Application initialized successfully")
+        
+        yield
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize application: {e}")
+        yield
+    finally:
+        logger.info("Shutting down DEX Sniper Pro application")
+
+
 # Try to use the bootstrap app with AI integration first
 try:
-    from app.core.bootstrap import app
+    from .core.bootstrap import app
     logger.info("✅ Successfully loaded bootstrap app with AI integration")
     
     # Update the root endpoint to show AI features
@@ -57,7 +85,7 @@ try:
         """Enhanced health check with AI status."""
         try:
             # Try to check AI systems health
-            from app.core.ai_dependencies import check_ai_systems_health
+            from .core.ai_dependencies import check_ai_systems_health
             ai_health = await check_ai_systems_health()
             ai_status = ai_health.get("overall_status", "unknown")
         except Exception as e:
@@ -86,7 +114,8 @@ except ImportError as e:
     app = FastAPI(
         title="DEX Sniper Pro API - Fallback",
         description="Professional DEX trading platform - Basic version without AI",
-        version="1.0.0-fallback"
+        version="1.0.0-fallback",
+        lifespan=lifespan
     )
 
     # Configure CORS
@@ -103,7 +132,7 @@ except ImportError as e:
     
     # Try to load centralized API router
     try:
-        from app.api import api_router
+        from .api import api_router
         app.include_router(api_router)
         routers_loaded.append("centralized_api")
         logger.info("✅ Centralized API router registered (fallback)")
@@ -112,18 +141,22 @@ except ImportError as e:
         
         # Try individual routers
         individual_routers = [
-            ("app.api.presets_working", "presets"),
-            ("app.api.autotrade", "autotrade"),
-            ("app.api.sim", "simulation"),
-            ("app.api.analytics", "analytics")
+            (".api.presets_working", "presets"),
+            (".api.autotrade", "autotrade"),
+            (".api.sim", "simulation"),
+            (".api.analytics", "analytics"),
+            (".api.health", "health")
         ]
         
         for module_name, router_name in individual_routers:
             try:
                 import importlib
-                module = importlib.import_module(module_name)
+                module = importlib.import_module(module_name, package=__package__)
                 router = getattr(module, "router")
-                app.include_router(router, prefix="/api/v1")
+                if router_name == "health":
+                    app.include_router(router)  # Health router has no prefix
+                else:
+                    app.include_router(router, prefix="/api/v1")
                 routers_loaded.append(router_name)
                 logger.info(f"✅ {router_name} router registered (fallback)")
             except (ImportError, AttributeError) as e:
@@ -228,27 +261,5 @@ async def autotrade_websocket(websocket: WebSocket):
             pass
 
 
-# Development server runner
-if __name__ == "__main__":
-    import uvicorn
-
-    logger.info("🚀 Starting DEX Sniper Pro server...")
-    logger.info("📡 Server will be available at: http://127.0.0.1:8000")
-    logger.info("📚 API Documentation at: http://127.0.0.1:8000/docs")
-    logger.info("🔧 Interactive API at: http://127.0.0.1:8000/redoc")
-
-    try:
-        uvicorn.run(
-            "main:app",
-            host="127.0.0.1",
-            port=8000,
-            reload=True,
-            log_level="info",
-            reload_dirs=["app"]  # Only watch app directory for changes
-        )
-    except KeyboardInterrupt:
-        logger.info("🛑 Server stopped by user")
-    except Exception as e:
-        logger.error(f"❌ Server failed to start: {e}")
-        logger.info("💡 Try running: pip install -r requirements.txt")
-        logger.info("💡 Or check if port 8000 is already in use")
+# Module exports
+__all__ = ["app"]
