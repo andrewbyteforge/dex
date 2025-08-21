@@ -4099,3 +4099,49 @@
 {"timestamp":"2025-08-21T17:29:17.584722Z","level":"INFO","logger":"app.core.middleware","message":"Request completed: GET /api/v1/health/","module":"middleware","trace_id":"5c22d846-93e5-4f02-a03a-526f69ad0449","status_code":307,"process_time_ms":1.01,"response_size":0}
 {"timestamp":"2025-08-21T17:29:17.610206Z","level":"INFO","logger":"app.core.middleware","message":"Request started: GET /api/v1/health","module":"middleware","trace_id":"35bfe1a3-a403-4860-87ef-280f176cdcae","method":"GET","path":"/api/v1/health","query_params":"","client_ip":"127.0.0.1","user_agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:142.0) Gecko/20100101 Firefox/142.0"}
 {"timestamp":"2025-08-21T17:29:17.611204Z","level":"INFO","logger":"app.core.middleware","message":"Request completed: GET /api/v1/health","module":"middleware","trace_id":"35bfe1a3-a403-4860-87ef-280f176cdcae","status_code":200,"process_time_ms":1.0,"response_size":0}
+{"timestamp":"2025-08-21T17:29:47.498340Z","level":"INFO","logger":"app.bootstrap","message":"Shutting down DEX Sniper Pro - ENHANCED VERSION WITH MONITORING","module":"bootstrap","uptime_sec":56.947725}
+{"timestamp":"2025-08-21T17:29:47.498340Z","level":"ERROR","logger":"app.bootstrap","message":"Error stopping alert monitoring: type object 'AlertChannel' has no attribute 'CONSOLE'","module":"bootstrap"}
+{"timestamp":"2025-08-21T17:29:47.499350Z","level":"INFO","logger":"app.storage.database","message":"Database connections closed","module":"database"}
+{"timestamp":"2025-08-21T17:29:47.499350Z","level":"INFO","logger":"app.bootstrap","message":"Database connections closed","module":"bootstrap"}
+{"timestamp":"2025-08-21T17:29:52.841142Z","level":"INFO","logger":"root","message":"Logging system initialized","module":"logging","log_level":"INFO","debug":false,"environment":"development"}
+{"timestamp":"2025-08-21T17:29:52.842167Z","level":"INFO","logger":"app.bootstrap","message":"Starting DEX Sniper Pro - ENHANCED VERSION WITH MONITORING","module":"bootstrap","environment":"development","service_mode":"free","debug":false}
+{"timestamp":"2025-08-21T17:29:52.842167Z","level":"INFO","logger":"app.storage.database","message":"Initializing database at: data\\app.db","module":"database"}
+{"timestamp":"2025-08-21T17:29:52.869573Z","level":"INFO","logger":"app.storage.database","message":"Database initialized successfully with WAL mode","module":"database"}
+{"timestamp":"2025-08-21T17:29:52.873462Z","level":"INFO","logger":"app.storage.database","message":"Database tables created successfully","module":"database"}
+{"timestamp":"2025-08-21T17:29:52.874459Z","level":"INFO","logger":"app.storage.database","message":"Database initialization completed","module":"database"}
+{"timestamp":"2025-08-21T17:29:52.874504Z","level":"INFO","logger":"app.bootstrap","message":"Database initialized successfully with WAL mode","module":"bootstrap"}
+{"timestamp":"2025-08-21T17:29:52.874504Z","level":"INFO","logger":"app.ai.tuner","message":"Initialized auto-tuner in advisory mode","module":"tuner"}
+{"timestamp":"2025-08-21T17:29:52.874504Z","level":"INFO","logger":"app.bootstrap","message":"AI Auto-Tuner initialized in advisory mode","module":"bootstrap"}
+{"timestamp":"2025-08-21T17:29:52.874504Z","level":"INFO","logger":"app.bootstrap","message":"AI Risk Explainer initialized","module":"bootstrap"}
+{"timestamp":"2025-08-21T17:29:52.874504Z","level":"INFO","logger":"app.bootstrap","message":"AI Anomaly Detector initialized","module":"bootstrap"}
+{"timestamp":"2025-08-21T17:29:52.874504Z","level":"INFO","logger":"app.bootstrap","message":"AI Decision Journal initialized","module":"bootstrap"}
+{"timestamp":"2025-08-21T17:29:52.874504Z","level":"INFO","logger":"app.bootstrap","message":"All AI systems initialized successfully","module":"bootstrap"}
+{"timestamp":"2025-08-21T17:29:52.874504Z","level":"ERROR","logger":"app.bootstrap","message":"Failed to initialize monitoring systems: type object 'AlertChannel' has no attribute 'CONSOLE'","module":"bootstrap"}
+{"timestamp":"2025-08-21T17:29:52.875457Z","level":"WARNING","logger":"app.bootstrap","message":"Continuing without monitoring systems","module":"bootstrap"}
+{"timestamp":"2025-08-21T17:29:52.875457Z","level":"INFO","logger":"app.bootstrap","message":"Skipping RPC/chain client initialization for testing","module":"bootstrap"}
+{"timestamp":"2025-08-21T17:29:52.875457Z","level":"INFO","logger":"app.bootstrap","message":"DEX Sniper Pro startup completed successfully","module":"bootstrap"}
+{"timestamp":"2025-08-21T17:29:52.875457Z","level":"INFO","logger":"app.bootstrap","message":"Shutting down DEX Sniper Pro - ENHANCED VERSION WITH MONITORING","module":"bootstrap","uptime_sec":0.033362}
+{"timestamp":"2025-08-21T17:29:52.875457Z","level":"ERROR","logger":"app.bootstrap","message":"Error stopping alert monitoring: type object 'AlertChannel' has no attribute 'CONSOLE'","module":"bootstrap"}
+{"timestamp":"2025-08-21T17:29:52.875457Z","level":"INFO","logger":"app.storage.database","message":"Database connections closed","module":"database"}
+{"timestamp":"2025-08-21T17:29:52.875457Z","level":"INFO","logger":"app.bootstrap","message":"Database connections closed","module":"bootstrap"}
+{"timestamp":"2025-08-21T17:29:58.171886Z","level":"INFO","logger":"root","message":"Logging system initialized","module":"logging","log_level":"INFO","debug":false,"environment":"development"}
+{"timestamp":"2025-08-21T17:29:58.171886Z","level":"INFO","logger":"app.bootstrap","message":"Starting DEX Sniper Pro - ENHANCED VERSION WITH MONITORING","module":"bootstrap","environment":"development","service_mode":"free","debug":false}
+{"timestamp":"2025-08-21T17:29:58.171886Z","level":"INFO","logger":"app.storage.database","message":"Initializing database at: data\\app.db","module":"database"}
+{"timestamp":"2025-08-21T17:29:58.200427Z","level":"INFO","logger":"app.storage.database","message":"Database initialized successfully with WAL mode","module":"database"}
+{"timestamp":"2025-08-21T17:29:58.205586Z","level":"INFO","logger":"app.storage.database","message":"Database tables created successfully","module":"database"}
+{"timestamp":"2025-08-21T17:29:58.205586Z","level":"INFO","logger":"app.storage.database","message":"Database initialization completed","module":"database"}
+{"timestamp":"2025-08-21T17:29:58.206557Z","level":"INFO","logger":"app.bootstrap","message":"Database initialized successfully with WAL mode","module":"bootstrap"}
+{"timestamp":"2025-08-21T17:29:58.206557Z","level":"INFO","logger":"app.ai.tuner","message":"Initialized auto-tuner in advisory mode","module":"tuner"}
+{"timestamp":"2025-08-21T17:29:58.206557Z","level":"INFO","logger":"app.bootstrap","message":"AI Auto-Tuner initialized in advisory mode","module":"bootstrap"}
+{"timestamp":"2025-08-21T17:29:58.206557Z","level":"INFO","logger":"app.bootstrap","message":"AI Risk Explainer initialized","module":"bootstrap"}
+{"timestamp":"2025-08-21T17:29:58.206557Z","level":"INFO","logger":"app.bootstrap","message":"AI Anomaly Detector initialized","module":"bootstrap"}
+{"timestamp":"2025-08-21T17:29:58.206557Z","level":"INFO","logger":"app.bootstrap","message":"AI Decision Journal initialized","module":"bootstrap"}
+{"timestamp":"2025-08-21T17:29:58.206557Z","level":"INFO","logger":"app.bootstrap","message":"All AI systems initialized successfully","module":"bootstrap"}
+{"timestamp":"2025-08-21T17:29:58.206557Z","level":"ERROR","logger":"app.bootstrap","message":"Failed to initialize monitoring systems: type object 'AlertChannel' has no attribute 'CONSOLE'","module":"bootstrap"}
+{"timestamp":"2025-08-21T17:29:58.206557Z","level":"WARNING","logger":"app.bootstrap","message":"Continuing without monitoring systems","module":"bootstrap"}
+{"timestamp":"2025-08-21T17:29:58.206557Z","level":"INFO","logger":"app.bootstrap","message":"Skipping RPC/chain client initialization for testing","module":"bootstrap"}
+{"timestamp":"2025-08-21T17:29:58.206557Z","level":"INFO","logger":"app.bootstrap","message":"DEX Sniper Pro startup completed successfully","module":"bootstrap"}
+{"timestamp":"2025-08-21T17:29:58.207554Z","level":"INFO","logger":"app.bootstrap","message":"Shutting down DEX Sniper Pro - ENHANCED VERSION WITH MONITORING","module":"bootstrap","uptime_sec":0.034671}
+{"timestamp":"2025-08-21T17:29:58.207554Z","level":"ERROR","logger":"app.bootstrap","message":"Error stopping alert monitoring: type object 'AlertChannel' has no attribute 'CONSOLE'","module":"bootstrap"}
+{"timestamp":"2025-08-21T17:29:58.207554Z","level":"INFO","logger":"app.storage.database","message":"Database connections closed","module":"database"}
+{"timestamp":"2025-08-21T17:29:58.207554Z","level":"INFO","logger":"app.bootstrap","message":"Database connections closed","module":"bootstrap"}

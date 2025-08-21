@@ -179,8 +179,7 @@ class GasEstimator:
             logger.warning(f"EIP-1559 fee estimation failed for {chain}: {e}")
             # Fallback to legacy
             gas_price = await self._get_legacy_gas_price(chain)
-            return gas_price, None, None
-    
+            return gas_price, None, None  
     
 
     async def _get_legacy_gas_price(self, chain: str) -> int:
