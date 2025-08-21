@@ -18,6 +18,9 @@ from pydantic import BaseModel, Field, validator
 
 from ..core.dependencies import get_current_user, CurrentUser
 
+from ..sim.simulator import SimulationEngine  
+
+
 # Safe imports with fallbacks for all simulation components
 try:
     from ..sim.backtester import (
