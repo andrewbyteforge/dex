@@ -5,11 +5,15 @@ import {
   Menu, X, Home, Smartphone, Tablet, Monitor 
 } from 'lucide-react';
 
-// ✅ Static imports so SES / extensions can't break dynamic import()
+// Static imports so SES / extensions can't break dynamic import()
 import Analytics from './components/Analytics.jsx';
 import Autotrade from './components/Autotrade.jsx';
+import PairDiscovery from './components/PairDiscovery.jsx';
 
-// ✅ Error boundary to surface any render errors on screen
+// Import the centralized WebSocket system
+import { WebSocketProvider } from './contexts/WebSocketContext.jsx';
+
+// Error boundary to surface any render errors on screen
 class AppErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
@@ -21,7 +25,6 @@ class AppErrorBoundary extends React.Component {
   }
   
   componentDidCatch(error, info) {
-    // eslint-disable-next-line no-console
     console.error('App render error:', error, info);
   }
   
@@ -41,7 +44,7 @@ class AppErrorBoundary extends React.Component {
 }
 
 /**
- * MobileLayout - Mobile-optimized layout wrapper component.
+ * MobileLayout - Mobile-optimized layout wrapper component with WebSocket integration.
  * 
  * Provides responsive design with touch-friendly navigation,
  * collapsible panels, and mobile-first UX patterns.
@@ -51,6 +54,7 @@ const MobileLayout = ({
   activeTab, 
   onTabChange, 
   systemHealth,
+  wsConnectionState,
   showHealthBadge = true 
 }) => {
   const [isMobile, setIsMobile] = useState(false);
@@ -63,9 +67,10 @@ const MobileLayout = ({
   const navItems = [
     { key: 'trade', label: 'Trade', icon: Home, mobileOrder: 1 },
     { key: 'autotrade', label: 'Auto', icon: Bot, mobileOrder: 2 },
-    { key: 'analytics', label: 'Stats', icon: BarChart3, mobileOrder: 3 },
-    { key: 'orders', label: 'Orders', icon: TrendingUp, mobileOrder: 4 },
-    { key: 'settings', label: 'Settings', icon: Settings, mobileOrder: 5 }
+    { key: 'discovery', label: 'Discovery', icon: Activity, mobileOrder: 3 },
+    { key: 'analytics', label: 'Stats', icon: BarChart3, mobileOrder: 4 },
+    { key: 'orders', label: 'Orders', icon: TrendingUp, mobileOrder: 5 },
+    { key: 'settings', label: 'Settings', icon: Settings, mobileOrder: 6 }
   ];
 
   // Responsive breakpoint detection
@@ -105,10 +110,17 @@ const MobileLayout = ({
     }
   };
 
-  // Health status indicator
+  // Health status indicator with WebSocket integration
   const getHealthVariant = () => {
     if (!systemHealth) return 'secondary';
-    return systemHealth.healthy ? 'success' : 'danger';
+    if (wsConnectionState === 'disconnected') return 'warning';
+    return systemHealth.status === 'healthy' ? 'success' : 'danger';
+  };
+
+  const getHealthText = () => {
+    if (!systemHealth) return 'Loading...';
+    if (wsConnectionState === 'disconnected') return 'Offline';
+    return systemHealth.status === 'healthy' ? 'Online' : 'Issues';
   };
 
   // Mobile bottom navigation
@@ -150,21 +162,21 @@ const MobileLayout = ({
     </div>
   );
 
-  // Desktop/Tablet top navigation
+  // Desktop/Tablet top navigation with WebSocket status
   const renderDesktopNavigation = () => (
     <Navbar bg="light" expand="lg" className="border-bottom mb-3">
       <Container fluid>
         <Navbar.Brand className="d-flex align-items-center">
           <Zap className="me-2" size={24} />
           <span className="fw-bold">DEX Sniper Pro</span>
-          {showHealthBadge && systemHealth && (
+          {showHealthBadge && (
             <Badge 
               bg={getHealthVariant()} 
               className="ms-2"
-              title={systemHealth.healthy ? 'System Healthy' : 'System Issues Detected'}
+              title={`System ${getHealthText()} - WebSocket: ${wsConnectionState}`}
             >
               <Activity size={12} className="me-1" />
-              {systemHealth.healthy ? 'Online' : 'Issues'}
+              {getHealthText()}
             </Badge>
           )}
         </Navbar.Brand>
@@ -197,7 +209,7 @@ const MobileLayout = ({
     </Navbar>
   );
 
-  // Sidebar navigation (for settings and additional options)
+  // Enhanced sidebar navigation with WebSocket diagnostics
   const renderSidebarNavigation = () => (
     <Offcanvas
       show={showSidebar}
@@ -216,7 +228,7 @@ const MobileLayout = ({
       <Offcanvas.Body>
         <Nav className="flex-column">
           {navItems
-            .filter(item => !['trade', 'autotrade', 'analytics', 'orders'].includes(item.key))
+            .filter(item => !['trade', 'autotrade', 'discovery', 'analytics'].includes(item.key))
             .map(({ key, label, icon: Icon }) => (
               <Nav.Link
                 key={key}
@@ -234,28 +246,46 @@ const MobileLayout = ({
           
           <hr />
           
-          {/* System status in sidebar */}
-          {systemHealth && (
-            <div className="px-3 py-2">
-              <h6 className="text-muted">System Status</h6>
-              <div className="d-flex align-items-center">
-                <Badge bg={getHealthVariant()} className="me-2">
-                  <Activity size={12} />
-                </Badge>
-                <span className="small">
-                  {systemHealth.healthy ? 'All systems operational' : 'System issues detected'}
-                </span>
+          {/* Enhanced system status with WebSocket info */}
+          <div className="px-3 py-2">
+            <h6 className="text-muted">System Status</h6>
+            <div className="d-flex align-items-center mb-2">
+              <Badge bg={getHealthVariant()} className="me-2">
+                <Activity size={12} />
+              </Badge>
+              <span className="small">
+                {systemHealth ? 
+                  (systemHealth.status === 'healthy' ? 'All systems operational' : 'System issues detected') : 
+                  'Loading system status...'
+                }
+              </span>
+            </div>
+            
+            <div className="small text-muted mb-2">
+              <strong>WebSocket:</strong> {wsConnectionState}
+            </div>
+            
+            {systemHealth?.services && (
+              <div className="small text-muted">
+                <div>API: {systemHealth.services.api === 'operational' ? '✓' : '✗'}</div>
+                <div>Database: {systemHealth.services.database === 'operational' ? '✓' : '✗'}</div>
               </div>
-              
-              {systemHealth.details && (
-                <div className="mt-2 small text-muted">
-                  <div>RPC: {systemHealth.details.rpc_healthy ? '✓' : '✗'}</div>
-                  <div>DB: {systemHealth.details.db_healthy ? '✓' : '✗'}</div>
-                  <div>WS: {systemHealth.details.ws_healthy ? '✓' : '✗'}</div>
-                </div>
+            )}
+          </div>
+          
+          {/* WebSocket connection details */}
+          <div className="px-3 py-2 border-top">
+            <h6 className="text-muted small">Connection Details</h6>
+            <div className="small text-muted">
+              <div>State: {wsConnectionState}</div>
+              {systemHealth?.websocket && (
+                <>
+                  <div>Active Connections: {systemHealth.websocket.total_connections || 0}</div>
+                  <div>Hub Running: {systemHealth.websocket.running ? '✓' : '✗'}</div>
+                </>
               )}
             </div>
-          )}
+          </div>
           
           {/* Device info for debugging */}
           <div className="px-3 py-2 border-top mt-auto">
@@ -289,6 +319,14 @@ const MobileLayout = ({
       {/* Desktop/Tablet Navigation */}
       {!isMobile && renderDesktopNavigation()}
       
+      {/* WebSocket connection warning */}
+      {wsConnectionState === 'disconnected' && (
+        <Alert variant="warning" className="mx-3 mb-3">
+          <Activity size={16} className="me-1" />
+          Real-time connection lost. Some features may not work properly.
+        </Alert>
+      )}
+      
       {/* Main Content Area */}
       <Container fluid className={isMobile ? 'px-2' : 'px-3'}>
         <Row>
@@ -314,7 +352,7 @@ const MobileLayout = ({
       {renderSidebarNavigation()}
       
       {/* Mobile-specific styles */}
-      <style jsx>{`
+      <style>{`
         .mobile-layout {
           -webkit-overflow-scrolling: touch;
           overscroll-behavior: contain;
@@ -372,36 +410,38 @@ const MobileLayout = ({
   );
 };
 
+/**
+ * Main App Component with centralized WebSocket management
+ */
 function App() {
   const [systemHealth, setSystemHealth] = useState(null);
-  const [activeTab, setActiveTab] = useState('trade');
+  const [activeTab, setActiveTab] = useState('autotrade');
 
   // Breadcrumb so we know the app mounted
   useEffect(() => {
-    // eslint-disable-next-line no-console
-    console.log('[App] mounted with mobile layout integration');
+    console.log('[App] mounted with centralized WebSocket integration');
   }, []);
 
-  // Health polling
+  // Health polling - Fixed to use correct endpoint
   useEffect(() => {
     const checkSystemHealth = async () => {
       try {
-        const res = await fetch('/api/v1/health/'); // proxied by Vite to 8000
+        // Use the correct health endpoint without trailing slash
+        const res = await fetch('/health'); // This matches the backend route
         if (!res.ok) {
           throw new Error(`HTTP ${res.status}: ${res.statusText}`);
         }
         const data = await res.json();
         setSystemHealth(data);
       } catch (err) {
-        // eslint-disable-next-line no-console
         console.warn('[App] health check failed:', err.message);
         setSystemHealth({ 
-          healthy: false, 
+          status: 'unhealthy', 
           error: err.message,
-          details: {
-            rpc_healthy: false,
-            db_healthy: false,
-            ws_healthy: false
+          services: {
+            api: 'error',
+            websocket_hub: 'error',
+            database: 'error'
           }
         });
       }
@@ -436,6 +476,9 @@ function App() {
 
       case 'autotrade':
         return <Autotrade />;
+
+      case 'discovery':
+        return <PairDiscovery selectedChain="ethereum" />;
 
       case 'analytics':
         return <Analytics />;
@@ -472,6 +515,19 @@ function App() {
               <Alert variant="info">
                 <strong>Coming Soon:</strong> Comprehensive settings panel.
               </Alert>
+              
+              {systemHealth && (
+                <div className="mt-4">
+                  <h6>System Status</h6>
+                  <div className="small">
+                    <div>Status: <Badge bg={getHealthVariant()}>{systemHealth.status}</Badge></div>
+                    <div>Uptime: {systemHealth.uptime_seconds ? `${Math.floor(systemHealth.uptime_seconds / 60)}m` : 'N/A'}</div>
+                    {systemHealth.websocket && (
+                      <div>WebSocket Connections: {systemHealth.websocket.total_connections || 0}</div>
+                    )}
+                  </div>
+                </div>
+              )}
             </Card.Body>
           </Card>
         );
@@ -485,18 +541,37 @@ function App() {
     }
   };
 
+  const getHealthVariant = () => {
+    if (!systemHealth) return 'secondary';
+    return systemHealth.status === 'healthy' ? 'success' : 'danger';
+  };
+
   return (
     <AppErrorBoundary>
-      <MobileLayout
-        activeTab={activeTab}
-        onTabChange={setActiveTab}
-        systemHealth={systemHealth}
-        showHealthBadge={true}
-      >
-        {renderContent()}
-      </MobileLayout>
+      <WebSocketProvider>
+        {/* Use WebSocket context to get connection state */}
+        <WebSocketConsumer>
+          {({ connectionState }) => (
+            <MobileLayout
+              activeTab={activeTab}
+              onTabChange={setActiveTab}
+              systemHealth={systemHealth}
+              wsConnectionState={connectionState}
+              showHealthBadge={true}
+            >
+              {renderContent()}
+            </MobileLayout>
+          )}
+        </WebSocketConsumer>
+      </WebSocketProvider>
     </AppErrorBoundary>
   );
 }
+
+// Helper component to consume WebSocket context
+const WebSocketConsumer = ({ children }) => {
+  const { connectionState } = require('./contexts/WebSocketContext.jsx').useWebSocketContext();
+  return children({ connectionState });
+};
 
 export default App;

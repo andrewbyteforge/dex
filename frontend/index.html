@@ -1,47 +1,12 @@
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>DEX Sniper Pro</title>
-    <style>
-      .ses-warning {
-        position: fixed;
-        top: 0; left: 0; right: 0;
-        background: #dc3545; color: #fff;
-        padding: 10px 14px; z-index: 99999;
-        font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-        font-size: 14px;
-      }
-      .ses-warning code { background: rgba(255,255,255,0.15); padding: 1px 4px; border-radius: 4px; }
-    </style>
-    <script>
-      // Detect SES/lockdown injection and show a banner so failures aren't silent.
-      (function () {
-        try {
-          var hasSES = typeof window.lockdown !== 'undefined' || typeof window.SES !== 'undefined';
-          // Heuristic: some SES builds delete Date.prototype.toTemporalInstant (seen in your console)
-          var tamperedTemporal = !('toTemporalInstant' in (Date.prototype || {}));
-          if (hasSES || tamperedTemporal) {
-            var div = document.createElement('div');
-            div.className = 'ses-warning';
-            div.textContent =
-              'Security extension detected (SES/lockdown) — this can break Vite/React dev on localhost. ' +
-              'Open a Private/Incognito window or disable the extension for http://localhost:3000 and http://127.0.0.1:3000.';
-            document.addEventListener('DOMContentLoaded', function () {
-              document.body.prepend(div);
-            });
-          }
-        } catch (e) {
-          /* best-effort detector — ignore errors */
-        }
-      })();
-    </script>
-  </head>
-  <body>
-    <div id="root"></div>
-    <!-- Keep Vite entry — modules will fail if SES is active, but the banner above will explain why -->
-    <script type="module" src="/src/main.jsx"></script>
-  </body>
-</html>
+<!doctype html> 
+<html lang="en"> 
+  <head> 
+    <meta charset="UTF-8" /> 
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /> 
+    <title>DEX Sniper Pro</title> 
+  </head> 
+  <body> 
+    <div id="root"></div> 
+    <script type="module" src="/src/main.jsx"></script> 
+  </body> 
+</html> 

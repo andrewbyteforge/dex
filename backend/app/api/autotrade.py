@@ -708,3 +708,49 @@ async def autotrade_health() -> Dict[str, Any]:
         "activities_count": len(_recent_activities),
         "uptime_seconds": _autotrade_state["uptime_seconds"]
     }
+
+# Add this temporary debugging endpoint to your backend/app/api/autotrade.py
+# This will help us see what routes are actually registered
+
+@router.get("/debug-routes")
+async def debug_routes() -> Dict[str, Any]:
+    """Debug endpoint to show registered routes."""
+    from fastapi import FastAPI
+    from ..main import app  # Adjust this import based on your app structure
+    
+    routes = []
+    for route in app.routes:
+        if hasattr(route, 'path') and hasattr(route, 'methods'):
+            routes.append({
+                "path": route.path,
+                "methods": list(route.methods) if route.methods else [],
+                "name": getattr(route, 'name', 'unknown')
+            })
+    
+    # Filter for autotrade and orders routes
+    autotrade_routes = [r for r in routes if 'autotrade' in r['path']]
+    orders_routes = [r for r in routes if 'orders' in r['path']]
+    
+    return {
+        "all_routes_count": len(routes),
+        "autotrade_routes": autotrade_routes,
+        "orders_routes": orders_routes,
+        "looking_for": [
+            "/api/v1/autotrade/status",
+            "/api/v1/autotrade/queue", 
+            "/api/v1/autotrade/activities",
+            "/api/v1/orders/active",
+            "/api/v1/orders/types",
+            "/api/v1/orders/positions/1"
+        ]
+    }
+
+# Also add this simple test endpoint to verify the router is working
+@router.get("/test")
+async def test_endpoint() -> Dict[str, str]:
+    """Simple test endpoint to verify router registration."""
+    return {
+        "status": "success",
+        "message": "Autotrade router is working!",
+        "timestamp": datetime.utcnow().isoformat()
+    }

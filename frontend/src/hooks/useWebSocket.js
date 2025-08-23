@@ -44,7 +44,16 @@ const useWebSocket = (url, options = {}) => {
       return url;
     }
     
-    // Build WebSocket URL from current location
+    // For development, always point to backend server
+    if (process.env.NODE_ENV === 'development') {
+      const protocol = 'ws:'; // Always use ws: for localhost dev
+      const host = 'localhost:8000'; // Point to your FastAPI backend
+      const path = url.startsWith('/') ? url : `/${url}`;
+      
+      return `${protocol}//${host}${path}`;
+    }
+    
+    // For production, build WebSocket URL from current location
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.host;
     const path = url.startsWith('/') ? url : `/${url}`;

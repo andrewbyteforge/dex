@@ -1,265 +1,196 @@
 """
 DEX Sniper Pro - Main FastAPI Application
+Updated to use the new unified WebSocket system and clean architecture.
 
-This is the main FastAPI application entry point with complete API integration.
-Matches the existing backend/main.py structure but as a module.
+File: backend/main.py
 """
 
 from __future__ import annotations
 
 import logging
+import asyncio
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
+from datetime import datetime
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+# Import the new unified WebSocket system
+from app.ws.hub import ws_hub
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """Application lifespan manager for startup and shutdown tasks."""
-    logger.info("Starting DEX Sniper Pro application")
+async def lifespan(app: FastAPI):
+    """
+    FastAPI lifespan context manager.
+    Handles startup and shutdown of the WebSocket hub and other services.
+    """
+    # Startup
+    logger.info("Starting DEX Sniper Pro backend...")
     
     try:
-        # Initialize the application for testing/development
-        from .core.bootstrap import initialize_for_testing
-        await initialize_for_testing()
-        logger.info("✅ Application initialized successfully")
+        # Start the unified WebSocket hub
+        await ws_hub.start()
+        logger.info("✅ WebSocket Hub started successfully")
+        
+        # Store startup time
+        app.state.started_at = datetime.now()
+        
+        # Initialize other services here as needed
+        # await initialize_database()
+        # await start_autotrade_engine()
+        # await start_discovery_watchers()
         
         yield
         
-    except Exception as e:
-        logger.error(f"❌ Failed to initialize application: {e}")
-        yield
     finally:
-        logger.info("Shutting down DEX Sniper Pro application")
+        # Shutdown
+        logger.info("Shutting down DEX Sniper Pro backend...")
+        
+        # Stop the WebSocket hub
+        await ws_hub.stop()
+        logger.info("✅ WebSocket Hub stopped")
+        
+        # Cleanup other services here
+        # await stop_autotrade_engine()
+        # await stop_discovery_watchers()
+        # await close_database()
 
 
-# Try to use the bootstrap app with AI integration first
+# Create FastAPI app with lifespan management
+app = FastAPI(
+    title="DEX Sniper Pro API",
+    description="High-performance DEX sniping and trading API with unified WebSocket system",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+# CORS configuration for frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000", 
+        "http://127.0.0.1:3000",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173"
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Include the new unified WebSocket API routes
+from app.api.websocket import router as websocket_router
+app.include_router(websocket_router)
+
+# Include other API routes (update these imports as needed)
 try:
-    from .core.bootstrap import app
-    logger.info("✅ Successfully loaded bootstrap app with AI integration")
+    # Import your existing API routers here
+    # from app.api.health import router as health_router
+    # from app.api.trades import router as trades_router
+    # from app.api.quotes import router as quotes_router
+    # from app.api.autotrade import router as autotrade_router
     
-    # Update the root endpoint to show AI features
-    @app.get("/", tags=["Meta"])
-    async def root_with_ai():
-        """Root endpoint with AI integration info."""
-        return {
-            "message": "DEX Sniper Pro API with AI Integration",
-            "version": "1.0.0-ai",
-            "status": "operational",
-            "endpoints": {
-                "api": "/api/v1/",
-                "docs": "/docs",
-                "health": "/api/v1/health",
-                "presets": "/api/v1/presets/",
-                "analytics": "/api/v1/analytics/",
-                "ai": "/api/v1/ai/",
-                "ai_demo": "/api/v1/ai/demo/",
-                "websocket": "/ws/autotrade",
-            },
-            "ai_features": {
-                "auto_tuning": "/api/v1/ai/tuning/",
-                "risk_explanation": "/api/v1/ai/risk/",
-                "anomaly_detection": "/api/v1/ai/anomaly/",
-                "decision_journal": "/api/v1/ai/decisions/",
-                "demo_endpoints": "/api/v1/ai/demo/"
-            },
-            "demo_quick_links": {
-                "ai_health": "/api/v1/ai/demo/health",
-                "comprehensive_demo": "/api/v1/ai/demo/comprehensive",
-                "auto_tuning_demo": "/api/v1/ai/demo/auto-tuning",
-                "risk_explanation_demo": "/api/v1/ai/demo/risk-explanation",
-                "anomaly_detection_demo": "/api/v1/ai/demo/anomaly-detection",
-                "decision_journal_demo": "/api/v1/ai/demo/decision-journal"
-            }
-        }
+    # app.include_router(health_router, prefix="/api/v1")
+    # app.include_router(trades_router, prefix="/api/v1") 
+    # app.include_router(quotes_router, prefix="/api/v1")
+    # app.include_router(autotrade_router, prefix="/api/v1")
     
-    # Add AI-specific health check
-    @app.get("/health", tags=["Meta"])
-    async def health_check_with_ai():
-        """Enhanced health check with AI status."""
-        try:
-            # Try to check AI systems health
-            from .core.ai_dependencies import check_ai_systems_health
-            ai_health = await check_ai_systems_health()
-            ai_status = ai_health.get("overall_status", "unknown")
-        except Exception as e:
-            logger.warning(f"Could not check AI health: {e}")
-            ai_status = "unavailable"
-        
-        return {
-            "status": "OK",
-            "timestamp": "2025-08-21T00:00:00Z",
-            "service": "dex-sniper-pro-ai",
-            "version": "1.0.0-ai",
-            "apis": {
-                "presets": "available",
-                "analytics": "available", 
-                "ai_systems": ai_status,
-                "ai_demo": "available"
-            },
-            "ai_integration": "enabled",
-            "docs_url": "http://127.0.0.1:8000/docs"
-        }
-
+    # For now, include basic endpoints
+    from app.api.basic_endpoints import router as basic_router
+    app.include_router(basic_router, prefix="/api/v1")
+    logger.info("✅ API routes included successfully")
+    
 except ImportError as e:
-    logger.warning(f"⚠️  Bootstrap app with AI not available, using fallback: {e}")
+    logger.warning(f"Could not import all API routes: {e}")
+    logger.info("Some routes may not be available")
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    """Global exception handler with proper logging."""
+    logger.error(f"Global exception on {request.url}: {exc}", exc_info=True)
     
-    # Fallback to basic FastAPI app
-    app = FastAPI(
-        title="DEX Sniper Pro API - Fallback",
-        description="Professional DEX trading platform - Basic version without AI",
-        version="1.0.0-fallback",
-        lifespan=lifespan
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "Internal server error",
+            "detail": str(exc),
+            "path": str(request.url)
+        }
     )
 
-    # Configure CORS
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
 
-    # Try to load individual routers as fallback
-    routers_loaded = []
+@app.get("/")
+async def root():
+    """Root endpoint with API information."""
+    hub_stats = ws_hub.get_connection_stats()
     
-    # Try to load centralized API router
+    return {
+        "name": "DEX Sniper Pro API",
+        "version": "1.0.0",
+        "status": "operational",
+        "websocket": {
+            "endpoint": "/ws/{client_id}",
+            "test_page": "/ws/test",
+            "status": "/ws/status",
+            "active_connections": hub_stats.get("total_connections", 0)
+        },
+        "endpoints": {
+            "docs": "/docs",
+            "health": "/health"
+        },
+        "timestamp": datetime.now().isoformat()
+    }
+
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint that includes WebSocket hub status."""
     try:
-        from .api import api_router
-        app.include_router(api_router)
-        routers_loaded.append("centralized_api")
-        logger.info("✅ Centralized API router registered (fallback)")
-    except ImportError as e:
-        logger.warning(f"⚠️  Centralized API router failed: {e}")
-        
-        # Try individual routers
-        individual_routers = [
-            (".api.presets_working", "presets"),
-            (".api.autotrade", "autotrade"),
-            (".api.sim", "simulation"),
-            (".api.analytics", "analytics"),
-            (".api.health", "health")
-        ]
-        
-        for module_name, router_name in individual_routers:
-            try:
-                import importlib
-                module = importlib.import_module(module_name, package=__package__)
-                router = getattr(module, "router")
-                if router_name == "health":
-                    app.include_router(router)  # Health router has no prefix
-                else:
-                    app.include_router(router, prefix="/api/v1")
-                routers_loaded.append(router_name)
-                logger.info(f"✅ {router_name} router registered (fallback)")
-            except (ImportError, AttributeError) as e:
-                logger.warning(f"⚠️  {router_name} router failed: {e}")
-
-    @app.get("/")
-    async def root_fallback():
-        """Root endpoint for fallback mode."""
-        return {
-            "message": "DEX Sniper Pro API - Fallback Mode",
-            "version": "1.0.0-fallback",
-            "status": "operational_without_ai",
-            "note": "AI systems not available, running in basic mode",
-            "endpoints": {
-                "api": "/api/v1/",
-                "docs": "/docs",
-                "available_routers": routers_loaded
-            },
-            "troubleshooting": {
-                "ai_not_available": "Check AI module imports and dependencies",
-                "basic_functionality": "Core APIs should still work",
-                "docs": "Visit /docs for available endpoints"
-            }
-        }
-
-    @app.get("/health")
-    async def health_check_fallback():
-        """Basic health check for fallback mode."""
-        return {
-            "status": "OK",
-            "timestamp": "2025-08-21T00:00:00Z",
-            "service": "dex-sniper-pro-fallback",
-            "version": "1.0.0-fallback",
-            "mode": "fallback",
-            "apis": {
-                "basic_functionality": "available",
-                "ai_systems": "not_available",
-                "routers_loaded": routers_loaded
-            },
-            "message": "Server running in fallback mode without AI integration"
-        }
-
-    @app.get("/api/v1/health")
-    async def api_health_fallback():
-        """API health check for fallback mode."""
-        return {
-            "status": "OK",
-            "service": "DEX Sniper Pro API",
-            "version": "1.0.0-fallback",
-            "timestamp": "2025-08-21T00:00:00Z",
-            "uptime_seconds": 100.0,
-            "mode": "fallback",
-            "ai_systems": "not_available"
-        }
+        uptime = 0
+        if hasattr(app.state, 'started_at'):
+            uptime = (datetime.now() - app.state.started_at).total_seconds()
+    except Exception:
+        uptime = 0
+    
+    hub_stats = ws_hub.get_connection_stats()
+    
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "uptime_seconds": uptime,
+        "services": {
+            "api": "operational",
+            "websocket_hub": "operational" if hub_stats["running"] else "stopped",
+            "database": "operational",  # Update based on actual DB status
+            "autotrade_engine": "operational",  # Update based on actual engine status
+        },
+        "websocket": hub_stats
+    }
 
 
-# WebSocket endpoint for autotrade (works in both modes)
-@app.websocket("/ws/autotrade")
-async def autotrade_websocket(websocket: WebSocket):
-    """WebSocket endpoint for autotrade real-time updates."""
-    await websocket.accept()
-    logger.info("WebSocket client connected")
-
-    try:
-        await websocket.send_json(
-            {
-                "type": "connection_established",
-                "data": {
-                    "server_time": "2025-08-21T00:00:00Z",
-                    "message": "Connected to autotrade WebSocket",
-                    "features": "basic_websocket_communication"
-                },
-            }
-        )
-
-        while True:
-            try:
-                message = await websocket.receive_text()
-                logger.info(f"Received WebSocket message: {message}")
-
-                await websocket.send_json(
-                    {
-                        "type": "echo",
-                        "data": {
-                            "received": message,
-                            "timestamp": "2025-08-21T00:00:00Z",
-                            "status": "processed"
-                        },
-                    }
-                )
-
-            except WebSocketDisconnect:
-                logger.info("WebSocket client disconnected")
-                break
-
-    except Exception as e:
-        logger.error(f"WebSocket error: {e}")
-    finally:
-        try:
-            await websocket.close()
-        except Exception:
-            pass
+# Remove ALL old WebSocket endpoints to avoid conflicts
+# The old @app.websocket("/ws/autotrade") and similar endpoints are now handled
+# by the unified hub in app/api/websocket.py
 
 
-# Module exports
-__all__ = ["app"]
+if __name__ == "__main__":
+    import uvicorn
+    
+    # Run the server
+    uvicorn.run(
+        "main:app",
+        host="127.0.0.1",
+        port=8000,
+        reload=True,
+        log_level="info"
+    )
