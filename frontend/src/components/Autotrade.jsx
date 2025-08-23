@@ -14,7 +14,7 @@ import AutotradeMonitor from './AutotradeMonitor';
 import AdvancedOrders from './AdvancedOrders';
 
 // Replace the existing useWebSocket import with:
-import { useWebSocketChannel } from '../hooks/useWebSocketChannel';
+import useWebSocketHub from '../hooks/useWebSocketHub';
 
 /**
  * Enhanced Autotrade dashboard component with comprehensive error handling.
@@ -232,9 +232,35 @@ const Autotrade = () => {
   };
 
   // In the component, replace the WebSocket connection with:
-  const { data: wsData, connected: wsConnected, sendMessage } = useWebSocketChannel('autotrade', {
-    onMessage: handleWebSocketMessage
+  const { 
+    lastMessage: wsData, 
+    connected: wsConnected, 
+    sendMessage,
+    error: wsError 
+  } = useWebSocketHub('/ws/autotrade', ['autotrade'], {
+    onMessage: handleWebSocketMessage,
+    onConnectionChange: (state) => {
+      if (state === 'connected') {
+        console.log('[Autotrade] WebSocket connected');
+      } else if (state === 'disconnected') {
+        console.log('[Autotrade] WebSocket disconnected');
+      }
+    }
   });
+
+// ADD this useEffect to handle WebSocket messages:
+useEffect(() => {
+  if (wsData) {
+    handleWebSocketMessage(wsData);
+  }
+}, [wsData]);
+
+// ADD this useEffect to handle WebSocket errors:
+useEffect(() => {
+  if (wsError) {
+    setError(`WebSocket error: ${wsError}`);
+  }
+}, [wsError]);
 
   /**
    * Load initial data from API with retry logic

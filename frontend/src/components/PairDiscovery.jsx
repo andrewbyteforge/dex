@@ -32,8 +32,8 @@ import {
   Activity
 } from 'lucide-react';
 
-// Remove all the manual WebSocket code and replace with:
-import { useWebSocketChannel } from '../hooks/useWebSocketChannel';
+// Correct WebSocket hook import
+import useWebSocket from '../hooks/useWebSocket';
 
 const PairDiscovery = ({ walletAddress, selectedChain = 'ethereum', onTradeRequest = null }) => {
   // Component state
@@ -60,6 +60,38 @@ const PairDiscovery = ({ walletAddress, selectedChain = 'ethereum', onTradeReque
   const tableBodyRef = useRef(null);
   const [autoScroll, setAutoScroll] = useState(true);
 
+  // Correct WebSocket connection using useWebSocket hook
+  const { 
+    data: wsData, 
+    connected: wsConnected, 
+    sendMessage,
+    error: wsError 
+  } = useWebSocket('/ws/discovery', {
+    autoConnect: isDiscoveryActive,
+    onOpen: () => {
+      addToast('Discovery feed connected', 'success');
+    },
+    onClose: () => {
+      if (isDiscoveryActive) {
+        addToast('Discovery feed disconnected', 'warning');
+      }
+    }
+  });
+
+  // Handle WebSocket messages
+  useEffect(() => {
+    if (wsData) {
+      handleWebSocketMessage(wsData);
+    }
+  }, [wsData]);
+
+  // Handle WebSocket errors
+  useEffect(() => {
+    if (wsError) {
+      addToast(`Connection error: ${wsError}`, 'danger');
+    }
+  }, [wsError]);
+
   // Update chain filter when selectedChain changes
   useEffect(() => {
     setFilters((prev) => ({
@@ -82,7 +114,6 @@ const PairDiscovery = ({ walletAddress, selectedChain = 'ethereum', onTradeReque
         setIsDiscoveryActive(status.is_running || false);
       }
     } catch (err) {
-      // eslint-disable-next-line no-console
       console.error('Failed to check discovery status:', err);
     }
   };
@@ -90,14 +121,13 @@ const PairDiscovery = ({ walletAddress, selectedChain = 'ethereum', onTradeReque
   const handleWebSocketMessage = (data) => {
     switch (data.type) {
       case 'connection_established':
-        // eslint-disable-next-line no-console
         console.log('Discovery WebSocket established');
         // When connection established, (re)send current filters if discovery is active
         if (isDiscoveryActive) {
           try {
-            sendMessage?.({ type: 'set_filters', filters });
+            sendMessage({ type: 'set_filters', filters });
           } catch {
-            /* noop */
+            // Silent fail
           }
         }
         break;
@@ -111,20 +141,13 @@ const PairDiscovery = ({ walletAddress, selectedChain = 'ethereum', onTradeReque
         break;
 
       case 'filters_updated':
-        // eslint-disable-next-line no-console
         console.log('Filters updated on server');
         break;
 
       default:
-        // eslint-disable-next-line no-console
         console.log('Unknown WebSocket message type:', data.type);
     }
   };
-
-  // In the component, replace the WebSocket connection with:
-  const { data: wsData, connected: wsConnected, sendMessage } = useWebSocketChannel('discovery', {
-    onMessage: handleWebSocketMessage
-  });
 
   const handleNewPairDiscovered = (eventData) => {
     const newPair = {
@@ -157,7 +180,7 @@ const PairDiscovery = ({ walletAddress, selectedChain = 'ethereum', onTradeReque
     // Show toast for high-opportunity pairs
     if (eventData.risk_score && eventData.risk_score < 30) {
       addToast(
-        `🎯 Low risk pair discovered: ${getTokenSymbol(eventData.token0)}/${getTokenSymbol(eventData.token1)}`,
+        `Low risk pair discovered: ${getTokenSymbol(eventData.token0)}/${getTokenSymbol(eventData.token1)}`,
         'success'
       );
     }
@@ -190,12 +213,12 @@ const PairDiscovery = ({ walletAddress, selectedChain = 'ethereum', onTradeReque
         setIsDiscoveryActive(goingActive);
         addToast(goingActive ? 'Discovery started' : 'Discovery stopped', 'success');
 
-        // (Re)send filters to the server over the channel when starting
-        if (goingActive) {
+        // (Re)send filters to the server when starting
+        if (goingActive && wsConnected) {
           try {
-            sendMessage?.({ type: 'set_filters', filters });
+            sendMessage({ type: 'set_filters', filters });
           } catch {
-            /* noop */
+            // Silent fail
           }
         }
       } else {
@@ -212,14 +235,16 @@ const PairDiscovery = ({ walletAddress, selectedChain = 'ethereum', onTradeReque
   const updateFilters = (newFilters) => {
     setFilters(newFilters);
 
-    // Send updated filters to the backend channel if connected
-    try {
-      sendMessage?.({
-        type: 'set_filters',
-        filters: newFilters
-      });
-    } catch {
-      /* noop */
+    // Send updated filters to the backend if connected
+    if (wsConnected) {
+      try {
+        sendMessage({
+          type: 'set_filters',
+          filters: newFilters
+        });
+      } catch {
+        // Silent fail
+      }
     }
   };
 

@@ -568,9 +568,10 @@ function App() {
   );
 }
 
-// Helper component to consume WebSocket context
+import { useWebSocketContext } from './contexts/WebSocketContext.jsx';
+
 const WebSocketConsumer = ({ children }) => {
-  const { connectionState } = require('./contexts/WebSocketContext.jsx').useWebSocketContext();
+  const { connectionState } = useWebSocketContext();
   return children({ connectionState });
 };
 

@@ -18,32 +18,40 @@ const generateClientId = () => {
 
 /**
  * Get the appropriate WebSocket URL based on environment
+ * @param {string} url - WebSocket URL path
+ * @returns {string|null} - Complete WebSocket URL
  */
-const getWebSocketUrl = useCallback(() => {
+/**
+ * Get the appropriate WebSocket URL based on environment
+ * @param {string} url - WebSocket URL path
+ * @returns {string|null} - Complete WebSocket URL
+ */
+const getWebSocketUrl = (url) => {
   if (!url) return null;
-  
+
   // If URL is already absolute, return as-is
   if (url.startsWith('ws://') || url.startsWith('wss://')) {
     return url;
   }
-  
-  // Build WebSocket URL from current location
+
+  // Build WebSocket URL from current location - let Vite proxy handle it
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const host = window.location.host;
+  const host = window.location.host; // Use frontend host for proxy
   const path = url.startsWith('/') ? url : `/${url}`;
-  
+
   // Validate that this is an expected WebSocket route
   const expectedRoutes = ['/ws/discovery/', '/ws/autotrade', '/ws/monitoring', '/ws/alerts'];
   const isValidRoute = expectedRoutes.some(route => path.startsWith(route));
-  
+
   if (!isValidRoute) {
     console.warn('WebSocket URL not in expected routes:', path);
     console.log('Expected routes:', expectedRoutes);
     return null; // Prevent connection to invalid routes
   }
-  
+
   return `${protocol}//${host}${path}`;
-}, [url]);
+};
+
 
 /**
  * WebSocket connection states
@@ -59,6 +67,7 @@ const ConnectionState = {
 /**
  * Enhanced WebSocket hook with channel subscriptions
  * 
+ * @param {string} url - WebSocket URL (e.g., '/ws/autotrade')
  * @param {string[]} channels - Array of channels to subscribe to
  * @param {Object} options - Configuration options
  * @param {number} options.maxReconnectAttempts - Maximum reconnection attempts (default: 5)
@@ -68,7 +77,7 @@ const ConnectionState = {
  * @param {Function} options.onConnectionChange - Callback for connection state changes
  * @returns {Object} WebSocket connection state and methods
  */
-const useWebSocketHub = (channels = [], options = {}) => {
+const useWebSocketHub = (url, channels = [], options = {}) => {
   const {
     maxReconnectAttempts = 5,
     reconnectInterval = 1000,
@@ -92,11 +101,16 @@ const useWebSocketHub = (channels = [], options = {}) => {
   const messageQueueRef = useRef([]);
   const mountedRef = useRef(true);
   const channelsRef = useRef(new Set(channels));
+  const urlRef = useRef(url);
 
-  // Update channels ref when channels prop changes
+  // Update refs when props change
   useEffect(() => {
     channelsRef.current = new Set(channels);
   }, [channels]);
+
+  useEffect(() => {
+    urlRef.current = url;
+  }, [url]);
 
   /**
    * Update connection state and notify listeners
@@ -157,7 +171,7 @@ const useWebSocketHub = (channels = [], options = {}) => {
       return true; // Already subscribed
     }
 
-    const success = sendMessage('subscription_ack', 'system', {
+    const success = sendMessage('subscribe', 'system', {
       action: 'subscribe',
       channel: channel
     });
@@ -177,7 +191,7 @@ const useWebSocketHub = (channels = [], options = {}) => {
       return true; // Not subscribed
     }
 
-    const success = sendMessage('subscription_ack', 'system', {
+    const success = sendMessage('unsubscribe', 'system', {
       action: 'unsubscribe',
       channel: channel
     });
@@ -234,7 +248,13 @@ const useWebSocketHub = (channels = [], options = {}) => {
     setError(null);
 
     try {
-      const wsUrl = getWebSocketUrl(clientIdRef.current);
+      const wsUrl = getWebSocketUrl(urlRef.current);
+      if (!wsUrl) {
+        setError('Invalid WebSocket URL');
+        updateConnectionState(ConnectionState.ERROR);
+        return;
+      }
+
       console.log(`Connecting to WebSocket: ${wsUrl}`);
 
       wsRef.current = new WebSocket(wsUrl);
@@ -371,7 +391,7 @@ const useWebSocketHub = (channels = [], options = {}) => {
   useEffect(() => {
     mountedRef.current = true;
 
-    if (autoConnect) {
+    if (autoConnect && url) {
       connect();
     }
 
