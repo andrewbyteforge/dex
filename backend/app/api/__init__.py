@@ -1,7 +1,6 @@
 """
 DEX Sniper Pro - API Router Configuration.
 Updated to use the new unified WebSocket system and remove conflicts.
-
 File: backend/app/api/__init__.py
 """
 
@@ -9,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from typing import Dict, Any
+
 from fastapi import APIRouter
 from fastapi.routing import APIRoute
 
@@ -18,7 +18,8 @@ logger = logging.getLogger(__name__)
 # Create main API router
 api_router = APIRouter(prefix="/api/v1")
 
-def _register_router(module_name: str, router_name: str = "router", description: str = None) -> bool:
+
+def register_router(module_name: str, router_name: str = "router", description: str = None) -> bool:
     """
     Safely register a router with error handling.
     
@@ -51,25 +52,26 @@ def _register_router(module_name: str, router_name: str = "router", description:
         logger.error(f"❌ {desc} API registration failed: {e}")
         return False
 
+
 # Register core working modules first
-_register_router("basic_endpoints", description="Core Endpoints")
-_register_router("health", description="Health Check")
+register_router("basic_endpoints", description="Core Endpoints")
+register_router("health", description="Health Check")
 
 # Register other modules with safe error handling
-_register_router("database", description="Database Operations")
-_register_router("wallet", description="Wallet Management") 
-_register_router("quotes", description="Price Quotes")
-_register_router("trades", description="Trade Execution")
-_register_router("pairs", description="Trading Pairs")
-_register_router("risk", description="Risk Assessment")
-_register_router("analytics", description="Performance Analytics")
-_register_router("orders", description="Advanced Orders")
-_register_router("discovery", description="Pair Discovery")
-_register_router("safety", description="Safety Controls")
-_register_router("autotrade", description="Automated Trading")
-_register_router("sim", description="Simulation & Backtesting")
-_register_router("monitoring", description="Monitoring & Alerting")
-_register_router("diagnostics", description="Self-Diagnostic Tools")
+register_router("database", description="Database Operations")
+register_router("wallet", description="Wallet Management")
+register_router("quotes", description="Price Quotes")
+register_router("trades", description="Trade Execution")
+register_router("pairs", description="Trading Pairs")
+register_router("risk", description="Risk Assessment")
+register_router("analytics", description="Performance Analytics")
+register_router("orders", description="Advanced Orders")
+register_router("discovery", description="Pair Discovery")
+register_router("safety", description="Safety Controls")
+register_router("autotrade", description="Automated Trading")
+register_router("sim", description="Simulation & Backtesting")
+register_router("monitoring", description="Monitoring & Alerting")
+register_router("diagnostics", description="Self-Diagnostic Tools")
 
 # Working preset system
 try:
@@ -80,12 +82,13 @@ except ImportError as e:
     logger.warning(f"⚠️  Working Presets API not available: {e}")
 
 
-# REMOVED: Old WebSocket setup function that caused conflicts
-# The new unified WebSocket system is handled in websocket.py and main.py
-# No more setup_websocket_routes function needed
-
 def get_registered_routes() -> Dict[str, Any]:
-    """Get summary of registered routes for debugging."""
+    """
+    Get summary of registered routes for debugging.
+    
+    Returns:
+        Dict containing route information
+    """
     routes = {
         "http_endpoints": [],
         "websocket_info": "WebSocket endpoints handled by unified hub at /ws/{client_id}",
@@ -102,4 +105,8 @@ def get_registered_routes() -> Dict[str, Any]:
     
     return routes
 
-__all__ = ["api_router", "get_registered_routes"]
+
+# CRITICAL: Export 'router' as alias for main.py compatibility
+router = api_router
+
+__all__ = ["api_router", "router", "get_registered_routes"]
