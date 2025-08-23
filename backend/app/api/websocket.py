@@ -315,3 +315,29 @@ async def broadcast_system_message(message_type: MessageType, data: dict) -> int
     )
     
     return await ws_hub.broadcast_to_channel(Channel.SYSTEM, message)
+
+
+
+
+
+
+
+@router.websocket("/autotrade")
+async def websocket_autotrade_endpoint(websocket: WebSocket):
+    """Legacy autotrade WebSocket endpoint for frontend compatibility."""
+    client_id = f"autotrade_{uuid.uuid4().hex[:8]}"
+    logger.info(f"Autotrade WebSocket connection: {client_id}")
+    
+    # Use existing hub connection logic
+    connected = await ws_hub.connect_client(client_id, websocket)
+    if not connected:
+        return
+    
+    try:
+        while True:
+            data = await websocket.receive_text()
+            await ws_hub.handle_client_message(client_id, data)
+    except WebSocketDisconnect:
+        logger.info(f"Autotrade WebSocket disconnected: {client_id}")
+    finally:
+        await ws_hub.disconnect_client(client_id, "Connection closed")

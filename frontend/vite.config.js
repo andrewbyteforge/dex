@@ -23,7 +23,7 @@ export default defineConfig({
     // Explicit proxy configuration for backend
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        target: 'http://localhost:8001',
         changeOrigin: true,
         secure: false,
         ws: false, // Separate WebSocket handling to avoid conflicts
@@ -69,7 +69,7 @@ export default defineConfig({
         }
       },
       '/ws': {
-        target: 'http://localhost:8000',
+        target: 'http://localhost:8001',
         changeOrigin: true,
         secure: false,
         ws: true,
@@ -109,7 +109,7 @@ export default defineConfig({
               method: req.method,
               origin: req.headers.origin,
               userAgent: req.headers['user-agent']?.substring(0, 50) + '...',
-              target: `http://localhost:8000${req.url}`, // Fixed: proper string interpolation
+              target: `http://localhost:8001${req.url}`, // Fixed: proper string interpolation
               timestamp: new Date().toISOString()
             });
 
