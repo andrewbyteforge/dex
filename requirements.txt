@@ -1,0 +1,59 @@
+# DEX Sniper Pro - Production Requirements
+# Generated: 2025-08-24T12:13:33.557495
+
+# Core Web Framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+
+# Database & ORM
+sqlalchemy[asyncio]>=2.0.0
+asyncpg>=0.29.0              # PostgreSQL async driver
+aiosqlite>=0.19.0            # SQLite async driver (development)
+alembic>=1.13.0              # Database migrations
+
+# Authentication & Security  
+python-jose[cryptography]>=3.3.0    # JWT tokens
+passlib[bcrypt]>=1.7.4               # Password hashing
+cryptography>=41.0.0                 # Encryption utilities
+
+# Rate Limiting & Caching
+redis>=5.0.0                         # Redis client
+aioredis>=2.0.1                      # Async Redis client
+slowapi>=0.1.9                       # Rate limiting middleware
+
+# HTTP & WebSocket
+httpx>=0.25.0                        # Async HTTP client
+websockets>=12.0                     # WebSocket support
+
+# Blockchain & Web3
+web3>=6.11.0                         # Ethereum web3 client
+eth-account>=0.10.0                  # Ethereum account management
+# solana>=0.31.0                     # Solana client (uncomment if needed)
+
+# Data Processing & Validation
+pydantic>=2.5.0                      # Data validation
+pydantic-settings>=2.1.0             # Settings management
+pandas>=2.1.0                        # Data analysis (optional)
+numpy>=1.25.0                        # Numerical computing (optional)
+
+# Async Utilities
+aiofiles>=23.2.1                     # Async file operations
+
+# Production Server & Monitoring
+gunicorn>=21.2.0                     # WSGI server
+prometheus-client>=0.19.0            # Metrics (optional)
+psutil>=5.9.0                        # System monitoring (optional)
+
+# Development Tools (remove in production deployment)
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+
+# Optional Production Features (uncomment as needed)
+# celery>=5.3.0                      # Task queue
+# sentry-sdk[fastapi]>=1.38.0        # Error tracking
+# structlog>=23.2.0                  # Structured logging
+
+# Linting & Formatting (development only)
+# black>=23.0.0
+# flake8>=6.0.0  
+# mypy>=1.7.0

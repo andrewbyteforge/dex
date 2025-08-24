@@ -17,7 +17,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from eth_account import Account
 from eth_account.signers.local import LocalAccount
-from solana.keypair import Keypair
+from solders.keypair import Keypair
 from solders.pubkey import Pubkey
 
 from ..core.settings import settings

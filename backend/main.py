@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import traceback
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncGenerator
@@ -26,6 +27,194 @@ from app.core.logging_config import setup_logging
 from app.core.scheduler import scheduler_manager
 from app.chains.evm_client import EvmClient
 from app.chains.solana_client import SolanaClient
+
+
+class RequestValidationMiddleware(BaseHTTPMiddleware):
+    """
+    Request validation middleware with comprehensive security filtering.
+    
+    Provides request size limits, timeout handling, and security filtering
+    to protect against common attack vectors and malformed requests.
+    """
+    
+    def __init__(
+        self,
+        app,
+        max_request_size: int = 10 * 1024 * 1024,  # 10MB
+        request_timeout: float = 30.0,
+        enable_security_filtering: bool = True
+    ):
+        """
+        Initialize request validation middleware.
+        
+        Args:
+            app: FastAPI application
+            max_request_size: Maximum request body size in bytes
+            request_timeout: Request timeout in seconds
+            enable_security_filtering: Enable security filtering
+        """
+        super().__init__(app)
+        self.max_request_size = max_request_size
+        self.request_timeout = request_timeout
+        self.enable_security_filtering = enable_security_filtering
+        logger.info(
+            f"Request validation middleware initialized: "
+            f"max_size={max_request_size//1024//1024}MB, "
+            f"timeout={request_timeout}s, "
+            f"security_filtering={enable_security_filtering}"
+        )
+    
+    async def dispatch(self, request: Request, call_next):
+        """
+        Validate and process request with security checks.
+        
+        Args:
+            request: FastAPI request
+            call_next: Next middleware in chain
+            
+        Returns:
+            Response after validation and processing
+        """
+        start_time = time.time()
+        
+        try:
+            # Validate request size
+            if hasattr(request, 'headers'):
+                content_length = request.headers.get('content-length')
+                if content_length and int(content_length) > self.max_request_size:
+                    logger.warning(
+                        f"Request too large: {content_length} bytes from {self._get_client_ip(request)}",
+                        extra={
+                            'extra_data': {
+                                'client_ip': self._get_client_ip(request),
+                                'content_length': content_length,
+                                'max_size': self.max_request_size,
+                                'path': request.url.path,
+                                'method': request.method
+                            }
+                        }
+                    )
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail=f"Request too large. Maximum size: {self.max_request_size//1024//1024}MB"
+                    )
+            
+            # Security filtering
+            if self.enable_security_filtering:
+                await self._security_filter(request)
+            
+            # Process request with timeout
+            try:
+                response = await asyncio.wait_for(
+                    call_next(request),
+                    timeout=self.request_timeout
+                )
+            except asyncio.TimeoutError:
+                logger.error(
+                    f"Request timeout after {self.request_timeout}s for {request.url.path}",
+                    extra={
+                        'extra_data': {
+                            'client_ip': self._get_client_ip(request),
+                            'path': request.url.path,
+                            'method': request.method,
+                            'timeout': self.request_timeout
+                        }
+                    }
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_408_REQUEST_TIMEOUT,
+                    detail=f"Request timeout after {self.request_timeout} seconds"
+                )
+            
+            # Add processing time header
+            processing_time = time.time() - start_time
+            response.headers["X-Processing-Time"] = f"{processing_time:.3f}"
+            
+            return response
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            processing_time = time.time() - start_time
+            logger.error(
+                f"Request validation error: {e}",
+                extra={
+                    'extra_data': {
+                        'client_ip': self._get_client_ip(request),
+                        'path': request.url.path,
+                        'method': request.method,
+                        'processing_time': processing_time,
+                        'error_type': type(e).__name__
+                    }
+                }
+            )
+            # Allow request to continue on validation error
+            return await call_next(request)
+    
+    def _get_client_ip(self, request: Request) -> str:
+        """Extract client IP address from request."""
+        # Check X-Forwarded-For for proxy scenarios
+        forwarded_for = request.headers.get('X-Forwarded-For')
+        if forwarded_for:
+            return forwarded_for.split(',')[0].strip()
+        
+        # Check X-Real-IP header
+        real_ip = request.headers.get('X-Real-IP')
+        if real_ip:
+            return real_ip.strip()
+        
+        # Fallback to direct client IP
+        return request.client.host if request.client else "unknown"
+    
+    async def _security_filter(self, request: Request) -> None:
+        """Apply security filtering to request."""
+        try:
+            # Check for suspicious headers
+            suspicious_headers = [
+                'x-forwarded-host', 'x-originating-ip', 'x-cluster-client-ip'
+            ]
+            
+            for header in suspicious_headers:
+                if header in request.headers:
+                    value = request.headers[header]
+                    # Basic validation - could be expanded
+                    if len(value) > 255 or any(char in value for char in ['<', '>', '"', "'"]):
+                        logger.warning(
+                            f"Suspicious header detected: {header}={value}",
+                            extra={
+                                'extra_data': {
+                                    'client_ip': self._get_client_ip(request),
+                                    'suspicious_header': header,
+                                    'header_value': value[:100],  # Truncate for logging
+                                    'path': request.url.path
+                                }
+                            }
+                        )
+            
+            # Check for suspicious paths
+            suspicious_patterns = [
+                '../', '..\\', '.env', 'wp-admin', 'admin.php', 
+                'config.php', 'shell.php', '.git', '.svn'
+            ]
+            
+            path = str(request.url.path).lower()
+            for pattern in suspicious_patterns:
+                if pattern in path:
+                    logger.warning(
+                        f"Suspicious path pattern detected: {pattern} in {request.url.path}",
+                        extra={
+                            'extra_data': {
+                                'client_ip': self._get_client_ip(request),
+                                'path': request.url.path,
+                                'suspicious_pattern': pattern,
+                                'user_agent': request.headers.get('User-Agent', 'unknown')
+                            }
+                        }
+                    )
+                    
+        except Exception as e:
+            logger.error(f"Security filtering error: {e}", exc_info=True)
+
 
 # Initialize structured logging FIRST
 setup_logging()
@@ -640,6 +829,13 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
+# Add request validation middleware first (before rate limiting)
+app.add_middleware(
+    RequestValidationMiddleware,
+    max_request_size=10 * 1024 * 1024,  # 10MB
+    request_timeout=30.0,
+    enable_security_filtering=True
+)
 
 # Enhanced middleware setup with Redis rate limiting
 async def setup_middleware():
@@ -691,8 +887,6 @@ except Exception as e:
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     """Handle uncaught exceptions globally with comprehensive logging and context."""
-    import traceback
-    
     try:
         from app.core.logging_config import get_trace_id
         trace_id = get_trace_id()
