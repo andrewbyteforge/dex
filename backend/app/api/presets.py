@@ -680,13 +680,16 @@ async def update_preset(preset_id: str, config: PresetConfig) -> PresetDetail:
     return updated_preset
 
 
-@router.delete("/{preset_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{preset_id}", status_code=204, response_model=None)
 async def delete_preset(preset_id: str) -> None:
     """
     Delete a custom preset.
     
     Args:
         preset_id: Preset identifier
+        
+    Returns:
+        No content (HTTP 204)
     """
     logger.info(f"Deleting preset: {preset_id}")
     
@@ -707,6 +710,8 @@ async def delete_preset(preset_id: str) -> None:
     del _custom_presets[preset_id]
     
     logger.info(f"Deleted preset: {preset_id}")
+    # Explicitly return None for HTTP 204
+    return None
 
 
 @router.post("/{preset_id}/validate", response_model=PresetValidation)
