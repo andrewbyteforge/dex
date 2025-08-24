@@ -27,6 +27,12 @@ class UniswapV3Adapter:
     
     Handles fee tier discovery, quote calculation with concentrated liquidity,
     and transaction building for Uniswap V3-compatible DEXs.
+    
+    Features:
+    - Primary quoter contract integration with V2 interface
+    - Fallback direct pool calculation when quoters fail
+    - Comprehensive error handling and logging
+    - Multi-chain support (Ethereum, Base, Polygon, Arbitrum)
     """
     
     def __init__(self, dex_name: str = "uniswap_v3") -> None:
@@ -63,7 +69,7 @@ class UniswapV3Adapter:
             }
         ]
         
-        # Pool ABI for liquidity checks
+        # Pool ABI for liquidity checks and direct calculation
         self.pool_abi = [
             {
                 "inputs": [],
@@ -86,6 +92,20 @@ class UniswapV3Adapter:
                     {"internalType": "uint8", "name": "feeProtocol", "type": "uint8"},
                     {"internalType": "bool", "name": "unlocked", "type": "bool"}
                 ],
+                "stateMutability": "view",
+                "type": "function"
+            },
+            {
+                "inputs": [],
+                "name": "token0",
+                "outputs": [{"internalType": "address", "name": "", "type": "address"}],
+                "stateMutability": "view",
+                "type": "function"
+            },
+            {
+                "inputs": [],
+                "name": "token1", 
+                "outputs": [{"internalType": "address", "name": "", "type": "address"}],
                 "stateMutability": "view",
                 "type": "function"
             }
@@ -139,6 +159,7 @@ class UniswapV3Adapter:
             }
     
     async def get_quote(
+        self,
         chain: str,
         token_in: str,
         token_out: str,
@@ -148,6 +169,9 @@ class UniswapV3Adapter:
     ) -> Dict[str, Any]:
         """
         Get quote for token swap with fee tier enumeration.
+        
+        Uses primary quoter contract with fallback to direct pool calculation
+        when quoter contracts fail or revert.
         
         Args:
             chain: Blockchain network
@@ -179,23 +203,23 @@ class UniswapV3Adapter:
             # Get Web3 instance
             w3 = await self._get_web3_instance(chain, chain_clients)
             
-            # Get quoter contract
-            quoter_address = self.quoter_addresses[chain]
-            quoter_contract = w3.eth.contract(
-                address=w3.to_checksum_address(quoter_address),
-                abi=self.quoter_abi
-            )
-            
             # Convert addresses and amount
             token_in_addr = w3.to_checksum_address(token_in)
             token_out_addr = w3.to_checksum_address(token_out)
             amount_in_wei = int(amount_in * Decimal(10**18))
             
-            # Try all fee tiers and find the best quote
+            # Phase 1: Try quoter contracts first
             best_quote = None
             best_fee_tier = None
             best_gas_estimate = GAS_ESTIMATE_V3_SWAP
             quotes_by_tier = {}
+            quoter_success = False
+            
+            quoter_address = self.quoter_addresses[chain]
+            quoter_contract = w3.eth.contract(
+                address=w3.to_checksum_address(quoter_address),
+                abi=self.quoter_abi
+            )
             
             for fee_tier in self.fee_tiers:
                 try:
@@ -220,15 +244,71 @@ class UniswapV3Adapter:
                                 best_quote = amount_out
                                 best_fee_tier = fee_tier
                                 best_gas_estimate = gas_est
+                                quoter_success = True
                                 
                 except Exception as fee_error:
-                    logger.debug(f"Fee tier {fee_tier} failed for {self.dex_name}: {fee_error}")
+                    logger.debug(
+                        f"Fee tier {fee_tier} quoter failed for {self.dex_name}: {fee_error}",
+                        extra={'extra_data': {
+                            'chain': chain,
+                            'fee_tier': fee_tier,
+                            'dex_name': self.dex_name,
+                            'error_type': type(fee_error).__name__
+                        }}
+                    )
                     continue
             
+            # Phase 2: Fallback to direct pool calculation if quoter failed
+            if best_quote is None:
+                logger.info(
+                    f"Quoter contracts failed, trying direct pool calculation for {self.dex_name}",
+                    extra={'extra_data': {
+                        'chain': chain,
+                        'dex_name': self.dex_name,
+                        'fallback_reason': 'quoter_failure'
+                    }}
+                )
+                
+                for fee_tier in self.fee_tiers:
+                    try:
+                        direct_result = await self._get_quote_from_pool_direct(
+                            w3, token_in_addr, token_out_addr, fee_tier, amount_in, chain
+                        )
+                        
+                        if direct_result:
+                            amount_out, price_impact_calc, gas_estimate = direct_result
+                            amount_out_wei = int(amount_out * Decimal(10**18))
+                            
+                            if best_quote is None or amount_out_wei > best_quote:
+                                best_quote = amount_out_wei
+                                best_fee_tier = fee_tier
+                                best_gas_estimate = gas_estimate
+                                
+                                # Store for quotes_by_tier
+                                quotes_by_tier[fee_tier] = {
+                                    "amount_out": amount_out_wei,
+                                    "sqrt_price_after": 0,  # Not available from direct calc
+                                    "ticks_crossed": 0,
+                                    "gas_estimate": gas_estimate,
+                                }
+                                
+                    except Exception as direct_error:
+                        logger.debug(
+                            f"Direct calculation failed for fee tier {fee_tier}: {direct_error}",
+                            extra={'extra_data': {
+                                'chain': chain,
+                                'fee_tier': fee_tier,
+                                'dex_name': self.dex_name,
+                                'error_type': type(direct_error).__name__
+                            }}
+                        )
+                        continue
+            
+            # Phase 3: Final validation and response construction
             if best_quote is None:
                 return {
                     "success": False,
-                    "error": "No valid quotes found for any fee tier",
+                    "error": "No valid quotes found via quoter or direct calculation",
                     "dex": self.dex_name,
                     "chain": chain,
                     "execution_time_ms": (time.time() - start_time) * 1000,
@@ -240,7 +320,7 @@ class UniswapV3Adapter:
             # Calculate price and price impact
             price = amount_out / amount_in if amount_in > 0 else Decimal("0")
             
-            # Calculate price impact for V3 (more complex due to concentrated liquidity)
+            # Calculate price impact for V3
             price_impact = await self._calculate_v3_price_impact(
                 w3, token_in_addr, token_out_addr, best_fee_tier,
                 amount_in, amount_out, chain
@@ -250,6 +330,20 @@ class UniswapV3Adapter:
             min_amount_out = amount_out * (Decimal("1") - slippage_tolerance)
             
             execution_time_ms = (time.time() - start_time) * 1000
+            
+            # Log successful quote
+            logger.info(
+                f"Quote successful for {self.dex_name}",
+                extra={'extra_data': {
+                    'chain': chain,
+                    'dex_name': self.dex_name,
+                    'fee_tier': best_fee_tier,
+                    'amount_in': str(amount_in),
+                    'amount_out': str(amount_out),
+                    'method': 'quoter' if quoter_success else 'direct_pool',
+                    'execution_time_ms': execution_time_ms
+                }}
+            )
             
             return {
                 "success": True,
@@ -263,7 +357,7 @@ class UniswapV3Adapter:
                 "price": str(price),
                 "price_impact": str(price_impact),
                 "fee_tier": best_fee_tier,
-                "fee_percentage": str(Decimal(best_fee_tier) / Decimal(1000000)),  # Convert to %
+                "fee_percentage": str(Decimal(best_fee_tier) / Decimal(1000000)),
                 "route": [token_in_addr.lower(), token_out_addr.lower()],
                 "gas_estimate": int(best_gas_estimate),
                 "slippage_tolerance": str(slippage_tolerance),
@@ -275,20 +369,22 @@ class UniswapV3Adapter:
                     for tier, data in quotes_by_tier.items()
                 },
                 "execution_time_ms": execution_time_ms,
+                "quote_method": "quoter" if quoter_success else "direct_pool"
             }
             
         except Exception as e:
-            logger.warning(
+            logger.error(
                 f"Quote failed for {self.dex_name} on {chain}: {e}",
-                extra={
-                    'extra_data': {
-                        'chain': chain,
-                        'token_in': token_in,
-                        'token_out': token_out,
-                        'amount_in': str(amount_in),
-                        'error': str(e),
-                    }
-                }
+                extra={'extra_data': {
+                    'chain': chain,
+                    'token_in': token_in,
+                    'token_out': token_out,
+                    'amount_in': str(amount_in),
+                    'dex_name': self.dex_name,
+                    'error_type': type(e).__name__,
+                    'error': str(e),
+                }},
+                exc_info=True
             )
             return {
                 "success": False,
@@ -297,6 +393,113 @@ class UniswapV3Adapter:
                 "chain": chain,
                 "execution_time_ms": (time.time() - start_time) * 1000,
             }
+    
+    async def _get_quote_from_pool_direct(
+        self,
+        w3: Web3,
+        token_in_addr: str,
+        token_out_addr: str,
+        fee_tier: int,
+        amount_in: Decimal,
+        chain: str
+    ) -> Optional[Tuple[Decimal, Decimal, int]]:
+        """
+        Get quote directly from pool state (fallback when quoter fails).
+        
+        Uses Uniswap V3 pool mathematics to calculate approximate output
+        without relying on quoter contracts.
+        
+        Args:
+            w3: Web3 instance
+            token_in_addr: Input token address (checksum)
+            token_out_addr: Output token address (checksum)
+            fee_tier: Fee tier (500, 3000, 10000)
+            amount_in: Input amount in token units
+            chain: Blockchain network
+            
+        Returns:
+            Tuple of (amount_out, price_impact, gas_estimate) or None if failed
+        """
+        try:
+            # Get pool address
+            factory_address = self.factory_addresses[chain]
+            factory_contract = w3.eth.contract(
+                address=w3.to_checksum_address(factory_address),
+                abi=self.factory_abi
+            )
+            
+            pool_address = await asyncio.to_thread(
+                factory_contract.functions.getPool(
+                    token_in_addr, token_out_addr, fee_tier
+                ).call
+            )
+            
+            if pool_address == "0x0000000000000000000000000000000000000000":
+                return None
+                
+            # Get pool contract and state
+            pool_contract = w3.eth.contract(
+                address=w3.to_checksum_address(pool_address),
+                abi=self.pool_abi
+            )
+            
+            # Fetch pool state in parallel
+            slot0_task = asyncio.to_thread(pool_contract.functions.slot0().call)
+            token0_task = asyncio.to_thread(pool_contract.functions.token0().call)
+            liquidity_task = asyncio.to_thread(pool_contract.functions.liquidity().call)
+            
+            slot0, token0, liquidity = await asyncio.gather(
+                slot0_task, token0_task, liquidity_task
+            )
+            
+            sqrt_price_x96 = slot0[0]
+            
+            if liquidity == 0:
+                return None
+                
+            # Calculate price direction based on token ordering
+            token_in_is_token0 = token_in_addr.lower() == token0.lower()
+            
+            # Calculate raw price (token1/token0 ratio)
+            price_raw = (sqrt_price_x96 / (2**96)) ** 2
+            
+            # Get correct exchange rate for this trade direction
+            if token_in_is_token0:
+                # Swapping token0 for token1
+                exchange_rate = price_raw
+            else:
+                # Swapping token1 for token0
+                exchange_rate = 1 / price_raw if price_raw > 0 else 0
+            
+            if exchange_rate <= 0:
+                return None
+            
+            # Calculate output amount (simple approximation for small trades)
+            amount_out = amount_in * Decimal(str(exchange_rate))
+            
+            # Estimate price impact based on trade size vs liquidity
+            liquidity_decimal = Decimal(liquidity) / Decimal(10**18)
+            if liquidity_decimal > 0:
+                trade_to_liquidity_ratio = amount_in / liquidity_decimal
+                price_impact = min(trade_to_liquidity_ratio * Decimal("0.01"), Decimal("0.05"))
+            else:
+                price_impact = Decimal("0.01")  # Conservative fallback
+            
+            # Standard V3 gas estimate
+            gas_estimate = 180000
+            
+            return amount_out, price_impact, gas_estimate
+            
+        except Exception as e:
+            logger.debug(
+                f"Direct pool calculation failed: {e}",
+                extra={'extra_data': {
+                    'chain': chain,
+                    'fee_tier': fee_tier,
+                    'error_type': type(e).__name__
+                }}
+            )
+            return None
     
     async def _get_web3_instance(
         self, 
@@ -336,7 +539,7 @@ class UniswapV3Adapter:
         amount_in: int,
     ) -> Optional[Tuple[int, int, int, int]]:
         """
-        Get quote for a single fee tier.
+        Get quote for a single fee tier using quoter contract.
         
         Args:
             quoter_contract: Quoter contract instance
@@ -369,7 +572,13 @@ class UniswapV3Adapter:
                 return None
                 
         except (ContractLogicError, Exception) as e:
-            logger.debug(f"Quote failed for fee tier {fee_tier}: {e}")
+            logger.debug(
+                f"Quoter call failed for fee tier {fee_tier}: {e}",
+                extra={'extra_data': {
+                    'fee_tier': fee_tier,
+                    'error_type': type(e).__name__
+                }}
+            )
             return None
     
     async def _calculate_v3_price_impact(
@@ -424,16 +633,10 @@ class UniswapV3Adapter:
                 pool_contract.functions.liquidity().call
             )
             
-            slot0 = await asyncio.to_thread(
-                pool_contract.functions.slot0().call
-            )
-            current_sqrt_price = slot0[0]
-            
             if liquidity == 0:
                 return self._estimate_price_impact_by_size(amount_in, fee_tier)
             
-            # V3 price impact is complex due to concentrated liquidity
-            # For now, use a simplified model based on trade size vs liquidity
+            # V3 price impact calculation using simplified model
             liquidity_decimal = Decimal(liquidity) / Decimal(10**18)
             trade_to_liquidity_ratio = amount_in / liquidity_decimal
             
@@ -452,7 +655,14 @@ class UniswapV3Adapter:
             return min(max(adjusted_impact, Decimal("0.0001")), Decimal("0.5"))
             
         except Exception as e:
-            logger.debug(f"V3 price impact calculation failed: {e}")
+            logger.debug(
+                f"V3 price impact calculation failed: {e}",
+                extra={'extra_data': {
+                    'chain': chain,
+                    'fee_tier': fee_tier,
+                    'error_type': type(e).__name__
+                }}
+            )
             return self._estimate_price_impact_by_size(amount_in, fee_tier)
     
     def _estimate_price_impact_by_size(

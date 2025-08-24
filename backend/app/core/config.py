@@ -527,15 +527,8 @@ class Settings(BaseSettings):
         # If no supported_chains loaded, use defaults for development
         if not supported_chains:
             supported_chains = ["ethereum", "bsc", "polygon", "base", "arbitrum", "solana"]
-            print(f"WARNING: Using default supported_chains for development: {supported_chains}")
+            logger.warning(f"Using default supported_chains for development: {supported_chains}")
         
-        if v not in supported_chains:
-            raise ValueError(f"Default chain '{v}' must be in supported_chains: {supported_chains}")
-        return v
-    
-    def validate_default_chain(cls, v, values):
-        """Validate default chain is in supported chains."""
-        supported_chains = values.get("supported_chains", [])
         if v not in supported_chains:
             raise ValueError(f"Default chain '{v}' must be in supported_chains: {supported_chains}")
         return v
@@ -564,6 +557,64 @@ class Settings(BaseSettings):
         if not 1 <= v <= 65535:
             raise ValueError(f"Port must be between 1 and 65535, got {v}")
         return v
+    
+    # CRITICAL FIX: Add compatibility properties for API router access
+    @property
+    def jwt_secret(self) -> Optional[str]:
+        """
+        Access JWT secret for API router compatibility.
+        
+        Returns:
+            JWT secret string or None if not configured
+        """
+        try:
+            if self.security.jwt_secret is not None:
+                jwt_value = self.security.jwt_secret.get_secret_value()
+                logger.debug("Retrieved JWT secret for API router")
+                return jwt_value
+            else:
+                logger.debug("JWT secret not configured")
+                return None
+        except Exception as e:
+            logger.error(f"Failed to retrieve JWT secret: {e}")
+            return None
+    
+    @property
+    def database_url(self) -> str:
+        """
+        Access database URL for compatibility.
+        
+        Returns:
+            Database URL for current environment
+            
+        Raises:
+            ValueError: If database URL cannot be determined
+        """
+        try:
+            return self.get_database_url()
+        except Exception as e:
+            logger.error(f"Failed to get database URL property: {e}")
+            raise ValueError(f"Database URL unavailable: {e}")
+    
+    @property
+    def encryption_key(self) -> Optional[str]:
+        """
+        Access encryption key for compatibility.
+        
+        Returns:
+            Encryption key string or None if not configured
+        """
+        try:
+            if self.security.encryption_key is not None:
+                encryption_value = self.security.encryption_key.get_secret_value()
+                logger.debug("Retrieved encryption key")
+                return encryption_value
+            else:
+                logger.debug("Encryption key not configured")
+                return None
+        except Exception as e:
+            logger.error(f"Failed to retrieve encryption key: {e}")
+            return None
     
     class Config:
         """Pydantic configuration."""
@@ -698,6 +749,16 @@ class Settings(BaseSettings):
                     logger.error(f"Essential directory missing: {dir_path}")
                     raise ValueError(f"Essential directory not accessible: {dir_path}")
             
+            # Test critical property access for compatibility
+            try:
+                # Test property access without assigning to unused variables
+                _ = self.jwt_secret
+                _ = self.database_url
+                logger.debug("Compatibility property access validation passed")
+            except Exception as e:
+                logger.error(f"Compatibility property access failed: {e}")
+                raise ValueError(f"Settings compatibility validation failed: {e}")
+            
             logger.info(
                 "Configuration validation completed successfully",
                 extra={
@@ -706,7 +767,9 @@ class Settings(BaseSettings):
                         'supported_chains': len(self.supported_chains),
                         'autotrade_enabled': self.autotrade_enabled,
                         'security_validated': True,
-                        'database_type': 'postgresql' if self.environment == 'production' else 'sqlite'
+                        'database_type': 'postgresql' if self.environment == 'production' else 'sqlite',
+                        'jwt_configured': bool(self.jwt_secret),
+                        'encryption_configured': bool(self.encryption_key)
                     }
                 }
             )
@@ -741,7 +804,9 @@ def get_settings() -> Settings:
                 'extra_data': {
                     'environment': settings.environment,
                     'debug': settings.debug,
-                    'app_version': settings.app_version
+                    'app_version': settings.app_version,
+                    'jwt_available': bool(settings.jwt_secret),
+                    'database_configured': bool(settings.database_url)
                 }
             }
         )
@@ -759,6 +824,7 @@ def get_settings() -> Settings:
 # Create global settings instance with validation
 try:
     settings = get_settings()
+    logger.info("✅ Global settings instance created successfully")
 except Exception as e:
     logger.critical(f"Critical error loading settings: {e}")
     sys.exit(1)

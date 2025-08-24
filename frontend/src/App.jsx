@@ -4,18 +4,18 @@
  *
  * File: frontend/src/App.jsx
  */
-
 import React, { useState, useEffect, useRef } from 'react';
 import { Container, Row, Col, Navbar, Nav, Offcanvas, Button, Card, Alert, Badge } from 'react-bootstrap';
 import { 
   Activity, TrendingUp, Settings, BarChart3, Zap, Bot, 
-  Menu, X, Home, Smartphone, Tablet, Monitor, AlertTriangle
+  Menu, X, Home, Smartphone, Tablet, Monitor, AlertTriangle, TestTube
 } from 'lucide-react';
 
 // Static imports to prevent dynamic import issues
 import Analytics from './components/Analytics.jsx';
 import Autotrade from './components/Autotrade.jsx';
 import PairDiscovery from './components/PairDiscovery.jsx';
+import WalletTestComponent from './components/WalletTestComponent.jsx';
 
 /**
  * Structured logging for App component lifecycle and errors
@@ -173,14 +173,15 @@ const MobileLayout = ({
   const [touchStart, setTouchStart] = useState(null);
   const [touchEnd, setTouchEnd] = useState(null);
 
-  // Navigation items configuration
+  // Navigation items configuration - Added wallet test tab
   const navItems = [
     { key: 'trade', label: 'Trade', icon: Home, mobileOrder: 1 },
     { key: 'autotrade', label: 'Auto', icon: Bot, mobileOrder: 2 },
     { key: 'discovery', label: 'Discovery', icon: Activity, mobileOrder: 3 },
     { key: 'analytics', label: 'Stats', icon: BarChart3, mobileOrder: 4 },
     { key: 'orders', label: 'Orders', icon: TrendingUp, mobileOrder: 5 },
-    { key: 'settings', label: 'Settings', icon: Settings, mobileOrder: 6 }
+    { key: 'wallet-test', label: 'Wallet Test', icon: TestTube, mobileOrder: 6 },
+    { key: 'settings', label: 'Settings', icon: Settings, mobileOrder: 7 }
   ];
 
   // Responsive breakpoint detection with proper cleanup
@@ -209,7 +210,7 @@ const MobileLayout = ({
   const handleTouchEnd = () => {
     if (!touchStart || !touchEnd) return;
     
-    const distance = touchStart - touchStart;
+    const distance = touchStart - touchEnd;
     const isLeftSwipe = distance > 50;
     const isRightSwipe = distance < -50;
 
@@ -503,14 +504,15 @@ const MobileLayout = ({
  */
 function App() {
   const [systemHealth, setSystemHealth] = useState(null);
-  const [activeTab, setActiveTab] = useState('autotrade');
+  const [activeTab, setActiveTab] = useState('wallet-test'); // Start with wallet test for debugging
+  const [error, setError] = useState(null);
   const [healthCheckErrors, setHealthCheckErrors] = useState(0);
   const isMountedRef = useRef(true);
 
   // Component lifecycle logging
   useEffect(() => {
     isMountedRef.current = true;
-    logMessage('info', 'App component mounted - single WebSocket strategy enabled');
+    logMessage('info', 'App component mounted - wallet testing enabled');
 
     return () => {
       isMountedRef.current = false;
@@ -518,89 +520,81 @@ function App() {
     };
   }, []);
 
+  /**
+   * Enhanced health check with retry logic and proper error handling
+   */
+  const performHealthCheck = async (retryCount = 0) => {
+    if (!isMountedRef.current) return;
+
+    logMessage('debug', 'Performing system health check');
+
+    try {
+      // Add small delay on retries to handle race conditions
+      if (retryCount > 0) {
+        await new Promise(resolve => setTimeout(resolve, 100 * retryCount));
+      }
+      
+      const response = await fetch('/api/v1/health', {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error(`Health check failed: ${response.status} ${response.statusText}`);
+      }
+
+      const healthData = await response.json();
+      
+      if (isMountedRef.current) {
+        logMessage('debug', 'System health check successful', {
+          status: healthData.status,
+          services: healthData.services || [],
+          uptime: healthData.uptime
+        });
+        
+        setSystemHealth(healthData);
+        setError(null);
+        setHealthCheckErrors(0);
+      }
+    } catch (err) {
+      const errorCount = retryCount + 1;
+      
+      logMessage('error', 'System health check failed', {
+        error: err.message,
+        attempt: errorCount,
+        maxAttempts: 5
+      });
+
+      if (errorCount < 5) {
+        // Retry up to 5 times with exponential backoff
+        setTimeout(() => performHealthCheck(errorCount), Math.pow(2, retryCount) * 1000);
+      } else if (isMountedRef.current) {
+        setSystemHealth(prevHealth => ({
+          ...prevHealth,
+          status: 'unhealthy',
+          error: err.message
+        }));
+        setError(`System health check failed: ${err.message}`);
+        setHealthCheckErrors(errorCount);
+      }
+    }
+  };
+
   // Enhanced health polling with proper error handling
   useEffect(() => {
-    const checkSystemHealth = async () => {
-      if (!isMountedRef.current) return;
-
-      try {
-        logMessage('debug', 'Performing system health check');
-
-        // Fixed: Use correct health endpoint path
-        const response = await fetch('/api/v1/health', {
-          headers: {
-            'Accept': 'application/json',
-            'Content-Type': 'application/json'
-          },
-          signal: AbortSignal.timeout(5000) // 5 second timeout
-        });
-
-        if (!response.ok) {
-          throw new Error(`Health check failed: HTTP ${response.status} ${response.statusText}`);
-        }
-
-        const contentType = response.headers.get('content-type');
-        if (!contentType || !contentType.includes('application/json')) {
-          throw new Error(`Invalid response type: ${contentType}. Expected JSON.`);
-        }
-
-        const data = await response.json();
-        
-        if (!data || typeof data !== 'object') {
-          throw new Error('Invalid health check response format');
-        }
-
-        if (isMountedRef.current) {
-          setSystemHealth(data);
-          setHealthCheckErrors(0);
-          
-          logMessage('debug', 'System health check successful', {
-            status: data.status,
-            services: Object.keys(data.services || {}),
-            uptime: data.uptime_seconds
-          });
-        }
-
-      } catch (err) {
-        const errorCount = healthCheckErrors + 1;
-        
-        logMessage('error', 'System health check failed', {
-          error: err.message,
-          attempt: errorCount,
-          maxAttempts: 5
-        });
-
-        if (isMountedRef.current) {
-          setHealthCheckErrors(errorCount);
-          
-          // Only update health state if this is a new error or we've exceeded max attempts
-          if (errorCount <= 3) {
-            setSystemHealth(prevHealth => ({
-              ...prevHealth,
-              status: 'unhealthy',
-              error: err.message,
-              lastError: new Date().toISOString(),
-              services: {
-                api: 'error',
-                websocket_hub: 'unknown',
-                database: 'unknown'
-              }
-            }));
-          }
-        }
-      }
-    };
-
     // Initial health check
-    checkSystemHealth();
+    performHealthCheck();
     
     // Set up polling interval - every 30 seconds
-    const healthInterval = setInterval(checkSystemHealth, 30000);
+    const healthInterval = setInterval(() => performHealthCheck(), 30000);
     
     return () => {
       clearInterval(healthInterval);
     };
-  }, [healthCheckErrors]);
+  }, []); // Remove dependencies to prevent recreation
 
   // Content rendering with error boundaries for each tab
   const renderContent = () => {
@@ -650,6 +644,9 @@ function App() {
               </Card.Body>
             </Card>
           );
+
+        case 'wallet-test':
+          return <WalletTestComponent />;
 
         case 'settings':
           return (
@@ -718,6 +715,14 @@ function App() {
           <AlertTriangle size={16} className="me-2" />
           <strong>Rendering Error:</strong> Failed to load {activeTab} content.
           <div className="small mt-1">{renderError.message}</div>
+          <Button 
+            variant="outline-primary" 
+            size="sm" 
+            className="mt-2"
+            onClick={() => setActiveTab('wallet-test')}
+          >
+            Go to Wallet Test
+          </Button>
         </Alert>
       );
     }
