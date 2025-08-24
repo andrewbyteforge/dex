@@ -1,60 +1,170 @@
-import React, { useState, useEffect } from 'react';
+/**
+ * Enhanced main App component for DEX Sniper Pro with centralized state management.
+ * Removes redundant WebSocket connections to prevent connection churn.
+ *
+ * File: frontend/src/App.jsx
+ */
+
+import React, { useState, useEffect, useRef } from 'react';
 import { Container, Row, Col, Navbar, Nav, Offcanvas, Button, Card, Alert, Badge } from 'react-bootstrap';
 import { 
   Activity, TrendingUp, Settings, BarChart3, Zap, Bot, 
-  Menu, X, Home, Smartphone, Tablet, Monitor 
+  Menu, X, Home, Smartphone, Tablet, Monitor, AlertTriangle
 } from 'lucide-react';
 
-// Static imports so SES / extensions can't break dynamic import()
+// Static imports to prevent dynamic import issues
 import Analytics from './components/Analytics.jsx';
 import Autotrade from './components/Autotrade.jsx';
 import PairDiscovery from './components/PairDiscovery.jsx';
 
-// Import the centralized WebSocket system
-import { WebSocketProvider } from './contexts/WebSocketContext.jsx';
+/**
+ * Structured logging for App component lifecycle and errors
+ */
+const logMessage = (level, message, data = {}) => {
+  const logEntry = {
+    timestamp: new Date().toISOString(),
+    level,
+    component: 'App',
+    ...data
+  };
 
-// Error boundary to surface any render errors on screen
+  switch (level) {
+    case 'error':
+      console.error(`[App] ${message}`, logEntry);
+      break;
+    case 'warn':
+      console.warn(`[App] ${message}`, logEntry);
+      break;
+    case 'info':
+      console.info(`[App] ${message}`, logEntry);
+      break;
+    default:
+      console.log(`[App] ${message}`, logEntry);
+  }
+
+  return logEntry;
+};
+
+/**
+ * Enhanced error boundary with detailed error reporting
+ */
 class AppErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
-    this.state = { hasError: false, error: null };
+    this.state = { 
+      hasError: false, 
+      error: null, 
+      errorInfo: null,
+      errorId: null
+    };
   }
   
   static getDerivedStateFromError(error) {
-    return { hasError: true, error };
+    const errorId = Date.now().toString(36);
+    return { 
+      hasError: true, 
+      error, 
+      errorId
+    };
   }
   
-  componentDidCatch(error, info) {
-    console.error('App render error:', error, info);
+  componentDidCatch(error, errorInfo) {
+    const errorRecord = {
+      timestamp: new Date().toISOString(),
+      errorId: this.state.errorId,
+      message: error.message,
+      stack: error.stack,
+      componentStack: errorInfo.componentStack,
+      errorBoundary: 'App'
+    };
+
+    console.error('[App] Error boundary caught error:', errorRecord);
+    
+    this.setState({ errorInfo });
+
+    // In production, send to error tracking service
+    if (import.meta.env.PROD) {
+      // Example: errorTrackingService.captureException(error, errorRecord);
+    }
   }
+  
+  handleRetry = () => {
+    logMessage('info', 'Error boundary retry requested', {
+      errorId: this.state.errorId
+    });
+    this.setState({ 
+      hasError: false, 
+      error: null, 
+      errorInfo: null,
+      errorId: null
+    });
+  };
   
   render() {
     if (this.state.hasError) {
       return (
         <Container className="pt-4">
           <Alert variant="danger">
-            <strong>UI error:</strong>{' '}
-            {String(this.state.error?.message || this.state.error || 'Unknown error')}
+            <div className="d-flex align-items-start">
+              <AlertTriangle size={24} className="me-3 flex-shrink-0 mt-1" />
+              <div className="flex-grow-1">
+                <Alert.Heading>Application Error</Alert.Heading>
+                <p className="mb-2">
+                  An unexpected error occurred in the DEX Sniper Pro interface.
+                </p>
+                <div className="mb-3">
+                  <strong>Error:</strong> {this.state.error?.message || 'Unknown error'}
+                </div>
+                <div className="small text-muted mb-3">
+                  <strong>Error ID:</strong> {this.state.errorId}
+                </div>
+                
+                <div className="d-flex gap-2">
+                  <Button variant="outline-danger" onClick={this.handleRetry}>
+                    Retry Application
+                  </Button>
+                  <Button 
+                    variant="outline-secondary" 
+                    onClick={() => window.location.reload()}
+                  >
+                    Reload Page
+                  </Button>
+                </div>
+
+                {import.meta.env.DEV && this.state.error?.stack && (
+                  <details className="mt-3">
+                    <summary className="text-muted" style={{ cursor: 'pointer' }}>
+                      Developer Details
+                    </summary>
+                    <pre className="small mt-2 p-2 bg-light rounded" style={{
+                      fontSize: '0.75rem',
+                      maxHeight: '200px',
+                      overflow: 'auto',
+                      whiteSpace: 'pre-wrap'
+                    }}>
+                      {this.state.error.stack}
+                    </pre>
+                  </details>
+                )}
+              </div>
+            </div>
           </Alert>
         </Container>
       );
     }
+    
     return this.props.children;
   }
 }
 
 /**
- * MobileLayout - Mobile-optimized layout wrapper component with WebSocket integration.
- * 
- * Provides responsive design with touch-friendly navigation,
- * collapsible panels, and mobile-first UX patterns.
+ * Enhanced MobileLayout component with better responsive handling
  */
 const MobileLayout = ({ 
   children, 
   activeTab, 
   onTabChange, 
   systemHealth,
-  wsConnectionState,
   showHealthBadge = true 
 }) => {
   const [isMobile, setIsMobile] = useState(false);
@@ -73,12 +183,12 @@ const MobileLayout = ({
     { key: 'settings', label: 'Settings', icon: Settings, mobileOrder: 6 }
   ];
 
-  // Responsive breakpoint detection
+  // Responsive breakpoint detection with proper cleanup
   useEffect(() => {
     const checkScreenSize = () => {
       const width = window.innerWidth;
-      setIsMobile(width < 768); // Bootstrap md breakpoint
-      setIsTablet(width >= 768 && width < 992); // Bootstrap lg breakpoint
+      setIsMobile(width < 768);
+      setIsTablet(width >= 768 && width < 992);
     };
 
     checkScreenSize();
@@ -86,7 +196,7 @@ const MobileLayout = ({
     return () => window.removeEventListener('resize', checkScreenSize);
   }, []);
 
-  // Touch gesture handling for swipe navigation
+  // Enhanced touch gesture handling
   const handleTouchStart = (e) => {
     setTouchEnd(null);
     setTouchStart(e.targetTouches[0].clientX);
@@ -99,7 +209,7 @@ const MobileLayout = ({
   const handleTouchEnd = () => {
     if (!touchStart || !touchEnd) return;
     
-    const distance = touchStart - touchEnd;
+    const distance = touchStart - touchStart;
     const isLeftSwipe = distance > 50;
     const isRightSwipe = distance < -50;
 
@@ -110,16 +220,14 @@ const MobileLayout = ({
     }
   };
 
-  // Health status indicator with WebSocket integration
+  // Health status indicators
   const getHealthVariant = () => {
     if (!systemHealth) return 'secondary';
-    if (wsConnectionState === 'disconnected') return 'warning';
     return systemHealth.status === 'healthy' ? 'success' : 'danger';
   };
 
   const getHealthText = () => {
     if (!systemHealth) return 'Loading...';
-    if (wsConnectionState === 'disconnected') return 'Offline';
     return systemHealth.status === 'healthy' ? 'Online' : 'Issues';
   };
 
@@ -129,7 +237,7 @@ const MobileLayout = ({
       <Nav className="justify-content-around py-2">
         {navItems
           .sort((a, b) => a.mobileOrder - b.mobileOrder)
-          .slice(0, 4) // Show only 4 main items on mobile
+          .slice(0, 4)
           .map(({ key, label, icon: Icon }) => (
             <Nav.Item key={key} className="text-center">
               <Button
@@ -145,7 +253,6 @@ const MobileLayout = ({
             </Nav.Item>
           ))}
         
-        {/* More menu button */}
         <Nav.Item className="text-center">
           <Button
             variant="link"
@@ -162,7 +269,7 @@ const MobileLayout = ({
     </div>
   );
 
-  // Desktop/Tablet top navigation with WebSocket status
+  // Desktop/Tablet top navigation
   const renderDesktopNavigation = () => (
     <Navbar bg="light" expand="lg" className="border-bottom mb-3">
       <Container fluid>
@@ -173,7 +280,7 @@ const MobileLayout = ({
             <Badge 
               bg={getHealthVariant()} 
               className="ms-2"
-              title={`System ${getHealthText()} - WebSocket: ${wsConnectionState}`}
+              title={`System ${getHealthText()}`}
             >
               <Activity size={12} className="me-1" />
               {getHealthText()}
@@ -209,7 +316,7 @@ const MobileLayout = ({
     </Navbar>
   );
 
-  // Enhanced sidebar navigation with WebSocket diagnostics
+  // Enhanced sidebar with system diagnostics
   const renderSidebarNavigation = () => (
     <Offcanvas
       show={showSidebar}
@@ -246,7 +353,7 @@ const MobileLayout = ({
           
           <hr />
           
-          {/* Enhanced system status with WebSocket info */}
+          {/* System status section */}
           <div className="px-3 py-2">
             <h6 className="text-muted">System Status</h6>
             <div className="d-flex align-items-center mb-2">
@@ -261,33 +368,16 @@ const MobileLayout = ({
               </span>
             </div>
             
-            <div className="small text-muted mb-2">
-              <strong>WebSocket:</strong> {wsConnectionState}
-            </div>
-            
             {systemHealth?.services && (
               <div className="small text-muted">
                 <div>API: {systemHealth.services.api === 'operational' ? '✓' : '✗'}</div>
                 <div>Database: {systemHealth.services.database === 'operational' ? '✓' : '✗'}</div>
+                <div>WebSocket Hub: {systemHealth.services.websocket_hub === 'operational' ? '✓' : '✗'}</div>
               </div>
             )}
           </div>
           
-          {/* WebSocket connection details */}
-          <div className="px-3 py-2 border-top">
-            <h6 className="text-muted small">Connection Details</h6>
-            <div className="small text-muted">
-              <div>State: {wsConnectionState}</div>
-              {systemHealth?.websocket && (
-                <>
-                  <div>Active Connections: {systemHealth.websocket.total_connections || 0}</div>
-                  <div>Hub Running: {systemHealth.websocket.running ? '✓' : '✗'}</div>
-                </>
-              )}
-            </div>
-          </div>
-          
-          {/* Device info for debugging */}
+          {/* Device info */}
           <div className="px-3 py-2 border-top mt-auto">
             <h6 className="text-muted small">Device Info</h6>
             <div className="d-flex align-items-center small text-muted">
@@ -298,6 +388,9 @@ const MobileLayout = ({
               ) : (
                 <><Monitor size={14} className="me-2" />Desktop</>
               )}
+            </div>
+            <div className="small text-muted">
+              Viewport: {window.innerWidth}x{window.innerHeight}
             </div>
           </div>
         </Nav>
@@ -312,26 +405,26 @@ const MobileLayout = ({
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
       style={{
-        paddingBottom: isMobile ? '80px' : '0', // Account for bottom nav
+        paddingBottom: isMobile ? '80px' : '0',
         minHeight: '100vh'
       }}
     >
-      {/* Desktop/Tablet Navigation */}
       {!isMobile && renderDesktopNavigation()}
       
-      {/* WebSocket connection warning */}
-      {wsConnectionState === 'disconnected' && (
+      {/* System health warnings */}
+      {systemHealth?.status === 'unhealthy' && (
         <Alert variant="warning" className="mx-3 mb-3">
-          <Activity size={16} className="me-1" />
-          Real-time connection lost. Some features may not work properly.
+          <AlertTriangle size={16} className="me-2" />
+          System health issues detected. Some features may not work properly.
+          {systemHealth.error && (
+            <div className="small mt-1">Error: {systemHealth.error}</div>
+          )}
         </Alert>
       )}
       
-      {/* Main Content Area */}
       <Container fluid className={isMobile ? 'px-2' : 'px-3'}>
         <Row>
           <Col>
-            {/* Mobile-optimized content wrapper */}
             <div 
               className={`content-wrapper ${isMobile ? 'mobile-content' : ''}`}
               style={{
@@ -345,13 +438,10 @@ const MobileLayout = ({
         </Row>
       </Container>
 
-      {/* Mobile Bottom Navigation */}
       {isMobile && renderMobileNavigation()}
-      
-      {/* Sidebar Navigation */}
       {renderSidebarNavigation()}
       
-      {/* Mobile-specific styles */}
+      {/* Enhanced mobile-specific styles */}
       <style>{`
         .mobile-layout {
           -webkit-overflow-scrolling: touch;
@@ -363,13 +453,13 @@ const MobileLayout = ({
         }
         
         .mobile-content .btn {
-          min-height: 44px; /* Touch-friendly button size */
+          min-height: 44px;
           font-size: 0.9rem;
         }
         
         .mobile-content .form-control {
-          min-height: 44px; /* Touch-friendly input size */
-          font-size: 1rem; /* Prevent zoom on iOS */
+          min-height: 44px;
+          font-size: 1rem;
         }
         
         .mobile-content .card {
@@ -383,14 +473,12 @@ const MobileLayout = ({
           -webkit-overflow-scrolling: touch;
         }
         
-        /* Fix for iOS Safari bottom padding with keyboard */
         @supports (env(safe-area-inset-bottom)) {
           .fixed-bottom {
             padding-bottom: env(safe-area-inset-bottom);
           }
         }
         
-        /* Improve touch targets on mobile */
         @media (max-width: 767px) {
           .btn-sm {
             padding: 0.5rem 0.75rem;
@@ -411,168 +499,257 @@ const MobileLayout = ({
 };
 
 /**
- * Main App Component with centralized WebSocket management
+ * Main App Component with centralized state management and single WebSocket strategy
  */
 function App() {
   const [systemHealth, setSystemHealth] = useState(null);
   const [activeTab, setActiveTab] = useState('autotrade');
+  const [healthCheckErrors, setHealthCheckErrors] = useState(0);
+  const isMountedRef = useRef(true);
 
-  // Breadcrumb so we know the app mounted
+  // Component lifecycle logging
   useEffect(() => {
-    console.log('[App] mounted with centralized WebSocket integration');
+    isMountedRef.current = true;
+    logMessage('info', 'App component mounted - single WebSocket strategy enabled');
+
+    return () => {
+      isMountedRef.current = false;
+      logMessage('info', 'App component unmounting');
+    };
   }, []);
 
-  // Health polling - Fixed to use correct endpoint
+  // Enhanced health polling with proper error handling
   useEffect(() => {
     const checkSystemHealth = async () => {
+      if (!isMountedRef.current) return;
+
       try {
-        // Use the correct health endpoint without trailing slash
-        const res = await fetch('/health'); // This matches the backend route
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-        }
-        const data = await res.json();
-        setSystemHealth(data);
-      } catch (err) {
-        console.warn('[App] health check failed:', err.message);
-        setSystemHealth({ 
-          status: 'unhealthy', 
-          error: err.message,
-          services: {
-            api: 'error',
-            websocket_hub: 'error',
-            database: 'error'
-          }
+        logMessage('debug', 'Performing system health check');
+
+        // Fixed: Use correct health endpoint path
+        const response = await fetch('/api/v1/health', {
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
+          },
+          signal: AbortSignal.timeout(5000) // 5 second timeout
         });
+
+        if (!response.ok) {
+          throw new Error(`Health check failed: HTTP ${response.status} ${response.statusText}`);
+        }
+
+        const contentType = response.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+          throw new Error(`Invalid response type: ${contentType}. Expected JSON.`);
+        }
+
+        const data = await response.json();
+        
+        if (!data || typeof data !== 'object') {
+          throw new Error('Invalid health check response format');
+        }
+
+        if (isMountedRef.current) {
+          setSystemHealth(data);
+          setHealthCheckErrors(0);
+          
+          logMessage('debug', 'System health check successful', {
+            status: data.status,
+            services: Object.keys(data.services || {}),
+            uptime: data.uptime_seconds
+          });
+        }
+
+      } catch (err) {
+        const errorCount = healthCheckErrors + 1;
+        
+        logMessage('error', 'System health check failed', {
+          error: err.message,
+          attempt: errorCount,
+          maxAttempts: 5
+        });
+
+        if (isMountedRef.current) {
+          setHealthCheckErrors(errorCount);
+          
+          // Only update health state if this is a new error or we've exceeded max attempts
+          if (errorCount <= 3) {
+            setSystemHealth(prevHealth => ({
+              ...prevHealth,
+              status: 'unhealthy',
+              error: err.message,
+              lastError: new Date().toISOString(),
+              services: {
+                api: 'error',
+                websocket_hub: 'unknown',
+                database: 'unknown'
+              }
+            }));
+          }
+        }
       }
     };
 
-    // Check immediately, then every 30s
+    // Initial health check
     checkSystemHealth();
+    
+    // Set up polling interval - every 30 seconds
     const healthInterval = setInterval(checkSystemHealth, 30000);
-    return () => clearInterval(healthInterval);
-  }, []);
+    
+    return () => {
+      clearInterval(healthInterval);
+    };
+  }, [healthCheckErrors]);
 
-  // Content rendering based on active tab
+  // Content rendering with error boundaries for each tab
   const renderContent = () => {
-    switch (activeTab) {
-      case 'trade':
-        return (
-          <Card>
-            <Card.Header className="d-flex align-items-center">
-              <TrendingUp className="me-2" size={20} />
-              Manual Trading
-            </Card.Header>
-            <Card.Body>
-              <p className="text-muted">
-                Connect your wallet to start manual trading with real-time quotes and execution.
-              </p>
-              <Alert variant="info">
-                <strong>Coming Soon:</strong> Manual trading interface with wallet integration.
-              </Alert>
-            </Card.Body>
-          </Card>
-        );
+    try {
+      switch (activeTab) {
+        case 'trade':
+          return (
+            <Card>
+              <Card.Header className="d-flex align-items-center">
+                <TrendingUp className="me-2" size={20} />
+                Manual Trading
+              </Card.Header>
+              <Card.Body>
+                <p className="text-muted">
+                  Connect your wallet to start manual trading with real-time quotes and execution.
+                </p>
+                <Alert variant="info">
+                  <strong>Coming Soon:</strong> Manual trading interface with wallet integration.
+                </Alert>
+              </Card.Body>
+            </Card>
+          );
 
-      case 'autotrade':
-        return <Autotrade />;
+        case 'autotrade':
+          return <Autotrade />;
 
-      case 'discovery':
-        return <PairDiscovery selectedChain="ethereum" />;
+        case 'discovery':
+          return <PairDiscovery selectedChain="ethereum" />;
 
-      case 'analytics':
-        return <Analytics />;
+        case 'analytics':
+          return <Analytics />;
 
-      case 'orders':
-        return (
-          <Card>
-            <Card.Header className="d-flex align-items-center">
-              <BarChart3 className="me-2" size={20} />
-              Advanced Orders
-            </Card.Header>
-            <Card.Body>
-              <p className="text-muted">
-                Manage stop-loss, take-profit, and trailing stop orders.
-              </p>
-              <Alert variant="info">
-                <strong>Coming Soon:</strong> Advanced order management and automation.
-              </Alert>
-            </Card.Body>
-          </Card>
-        );
+        case 'orders':
+          return (
+            <Card>
+              <Card.Header className="d-flex align-items-center">
+                <BarChart3 className="me-2" size={20} />
+                Advanced Orders
+              </Card.Header>
+              <Card.Body>
+                <p className="text-muted">
+                  Manage stop-loss, take-profit, and trailing stop orders.
+                </p>
+                <Alert variant="info">
+                  <strong>Coming Soon:</strong> Advanced order management and automation.
+                </Alert>
+              </Card.Body>
+            </Card>
+          );
 
-      case 'settings':
-        return (
-          <Card>
-            <Card.Header className="d-flex align-items-center">
-              <Settings className="me-2" size={20} />
-              Settings & Configuration
-            </Card.Header>
-            <Card.Body>
-              <p className="text-muted">
-                Configure your trading preferences, risk management, and system settings.
-              </p>
-              <Alert variant="info">
-                <strong>Coming Soon:</strong> Comprehensive settings panel.
-              </Alert>
-              
-              {systemHealth && (
-                <div className="mt-4">
-                  <h6>System Status</h6>
-                  <div className="small">
-                    <div>Status: <Badge bg={getHealthVariant()}>{systemHealth.status}</Badge></div>
-                    <div>Uptime: {systemHealth.uptime_seconds ? `${Math.floor(systemHealth.uptime_seconds / 60)}m` : 'N/A'}</div>
-                    {systemHealth.websocket && (
-                      <div>WebSocket Connections: {systemHealth.websocket.total_connections || 0}</div>
-                    )}
+        case 'settings':
+          return (
+            <Card>
+              <Card.Header className="d-flex align-items-center">
+                <Settings className="me-2" size={20} />
+                Settings & Configuration
+              </Card.Header>
+              <Card.Body>
+                <p className="text-muted">
+                  Configure your trading preferences, risk management, and system settings.
+                </p>
+                <Alert variant="info">
+                  <strong>Coming Soon:</strong> Comprehensive settings panel.
+                </Alert>
+                
+                {systemHealth && (
+                  <div className="mt-4">
+                    <h6>System Diagnostics</h6>
+                    <div className="small">
+                      <div className="row">
+                        <div className="col-sm-6">
+                          <div>Status: <Badge bg={getHealthVariant()}>{systemHealth.status}</Badge></div>
+                          <div>Uptime: {systemHealth.uptime_seconds ? `${Math.floor(systemHealth.uptime_seconds / 60)}m` : 'N/A'}</div>
+                          <div>Error Count: {healthCheckErrors}</div>
+                        </div>
+                        <div className="col-sm-6">
+                          {systemHealth.services && (
+                            <>
+                              <div>API: {systemHealth.services.api === 'operational' ? '✓' : '✗'}</div>
+                              <div>Database: {systemHealth.services.database === 'operational' ? '✓' : '✗'}</div>
+                              <div>WebSocket: {systemHealth.services.websocket_hub === 'operational' ? '✓' : '✗'}</div>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                      {systemHealth.error && (
+                        <div className="mt-2 small text-muted">
+                          <strong>Last Error:</strong> {systemHealth.error}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              )}
-            </Card.Body>
-          </Card>
-        );
+                )}
+              </Card.Body>
+            </Card>
+          );
 
-      default:
-        return (
-          <Alert variant="warning">
-            <strong>Unknown tab:</strong> {activeTab}
-          </Alert>
-        );
+        default:
+          logMessage('warn', 'Unknown tab requested', { activeTab });
+          return (
+            <Alert variant="warning">
+              <AlertTriangle size={16} className="me-2" />
+              <strong>Unknown page:</strong> {activeTab}
+            </Alert>
+          );
+      }
+    } catch (renderError) {
+      logMessage('error', 'Content rendering error', {
+        activeTab,
+        error: renderError.message
+      });
+
+      return (
+        <Alert variant="danger">
+          <AlertTriangle size={16} className="me-2" />
+          <strong>Rendering Error:</strong> Failed to load {activeTab} content.
+          <div className="small mt-1">{renderError.message}</div>
+        </Alert>
+      );
     }
   };
 
+  // Health status helper
   const getHealthVariant = () => {
     if (!systemHealth) return 'secondary';
     return systemHealth.status === 'healthy' ? 'success' : 'danger';
   };
 
+  // Tab change handler with logging
+  const handleTabChange = (newTab) => {
+    logMessage('info', 'Tab change requested', { 
+      from: activeTab, 
+      to: newTab 
+    });
+    setActiveTab(newTab);
+  };
+
   return (
     <AppErrorBoundary>
-      <WebSocketProvider>
-        {/* Use WebSocket context to get connection state */}
-        <WebSocketConsumer>
-          {({ connectionState }) => (
-            <MobileLayout
-              activeTab={activeTab}
-              onTabChange={setActiveTab}
-              systemHealth={systemHealth}
-              wsConnectionState={connectionState}
-              showHealthBadge={true}
-            >
-              {renderContent()}
-            </MobileLayout>
-          )}
-        </WebSocketConsumer>
-      </WebSocketProvider>
+      <MobileLayout
+        activeTab={activeTab}
+        onTabChange={handleTabChange}
+        systemHealth={systemHealth}
+        showHealthBadge={true}
+      >
+        {renderContent()}
+      </MobileLayout>
     </AppErrorBoundary>
   );
 }
-
-import { useWebSocketContext } from './contexts/WebSocketContext.jsx';
-
-const WebSocketConsumer = ({ children }) => {
-  const { connectionState } = useWebSocketContext();
-  return children({ connectionState });
-};
 
 export default App;
