@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 
 /**
- * Simple WebSocket hook for DEX Sniper Pro
+ * Simple WebSocket hook for DEX Sniper Pro with improved reconnection logic
  * 
  * @param {string} url - WebSocket URL (e.g., '/ws/autotrade')
  * @param {Object} options - Configuration options
@@ -32,6 +32,7 @@ const useWebSocket = (url, options = {}) => {
   const reconnectTimer = useRef(null);
   const mounted = useRef(true);
   const urlRef = useRef(url);
+  const connectionTime = useRef(null);
 
   // Update URL ref when prop changes
   useEffect(() => {
@@ -58,7 +59,7 @@ const useWebSocket = (url, options = {}) => {
   }, []);
 
   /**
-   * Connect to WebSocket
+   * Connect to WebSocket with improved error handling
    */
   const connect = useCallback(() => {
     if (!mounted.current) return;
@@ -82,6 +83,7 @@ const useWebSocket = (url, options = {}) => {
       }
 
       console.log('Connecting to WebSocket:', wsUrl);
+      connectionTime.current = Date.now();
       ws.current = new WebSocket(wsUrl);
 
       ws.current.onopen = (event) => {
@@ -112,34 +114,58 @@ const useWebSocket = (url, options = {}) => {
       ws.current.onclose = (event) => {
         if (!mounted.current) return;
         
-        console.log('WebSocket disconnected:', event.code, event.reason);
+        console.log('WebSocket disconnected:', { 
+          code: event.code, 
+          reason: event.reason,
+          wasClean: event.wasClean,
+          connectionDuration: connectionTime.current ? Date.now() - connectionTime.current : 0
+        });
         setConnected(false);
         
         if (onClose) {
           onClose(event);
         }
 
-        // Attempt reconnection if not intentionally closed
-        if (event.code !== 1000 && reconnectCount < reconnectAttempts) {
-          const delay = Math.min(reconnectInterval * Math.pow(2, reconnectCount), 30000);
-          console.log(`Reconnecting in ${delay}ms (attempt ${reconnectCount + 1}/${reconnectAttempts})`);
+        // Check if connection closed immediately (within 1 second)
+        const connectionDuration = connectionTime.current ? Date.now() - connectionTime.current : 0;
+        const wasImmediate = connectionDuration < 1000;
+
+        // Don't auto-reconnect if:
+        // 1. Connection was intentionally closed (code 1000)
+        // 2. Connection closed immediately (likely endpoint doesn't exist)
+        // 3. We've reached max attempts
+        // 4. Connection was refused (code 1006 and immediate)
+        if (event.code === 1000 || 
+            (wasImmediate && event.code === 1006) ||
+            reconnectCount >= reconnectAttempts) {
           
-          setReconnectCount(prev => prev + 1);
-          reconnectTimer.current = setTimeout(() => {
-            if (mounted.current) {
-              connect();
-            }
-          }, delay);
-        } else if (reconnectCount >= reconnectAttempts) {
-          setError('Maximum reconnection attempts exceeded');
+          if (wasImmediate && event.code === 1006) {
+            console.error('WebSocket endpoint appears to be unavailable - stopping reconnection attempts');
+            setError('WebSocket endpoint not available. Check if backend is running and /ws/autotrade endpoint exists.');
+          } else if (reconnectCount >= reconnectAttempts) {
+            setError('Maximum reconnection attempts exceeded');
+          }
+          return;
         }
+
+        // Attempt reconnection with exponential backoff
+        const delay = Math.min(reconnectInterval * Math.pow(2, reconnectCount), 30000);
+        console.log(`Reconnecting in ${delay}ms (attempt ${reconnectCount + 1}/${reconnectAttempts})`);
+        
+        setReconnectCount(prev => prev + 1);
+        reconnectTimer.current = setTimeout(() => {
+          if (mounted.current) {
+            connect();
+          }
+        }, delay);
       };
 
       ws.current.onerror = (event) => {
         if (!mounted.current) return;
         
         console.error('WebSocket error:', event);
-        const errorMsg = `WebSocket connection error${reconnectCount > 0 ? ` (attempt ${reconnectCount})` : ''}`;
+        const errorMsg = `WebSocket connection error${reconnectCount > 0 ? 
+          ` (attempt ${reconnectCount})` : ''}`;
         setError(errorMsg);
         
         if (onError) {
@@ -219,7 +245,7 @@ const useWebSocket = (url, options = {}) => {
       mounted.current = false;
       disconnect();
     };
-  }, [autoConnect, connect, disconnect]);
+  }, [autoConnect, connect, disconnect, url]);
 
   // Cleanup on unmount
   useEffect(() => {
