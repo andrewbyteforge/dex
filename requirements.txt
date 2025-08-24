@@ -1,0 +1,5 @@
+# DEX Sniper Pro Dependencies
+
+# Enhanced Rate Limiting Dependencies
+redis==4.6.0
+slowapi==0.1.9

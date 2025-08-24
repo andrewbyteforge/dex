@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -51,9 +52,12 @@ class Settings(BaseSettings):
     ledger_retention_days: int = 730
     log_export_enabled: bool = False
     
-    # JWT/Auth (if needed by bootstrap)
+    # CRITICAL: Security settings that were missing - causing API router failures
+    jwt_secret: Optional[str] = None
+    encryption_key: Optional[str] = None
     secret_key: str = "dev-secret-key-change-in-production"
     access_token_expire_minutes: int = 30
+    api_key: Optional[str] = None  # For simple API authentication
     
     # Trading defaults (GBP-based)
     base_currency: str = "GBP"
@@ -83,27 +87,38 @@ class Settings(BaseSettings):
         "arbitrum": 95  # Future
     }
     
-    # RPC URLs (from environment)
-    ethereum_rpc_url: Optional[str] = None
-    bsc_rpc_url: Optional[str] = None
-    polygon_rpc_url: Optional[str] = None
-    solana_rpc_url: Optional[str] = None
-    base_rpc_url: Optional[str] = None
-    arbitrum_rpc_url: Optional[str] = None
+    # RPC URLs (primary format)
+    ethereum_rpc_url: Optional[str] = "https://eth.llamarpc.com"
+    bsc_rpc_url: Optional[str] = "https://bsc-dataseed1.binance.org"
+    polygon_rpc_url: Optional[str] = "https://polygon-rpc.com"
+    solana_rpc_url: Optional[str] = "https://api.mainnet-beta.solana.com"
+    base_rpc_url: Optional[str] = "https://mainnet.base.org"
+    arbitrum_rpc_url: Optional[str] = "https://arb1.arbitrum.io/rpc"
     
-    # EVM RPC URL lists (for compatibility with existing .env)
+    # Legacy RPC URL lists (for backward compatibility)
     evm_rpc_urls_ethereum: Optional[str] = None
     evm_rpc_urls_bsc: Optional[str] = None
     evm_rpc_urls_polygon: Optional[str] = None
     sol_rpc_urls: Optional[str] = None
     
-    # API Keys (optional)
+    # API Keys
     coingecko_api_key: Optional[str] = None
     zerox_api_key: Optional[str] = None
     oneinch_api_key: Optional[str] = None
     walletconnect_project_id: Optional[str] = None
+    dexscreener_api_key: Optional[str] = None
+    etherscan_api_key: Optional[str] = None
+    bscscan_api_key: Optional[str] = None
+    polygonscan_api_key: Optional[str] = None
+    basescan_api_key: Optional[str] = None
+    arbiscan_api_key: Optional[str] = None
+    coinmarketcap_api_key: Optional[str] = None
     
-    # Security
+    # Telegram bot
+    telegram_bot_token: Optional[str] = None
+    telegram_chat_id: Optional[str] = None
+    
+    # Security settings
     hot_wallet_max_balance_gbp: float = 1000.0
     require_canary_trades: bool = True
     
@@ -119,6 +134,7 @@ class Settings(BaseSettings):
     logs_dir: Path = Field(default_factory=lambda: Path("data/logs"))
     ledgers_dir: Path = Field(default_factory=lambda: Path("data/ledgers"))
     sims_dir: Path = Field(default_factory=lambda: Path("data/sims"))
+    keystores_dir: Path = Field(default_factory=lambda: Path("data/keys"))
     
     def get_rpc_urls(self, chain: str) -> List[str]:
         """
@@ -160,7 +176,30 @@ class Settings(BaseSettings):
         
         return []
     
-    @field_validator("data_dir", "logs_dir", "ledgers_dir", "sims_dir", mode="before")
+    def generate_development_secrets(self) -> Dict[str, str]:
+        """
+        Generate development secrets if not provided.
+        
+        Returns:
+            Dictionary of generated secrets for .env file
+        """
+        generated = {}
+        
+        if not self.jwt_secret:
+            self.jwt_secret = secrets.token_urlsafe(32)
+            generated['JWT_SECRET'] = self.jwt_secret
+        
+        if not self.encryption_key:
+            self.encryption_key = secrets.token_urlsafe(32)
+            generated['ENCRYPTION_KEY'] = self.encryption_key
+            
+        if not self.api_key:
+            self.api_key = secrets.token_urlsafe(16)
+            generated['API_KEY'] = self.api_key
+        
+        return generated
+    
+    @field_validator("data_dir", "logs_dir", "ledgers_dir", "sims_dir", "keystores_dir", mode="before")
     @classmethod
     def ensure_path_exists(cls, v: Path) -> Path:
         """Ensure data directories exist."""
@@ -199,8 +238,14 @@ class Settings(BaseSettings):
 # Global settings instance
 settings = Settings()
 
+# Auto-generate development secrets if missing
+if settings.environment == "development":
+    generated = settings.generate_development_secrets()
+    if generated:
+        print(f"Generated {len(generated)} secrets for development. "
+              "Consider adding these to your .env file for consistency.")
 
-# Add the missing get_settings function that the database module needs
+
 def get_settings() -> Settings:
     """
     Get the global settings instance.
@@ -213,7 +258,6 @@ def get_settings() -> Settings:
     return settings
 
 
-# For backward compatibility, also provide these aliases
 def reload_settings() -> Settings:
     """
     Reload settings from environment.

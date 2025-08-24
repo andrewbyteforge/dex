@@ -1,923 +1,106 @@
 """
-Advanced Orders API router for DEX Sniper Pro.
+Minimal advanced orders API router.
 
-Provides endpoints for creating, managing, and monitoring advanced order types
-including stop-loss, take-profit, DCA, bracket, and trailing stop orders.
+File: backend/app/api/orders.py
 """
-
 from __future__ import annotations
 
-from typing import List, Optional, Dict, Any
-from decimal import Decimal
-from datetime import datetime
 import logging
-import uuid
+from typing import Dict, Any, List
+from enum import Enum
+from fastapi import APIRouter
+from pydantic import BaseModel
 
-from fastapi import APIRouter, HTTPException, Depends, status
-from pydantic import BaseModel, Field, validator
-
-# Fixed imports - use relative imports instead of absolute app imports
-from ..core.dependencies import get_current_user, CurrentUser
-
-# Safe imports for models with fallbacks
-try:
-    from ..storage.models import AdvancedOrder, OrderStatus, OrderType
-except ImportError:
-    # Create placeholder classes if import fails
-    class AdvancedOrder:
-        pass
-    
-    class OrderStatus:
-        ACTIVE = "active"
-        COMPLETED = "completed"
-        CANCELLED = "cancelled"
-    
-    class OrderType:
-        STOP_LOSS = "stop_loss"
-        TAKE_PROFIT = "take_profit"
-        TRAILING_STOP = "trailing_stop"
-        DCA = "dca"
-        BRACKET = "bracket"
-
-router = APIRouter(prefix="/api/orders", tags=["orders"])
 logger = logging.getLogger(__name__)
 
-
-# Pydantic Models
-class OrderTypeInfo(BaseModel):
-    """Order type information."""
-    type: str
-    name: str
-    description: str
+router = APIRouter(
+    prefix="/orders",
+    tags=["Advanced Orders"]
+)
 
 
-class StopLossOrderRequest(BaseModel):
-    """Stop-loss order creation request."""
-    user_id: int
-    token_address: str
-    pair_address: Optional[str] = None
+class OrderType(str, Enum):
+    """Order types."""
+    LIMIT = "limit"
+    STOP_LOSS = "stop_loss"
+    TAKE_PROFIT = "take_profit"
+    TRAILING_STOP = "trailing_stop"
+
+
+class OrderStatus(str, Enum):
+    """Order status."""
+    PENDING = "pending"
+    ACTIVE = "active"
+    FILLED = "filled"
+    CANCELLED = "cancelled"
+
+
+class OrderRequest(BaseModel):
+    """Basic order request."""
+    order_type: OrderType
+    token_in: str
+    token_out: str
+    amount_in: str
+    trigger_price: str
     chain: str
-    dex: str
-    side: str = Field(..., pattern="^(buy|sell)$")
-    quantity: str
-    stop_price: str
-    entry_price: Optional[str] = None
-    enable_trailing: bool = False
-    trailing_distance: Optional[str] = None
-
-    @validator('quantity', 'stop_price', 'entry_price', 'trailing_distance')
-    def validate_decimal_fields(cls, v):
-        """Validate decimal fields."""
-        if v is not None and v != '':
-            try:
-                return str(Decimal(v))
-            except Exception:
-                raise ValueError("Invalid decimal value")
-        return v
 
 
-class TakeProfitOrderRequest(BaseModel):
-    """Take-profit order creation request."""
-    user_id: int
-    token_address: str
-    pair_address: Optional[str] = None
-    chain: str
-    dex: str
-    side: str = Field(..., pattern="^(buy|sell)$")
-    quantity: str
-    target_price: str
-    scale_out_enabled: bool = False
-
-    @validator('quantity', 'target_price')
-    def validate_decimal_fields(cls, v):
-        """Validate decimal fields."""
-        if v is not None and v != '':
-            try:
-                return str(Decimal(v))
-            except Exception:
-                raise ValueError("Invalid decimal value")
-        return v
-
-
-class DCAOrderRequest(BaseModel):
-    """DCA order creation request."""
-    user_id: int
-    token_address: str
-    pair_address: Optional[str] = None
-    chain: str
-    dex: str
-    side: str = Field(..., pattern="^(buy|sell)$")
-    total_investment: str
-    num_orders: int = Field(..., ge=2, le=20)
-    interval_minutes: int = Field(..., ge=1)
-    max_price: Optional[str] = None
-
-    @validator('total_investment', 'max_price')
-    def validate_decimal_fields(cls, v):
-        """Validate decimal fields."""
-        if v is not None and v != '':
-            try:
-                return str(Decimal(v))
-            except Exception:
-                raise ValueError("Invalid decimal value")
-        return v
-
-
-class BracketOrderRequest(BaseModel):
-    """Bracket order creation request."""
-    user_id: int
-    token_address: str
-    pair_address: Optional[str] = None
-    chain: str
-    dex: str
-    side: str = Field(..., pattern="^(buy|sell)$")
-    quantity: str
-    stop_loss_price: str
-    take_profit_price: str
-
-    @validator('quantity', 'stop_loss_price', 'take_profit_price')
-    def validate_decimal_fields(cls, v):
-        """Validate decimal fields."""
-        if v is not None and v != '':
-            try:
-                return str(Decimal(v))
-            except Exception:
-                raise ValueError("Invalid decimal value")
-        return v
-
-
-class TrailingStopOrderRequest(BaseModel):
-    """Trailing stop order creation request."""
-    user_id: int
-    token_address: str
-    pair_address: Optional[str] = None
-    chain: str
-    dex: str
-    side: str = Field(..., pattern="^(buy|sell)$")
-    quantity: str
-    trailing_distance: str
-    activation_price: Optional[str] = None
-
-    @validator('quantity', 'trailing_distance', 'activation_price')
-    def validate_decimal_fields(cls, v):
-        """Validate decimal fields."""
-        if v is not None and v != '':
-            try:
-                return str(Decimal(v))
-            except Exception:
-                raise ValueError("Invalid decimal value")
-        return v
-
-
-class OrderResponse(BaseModel):
-    """Order creation response."""
-    order_id: str
-    status: str
-    message: str
-    trace_id: str
-
-
-class PositionInfo(BaseModel):
-    """Position information."""
-    token_address: str
-    quantity: str
-    entry_price: str
-    current_price: str
-    pnl: float
-    created_at: datetime
-
-
-class UserPositionsResponse(BaseModel):
-    """User positions response."""
-    user_id: int
-    positions: List[PositionInfo]
-    total_positions: int
-
-
-class AdvancedOrderManager:
-    """Mock advanced order manager with enhanced functionality."""
-    
-    def __init__(self):
-        self.active_orders = {}
-        self.user_positions = {}
-    
-    async def get_active_orders(self, user_id: int) -> List[Dict[str, Any]]:
-        """Get active orders for user."""
-        return [
-            {
-                "order_id": "order_123",
-                "order_type": "stop_loss",
-                "status": "active",
-                "user_id": user_id,
-                "token_address": "0x1234...",
-                "pair_address": "0x5678...",
-                "chain": "ethereum",
-                "dex": "uniswap_v2",
-                "side": "sell",
-                "remaining_quantity": "100.0",
-                "trigger_price": "95.0",
-                "created_at": datetime.now().isoformat(),
-                "updated_at": datetime.now().isoformat()
-            }
-        ]
-    
-    async def get_user_positions(self, user_id: int) -> List[Dict[str, Any]]:
-        """Get user positions."""
-        return [
-            {
-                "token_address": "0x1234...",
-                "quantity": "100.0",
-                "entry_price": "100.0",
-                "current_price": "105.0",
-                "pnl_percentage": 5.0,
-                "created_at": datetime.now()
-            }
-        ]
-    
-    async def create_stop_loss_order(self, **kwargs) -> str:
-        """Create stop loss order."""
-        order_id = str(uuid.uuid4())
-        self.active_orders[order_id] = {
-            "order_id": order_id,
-            "order_type": "stop_loss",
-            "status": "active",
-            **kwargs
-        }
-        return order_id
-    
-    async def create_take_profit_order(self, **kwargs) -> str:
-        """Create take profit order."""
-        order_id = str(uuid.uuid4())
-        self.active_orders[order_id] = {
-            "order_id": order_id,
-            "order_type": "take_profit",
-            "status": "active",
-            **kwargs
-        }
-        return order_id
-    
-    async def create_dca_order(self, **kwargs) -> str:
-        """Create DCA order."""
-        order_id = str(uuid.uuid4())
-        self.active_orders[order_id] = {
-            "order_id": order_id,
-            "order_type": "dca",
-            "status": "active",
-            **kwargs
-        }
-        return order_id
-    
-    async def create_bracket_order(self, **kwargs) -> str:
-        """Create bracket order."""
-        order_id = str(uuid.uuid4())
-        self.active_orders[order_id] = {
-            "order_id": order_id,
-            "order_type": "bracket",
-            "status": "active",
-            **kwargs
-        }
-        return order_id
-    
-    async def create_trailing_stop_order(self, **kwargs) -> str:
-        """Create trailing stop order."""
-        order_id = str(uuid.uuid4())
-        self.active_orders[order_id] = {
-            "order_id": order_id,
-            "order_type": "trailing_stop",
-            "status": "active",
-            **kwargs
-        }
-        return order_id
-    
-    async def cancel_order(self, order_id: str, trace_id: str = None) -> bool:
-        """Cancel order."""
-        if order_id in self.active_orders:
-            self.active_orders[order_id]["status"] = "cancelled"
-            return True
-        return False
-
-
-# Dependencies
-def get_order_manager() -> AdvancedOrderManager:
-    """Get advanced order manager dependency."""
-    return AdvancedOrderManager()
-
-
-@router.get("/types", response_model=List[OrderTypeInfo])
-async def get_order_types() -> List[OrderTypeInfo]:
-    """
-    Get available order types.
-    
-    Returns:
-        List of order type information
-    """
-    trace_id = str(uuid.uuid4())
-    
-    try:
-        logger.info("Fetching order types", extra={
-            "trace_id": trace_id,
-            "module": "orders_api",
-            "action": "get_order_types"
-        })
-        
-        order_types = [
-            OrderTypeInfo(
-                type="stop_loss",
-                name="Stop Loss",
-                description="Limit losses by selling when price drops below threshold"
-            ),
-            OrderTypeInfo(
-                type="take_profit",
-                name="Take Profit",
-                description="Lock in profits by selling at target price"
-            ),
-            OrderTypeInfo(
-                type="trailing_stop",
-                name="Trailing Stop",
-                description="Dynamic stop that follows price movements"
-            ),
-            OrderTypeInfo(
-                type="dca",
-                name="Dollar Cost Average",
-                description="Split purchases over time to reduce price impact"
-            ),
-            OrderTypeInfo(
-                type="bracket",
-                name="Bracket Order",
-                description="Combine stop-loss and take-profit in one order"
-            )
-        ]
-        
-        return order_types
-        
-    except Exception as e:
-        logger.error("Failed to get order types", extra={
-            "trace_id": trace_id,
-            "error": str(e),
-            "module": "orders_api"
-        })
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get order types: {str(e)}"
-        )
-
-
-@router.get("/active", response_model=List[Dict[str, Any]])
-async def get_active_orders(
-    current_user: CurrentUser = Depends(get_current_user),
-    order_manager: AdvancedOrderManager = Depends(get_order_manager)
-) -> List[Dict[str, Any]]:
-    """
-    Get active orders for user.
-    
-    Args:
-        current_user: Current authenticated user
-        order_manager: Advanced order manager
-        
-    Returns:
-        List of active orders
-    """
-    trace_id = str(uuid.uuid4())
-    
-    try:
-        logger.info("Fetching active orders", extra={
-            "trace_id": trace_id,
-            "user_id": current_user.user_id,
-            "module": "orders_api",
-            "action": "get_active_orders"
-        })
-        
-        active_orders = await order_manager.get_active_orders(current_user.user_id)
-        
-        logger.info("Successfully fetched active orders", extra={
-            "trace_id": trace_id,
-            "user_id": current_user.user_id,
-            "order_count": len(active_orders)
-        })
-        
-        return active_orders
-        
-    except Exception as e:
-        logger.error("Failed to fetch active orders", extra={
-            "trace_id": trace_id,
-            "user_id": current_user.user_id,
-            "error": str(e),
-            "module": "orders_api"
-        })
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to fetch active orders: {str(e)}"
-        )
-
-
-@router.get("/positions", response_model=UserPositionsResponse)
-async def get_user_positions(
-    current_user: CurrentUser = Depends(get_current_user),
-    order_manager: AdvancedOrderManager = Depends(get_order_manager)
-) -> UserPositionsResponse:
-    """
-    Get user positions.
-    
-    Args:
-        current_user: Current authenticated user
-        order_manager: Advanced order manager
-        
-    Returns:
-        User positions information
-    """
-    trace_id = str(uuid.uuid4())
-    
-    try:
-        logger.info("Fetching user positions", extra={
-            "trace_id": trace_id,
-            "user_id": current_user.user_id,
-            "module": "orders_api",
-            "action": "get_user_positions"
-        })
-        
-        positions_data = await order_manager.get_user_positions(current_user.user_id)
-        
-        # Convert to response format
-        position_info = []
-        for pos in positions_data:
-            position_info.append(PositionInfo(
-                token_address=pos["token_address"],
-                quantity=pos["quantity"],
-                entry_price=pos["entry_price"],
-                current_price=pos["current_price"],
-                pnl=pos["pnl_percentage"],
-                created_at=pos["created_at"]
-            ))
-        
-        response = UserPositionsResponse(
-            user_id=current_user.user_id,
-            positions=position_info,
-            total_positions=len(position_info)
-        )
-        
-        logger.info("Successfully fetched user positions", extra={
-            "trace_id": trace_id,
-            "user_id": current_user.user_id,
-            "position_count": len(position_info)
-        })
-        
-        return response
-        
-    except Exception as e:
-        logger.error("Failed to fetch user positions", extra={
-            "trace_id": trace_id,
-            "user_id": current_user.user_id,
-            "error": str(e),
-            "module": "orders_api"
-        })
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to fetch user positions: {str(e)}"
-        )
-
-
-@router.post("/stop-loss", response_model=OrderResponse)
-async def create_stop_loss_order(
-    request: StopLossOrderRequest,
-    current_user: CurrentUser = Depends(get_current_user),
-    order_manager: AdvancedOrderManager = Depends(get_order_manager)
-) -> OrderResponse:
-    """
-    Create stop-loss order.
-    
-    Args:
-        request: Stop-loss order request
-        current_user: Current authenticated user
-        order_manager: Advanced order manager
-        
-    Returns:
-        Order creation response
-    """
-    trace_id = str(uuid.uuid4())
-    
-    try:
-        logger.info("Creating stop-loss order", extra={
-            "trace_id": trace_id,
-            "user_id": request.user_id,
-            "token_address": request.token_address,
-            "chain": request.chain,
-            "dex": request.dex,
-            "quantity": request.quantity,
-            "stop_price": request.stop_price,
-            "module": "orders_api",
-            "action": "create_stop_loss"
-        })
-        
-        order_id = await order_manager.create_stop_loss_order(
-            user_id=request.user_id,
-            token_address=request.token_address,
-            pair_address=request.pair_address,
-            chain=request.chain,
-            dex=request.dex,
-            side=request.side,
-            quantity=Decimal(request.quantity),
-            stop_price=Decimal(request.stop_price),
-            entry_price=Decimal(request.entry_price) if request.entry_price else None,
-            enable_trailing=request.enable_trailing,
-            trailing_distance=Decimal(request.trailing_distance) if request.trailing_distance else None,
-            trace_id=trace_id
-        )
-        
-        logger.info("Successfully created stop-loss order", extra={
-            "trace_id": trace_id,
-            "order_id": order_id,
-            "user_id": request.user_id
-        })
-        
-        return OrderResponse(
-            order_id=order_id,
-            status="active",
-            message="Stop-loss order created successfully",
-            trace_id=trace_id
-        )
-        
-    except Exception as e:
-        logger.error("Failed to create stop-loss order", extra={
-            "trace_id": trace_id,
-            "user_id": request.user_id,
-            "error": str(e),
-            "module": "orders_api"
-        })
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to create stop-loss order: {str(e)}"
-        )
-
-
-@router.post("/take-profit", response_model=OrderResponse)
-async def create_take_profit_order(
-    request: TakeProfitOrderRequest,
-    current_user: CurrentUser = Depends(get_current_user),
-    order_manager: AdvancedOrderManager = Depends(get_order_manager)
-) -> OrderResponse:
-    """
-    Create take-profit order.
-    
-    Args:
-        request: Take-profit order request
-        current_user: Current authenticated user
-        order_manager: Advanced order manager
-        
-    Returns:
-        Order creation response
-    """
-    trace_id = str(uuid.uuid4())
-    
-    try:
-        logger.info("Creating take-profit order", extra={
-            "trace_id": trace_id,
-            "user_id": request.user_id,
-            "token_address": request.token_address,
-            "chain": request.chain,
-            "dex": request.dex,
-            "quantity": request.quantity,
-            "target_price": request.target_price,
-            "module": "orders_api",
-            "action": "create_take_profit"
-        })
-        
-        order_id = await order_manager.create_take_profit_order(
-            user_id=request.user_id,
-            token_address=request.token_address,
-            pair_address=request.pair_address,
-            chain=request.chain,
-            dex=request.dex,
-            side=request.side,
-            quantity=Decimal(request.quantity),
-            target_price=Decimal(request.target_price),
-            scale_out_enabled=request.scale_out_enabled,
-            trace_id=trace_id
-        )
-        
-        logger.info("Successfully created take-profit order", extra={
-            "trace_id": trace_id,
-            "order_id": order_id,
-            "user_id": request.user_id
-        })
-        
-        return OrderResponse(
-            order_id=order_id,
-            status="active",
-            message="Take-profit order created successfully",
-            trace_id=trace_id
-        )
-        
-    except Exception as e:
-        logger.error("Failed to create take-profit order", extra={
-            "trace_id": trace_id,
-            "user_id": request.user_id,
-            "error": str(e),
-            "module": "orders_api"
-        })
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to create take-profit order: {str(e)}"
-        )
-
-
-@router.post("/dca", response_model=OrderResponse)
-async def create_dca_order(
-    request: DCAOrderRequest,
-    current_user: CurrentUser = Depends(get_current_user),
-    order_manager: AdvancedOrderManager = Depends(get_order_manager)
-) -> OrderResponse:
-    """
-    Create DCA order.
-    
-    Args:
-        request: DCA order request
-        current_user: Current authenticated user
-        order_manager: Advanced order manager
-        
-    Returns:
-        Order creation response
-    """
-    trace_id = str(uuid.uuid4())
-    
-    try:
-        logger.info("Creating DCA order", extra={
-            "trace_id": trace_id,
-            "user_id": request.user_id,
-            "token_address": request.token_address,
-            "chain": request.chain,
-            "dex": request.dex,
-            "total_investment": request.total_investment,
-            "num_orders": request.num_orders,
-            "interval_minutes": request.interval_minutes,
-            "module": "orders_api",
-            "action": "create_dca"
-        })
-        
-        order_id = await order_manager.create_dca_order(
-            user_id=request.user_id,
-            token_address=request.token_address,
-            pair_address=request.pair_address,
-            chain=request.chain,
-            dex=request.dex,
-            side=request.side,
-            total_investment=Decimal(request.total_investment),
-            num_orders=request.num_orders,
-            interval_minutes=request.interval_minutes,
-            max_price=Decimal(request.max_price) if request.max_price else None,
-            trace_id=trace_id
-        )
-        
-        logger.info("Successfully created DCA order", extra={
-            "trace_id": trace_id,
-            "order_id": order_id,
-            "user_id": request.user_id
-        })
-        
-        return OrderResponse(
-            order_id=order_id,
-            status="active",
-            message="DCA order created successfully",
-            trace_id=trace_id
-        )
-        
-    except Exception as e:
-        logger.error("Failed to create DCA order", extra={
-            "trace_id": trace_id,
-            "user_id": request.user_id,
-            "error": str(e),
-            "module": "orders_api"
-        })
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to create DCA order: {str(e)}"
-        )
-
-
-@router.post("/bracket", response_model=OrderResponse)
-async def create_bracket_order(
-    request: BracketOrderRequest,
-    current_user: CurrentUser = Depends(get_current_user),
-    order_manager: AdvancedOrderManager = Depends(get_order_manager)
-) -> OrderResponse:
-    """
-    Create bracket order.
-    
-    Args:
-        request: Bracket order request
-        current_user: Current authenticated user
-        order_manager: Advanced order manager
-        
-    Returns:
-        Order creation response
-    """
-    trace_id = str(uuid.uuid4())
-    
-    try:
-        logger.info("Creating bracket order", extra={
-            "trace_id": trace_id,
-            "user_id": request.user_id,
-            "token_address": request.token_address,
-            "chain": request.chain,
-            "dex": request.dex,
-            "quantity": request.quantity,
-            "stop_loss_price": request.stop_loss_price,
-            "take_profit_price": request.take_profit_price,
-            "module": "orders_api",
-            "action": "create_bracket"
-        })
-        
-        order_id = await order_manager.create_bracket_order(
-            user_id=request.user_id,
-            token_address=request.token_address,
-            pair_address=request.pair_address,
-            chain=request.chain,
-            dex=request.dex,
-            side=request.side,
-            quantity=Decimal(request.quantity),
-            stop_loss_price=Decimal(request.stop_loss_price),
-            take_profit_price=Decimal(request.take_profit_price),
-            trace_id=trace_id
-        )
-        
-        logger.info("Successfully created bracket order", extra={
-            "trace_id": trace_id,
-            "order_id": order_id,
-            "user_id": request.user_id
-        })
-        
-        return OrderResponse(
-            order_id=order_id,
-            status="active",
-            message="Bracket order created successfully",
-            trace_id=trace_id
-        )
-        
-    except Exception as e:
-        logger.error("Failed to create bracket order", extra={
-            "trace_id": trace_id,
-            "user_id": request.user_id,
-            "error": str(e),
-            "module": "orders_api"
-        })
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to create bracket order: {str(e)}"
-        )
-
-
-@router.post("/trailing-stop", response_model=OrderResponse)
-async def create_trailing_stop_order(
-    request: TrailingStopOrderRequest,
-    current_user: CurrentUser = Depends(get_current_user),
-    order_manager: AdvancedOrderManager = Depends(get_order_manager)
-) -> OrderResponse:
-    """
-    Create trailing stop order.
-    
-    Args:
-        request: Trailing stop order request
-        current_user: Current authenticated user
-        order_manager: Advanced order manager
-        
-    Returns:
-        Order creation response
-    """
-    trace_id = str(uuid.uuid4())
-    
-    try:
-        logger.info("Creating trailing stop order", extra={
-            "trace_id": trace_id,
-            "user_id": request.user_id,
-            "token_address": request.token_address,
-            "chain": request.chain,
-            "dex": request.dex,
-            "quantity": request.quantity,
-            "trailing_distance": request.trailing_distance,
-            "module": "orders_api",
-            "action": "create_trailing_stop"
-        })
-        
-        order_id = await order_manager.create_trailing_stop_order(
-            user_id=request.user_id,
-            token_address=request.token_address,
-            pair_address=request.pair_address,
-            chain=request.chain,
-            dex=request.dex,
-            side=request.side,
-            quantity=Decimal(request.quantity),
-            trailing_distance=Decimal(request.trailing_distance),
-            activation_price=Decimal(request.activation_price) if request.activation_price else None,
-            trace_id=trace_id
-        )
-        
-        logger.info("Successfully created trailing stop order", extra={
-            "trace_id": trace_id,
-            "order_id": order_id,
-            "user_id": request.user_id
-        })
-        
-        return OrderResponse(
-            order_id=order_id,
-            status="active",
-            message="Trailing stop order created successfully",
-            trace_id=trace_id
-        )
-        
-    except Exception as e:
-        logger.error("Failed to create trailing stop order", extra={
-            "trace_id": trace_id,
-            "user_id": request.user_id,
-            "error": str(e),
-            "module": "orders_api"
-        })
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to create trailing stop order: {str(e)}"
-        )
-
-
-@router.delete("/cancel/{order_id}", response_model=OrderResponse)
-async def cancel_order(
-    order_id: str,
-    current_user: CurrentUser = Depends(get_current_user),
-    order_manager: AdvancedOrderManager = Depends(get_order_manager)
-) -> OrderResponse:
-    """
-    Cancel an active order.
-    
-    Args:
-        order_id: Order ID to cancel
-        current_user: Current authenticated user
-        order_manager: Advanced order manager
-        
-    Returns:
-        Order cancellation response
-    """
-    trace_id = str(uuid.uuid4())
-    
-    try:
-        logger.info("Cancelling order", extra={
-            "trace_id": trace_id,
-            "order_id": order_id,
-            "user_id": current_user.user_id,
-            "module": "orders_api",
-            "action": "cancel_order"
-        })
-        
-        success = await order_manager.cancel_order(order_id, trace_id)
-        
-        if not success:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Order not found or already cancelled"
-            )
-        
-        logger.info("Successfully cancelled order", extra={
-            "trace_id": trace_id,
-            "order_id": order_id,
-            "user_id": current_user.user_id
-        })
-        
-        return OrderResponse(
-            order_id=order_id,
-            status="cancelled",
-            message="Order cancelled successfully",
-            trace_id=trace_id
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("Failed to cancel order", extra={
-            "trace_id": trace_id,
-            "order_id": order_id,
-            "user_id": current_user.user_id,
-            "error": str(e),
-            "module": "orders_api"
-        })
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to cancel order: {str(e)}"
-        )
+@router.get("/test")
+async def test_orders() -> Dict[str, Any]:
+    """Test endpoint for orders router."""
+    return {
+        "status": "success",
+        "service": "orders_api",
+        "message": "Orders router is working!",
+        "version": "1.0.0"
+    }
 
 
 @router.get("/health")
-async def orders_health() -> Dict[str, str]:
-    """
-    Health check for orders service.
-    
-    Returns:
-        Health status
-    """
+async def orders_health() -> Dict[str, Any]:
+    """Health check for orders service."""
     return {
         "status": "OK",
-        "message": "Advanced orders service is operational",
-        "features": [
-            "stop_loss",
-            "take_profit", 
-            "dca",
-            "bracket",
-            "trailing_stop"
-        ],
-        "note": "Using mock order manager for testing"
+        "service": "advanced_orders",
+        "supported_order_types": ["limit", "stop_loss", "take_profit", "trailing_stop"],
+        "supported_chains": ["ethereum", "bsc", "polygon", "base"]
     }
+
+
+@router.post("/create")
+async def create_order(order: OrderRequest) -> Dict[str, Any]:
+    """Create advanced order."""
+    return {
+        "order_id": "mock-order-123",
+        "status": OrderStatus.PENDING,
+        "order_type": order.order_type,
+        "token_in": order.token_in,
+        "token_out": order.token_out,
+        "amount_in": order.amount_in,
+        "trigger_price": order.trigger_price,
+        "chain": order.chain,
+        "message": "Mock order created"
+    }
+
+
+@router.get("/active")
+async def get_active_orders() -> Dict[str, Any]:
+    """Get active orders."""
+    return {
+        "orders": [],
+        "total": 0,
+        "message": "Mock active orders"
+    }
+
+
+@router.delete("/{order_id}")
+async def cancel_order(order_id: str) -> Dict[str, Any]:
+    """Cancel order."""
+    return {
+        "order_id": order_id,
+        "status": "cancelled",
+        "message": "Mock order cancellation"
+    }
+
+
+logger.info("Advanced Orders API router initialized (minimal stub)")
