@@ -290,16 +290,28 @@ async def global_exception_handler(request, exc):
     )
 
 
-# CRITICAL FIX: Include API router WITHOUT double prefix
+# CRITICAL: Include API router and WebSocket router with proper error handling
 try:
     from app.api import api_router
-    logger.info(f"Loading main API router...")
+    logger.info("Loading main API router...")
     
     # IMPORTANT: api_router already has prefix="/api/v1" in __init__.py
     # Do NOT add prefix here or you get /api/v1/api/v1/
     app.include_router(api_router, prefix="/api/v1")
     
     logger.info("Main API router included successfully")
+    
+    # Include WebSocket router at root level (not under /api/v1)
+    try:
+        from app.api.websocket import router as websocket_router
+        app.include_router(websocket_router)  # No prefix - router already has /ws prefix
+        logger.info("WebSocket router registered at /ws")
+    except ImportError as e:
+        logger.warning(f"WebSocket router not available: {e}")
+    except AttributeError as e:
+        logger.error(f"WebSocket router missing 'router' attribute: {e}")
+    except Exception as e:
+        logger.error(f"Failed to register WebSocket router: {e}")
     
 except ImportError as e:
     logger.error(f"Failed to import main API router: {e}")
@@ -308,12 +320,18 @@ except ImportError as e:
     logger.info("Attempting to include individual API routers...")
     
     individual_routers = [
+        ("basic_endpoints", "Core Endpoints"),
+        ("health", "Health Check"),
         ("wallet", "Wallet Management"),
         ("quotes", "Quote Aggregation"),
         ("trades", "Trade Execution"),
         ("risk", "Risk Assessment"),
         ("discovery", "Pair Discovery"),
+        ("autotrade", "Automated Trading"),
+        ("monitoring", "Monitoring & Alerting"),
     ]
+    
+    fallback_success_count = 0
     
     for router_name, description in individual_routers:
         try:
@@ -321,12 +339,28 @@ except ImportError as e:
             router = getattr(module, "router")
             app.include_router(router, prefix="/api/v1")
             logger.info(f"{description} router included successfully")
+            fallback_success_count += 1
         except ImportError as e:
             logger.warning(f"{description} router not available: {e}")
         except AttributeError as e:
             logger.error(f"{description} router missing 'router' attribute: {e}")
         except Exception as e:
             logger.error(f"Failed to include {description} router: {e}")
+    
+    # Still try to include WebSocket router in fallback mode
+    try:
+        from app.api.websocket import router as websocket_router
+        app.include_router(websocket_router)
+        logger.info("WebSocket router registered at /ws (fallback mode)")
+    except ImportError as e:
+        logger.warning(f"WebSocket router not available in fallback mode: {e}")
+    except Exception as e:
+        logger.error(f"Failed to register WebSocket router in fallback mode: {e}")
+    
+    logger.info(f"Fallback router registration completed: {fallback_success_count} routers loaded")
+
+except Exception as e:
+    logger.error(f"Critical error in router registration: {e}", exc_info=True)
 
 
 # Debug route listing endpoint
@@ -334,32 +368,45 @@ except ImportError as e:
 async def list_routes():
     """List all registered API routes for debugging."""
     routes = []
+    websocket_routes = []
     
     for route in app.routes:
-        if hasattr(route, 'path') and hasattr(route, 'methods'):
-            routes.append({
-                "path": route.path,
-                "methods": list(route.methods) if route.methods else ["GET"],
-                "name": getattr(route, 'name', 'unknown'),
-                "endpoint": str(getattr(route, 'endpoint', 'unknown'))
-            })
+        route_info = {
+            "path": getattr(route, 'path', 'unknown'),
+            "name": getattr(route, 'name', 'unknown'),
+            "endpoint": str(getattr(route, 'endpoint', 'unknown'))
+        }
+        
+        if hasattr(route, 'methods'):
+            route_info["methods"] = list(route.methods) if route.methods else ["GET"]
+            routes.append(route_info)
+        elif hasattr(route, 'path') and '/ws/' in route.path:
+            route_info["type"] = "websocket"
+            websocket_routes.append(route_info)
+        else:
+            route_info["methods"] = ["UNKNOWN"]
+            routes.append(route_info)
     
     # Categorize routes for easier debugging
     api_v1_routes = [r for r in routes if r['path'].startswith('/api/v1')]
-    wallet_routes = [r for r in routes if 'wallet' in r['path'].lower()]
+    websocket_paths = [r for r in routes + websocket_routes if '/ws/' in r['path']]
     
     return {
         "total_routes": len(routes),
         "api_v1_routes": len(api_v1_routes),
-        "wallet_routes": len(wallet_routes),
+        "websocket_routes": len(websocket_routes),
         "routes": sorted(routes, key=lambda x: x['path']),
-        "wallet_endpoints": wallet_routes,
+        "websocket_endpoints": websocket_paths,
         "expected_endpoints": {
+            "api_health": "/api/v1/health",
             "wallets": "/api/v1/wallets/",
             "quotes": "/api/v1/quotes/",
             "trades": "/api/v1/trades/", 
             "risk": "/api/v1/risk/",
-            "discovery": "/api/v1/discovery/"
+            "discovery": "/api/v1/discovery/",
+            "websocket_main": "/ws/{client_id}",
+            "websocket_status": "/ws/status",
+            "websocket_test": "/ws/test"
         }
     }
 
@@ -380,12 +427,17 @@ async def root():
         "uptime_seconds": uptime,
         "documentation": "/docs",
         "api_routes": "/api/routes",
+        "websocket_test": "/ws/test",
         "core_endpoints": {
+            "health_check": "/health",
+            "api_health": "/api/v1/health",
             "wallet_management": "/api/v1/wallets/test",
             "quote_aggregation": "/api/v1/quotes/test", 
             "trade_execution": "/api/v1/trades/test",
             "risk_assessment": "/api/v1/risk/test",
-            "pair_discovery": "/api/v1/discovery/test"
+            "pair_discovery": "/api/v1/discovery/test",
+            "websocket_status": "/ws/status",
+            "websocket_connection": "/ws/{client_id}"
         }
     }
 
@@ -409,23 +461,36 @@ async def health_check():
     
     if hasattr(app.state, 'wallet_registry'):
         components["wallet_registry"] = "operational"
+    else:
+        components["wallet_registry"] = "not_available"
     
     if hasattr(app.state, 'evm_client'):
         components["evm_client"] = "operational"
+    else:
+        components["evm_client"] = "not_available"
     
     if hasattr(app.state, 'solana_client'):
         components["solana_client"] = "operational"
+    else:
+        components["solana_client"] = "not_available"
     
     if hasattr(app.state, 'ws_hub'):
         components["websocket_hub"] = "operational"
+    else:
+        components["websocket_hub"] = "not_available"
     
     if hasattr(scheduler_manager, 'scheduler') and scheduler_manager.scheduler.running:
         components["scheduler"] = "operational"
+    else:
+        components["scheduler"] = "not_running"
     
     # Calculate uptime
     uptime_seconds = None
     if hasattr(app.state, 'started_at'):
         uptime_seconds = asyncio.get_event_loop().time() - app.state.started_at
+    
+    # Check if WebSocket routes are registered
+    websocket_routes_registered = any('/ws/' in str(route.path) for route in app.routes)
     
     return {
         "status": "healthy",
@@ -433,10 +498,12 @@ async def health_check():
         "version": "1.0.0",
         "uptime_seconds": uptime_seconds,
         "components": components,
+        "websocket_routes_registered": websocket_routes_registered,
         "endpoints_status": {
             "total_routes": len(app.routes),
             "api_documentation": "/docs",
-            "route_debugging": "/api/routes"
+            "route_debugging": "/api/routes",
+            "websocket_test_page": "/ws/test"
         }
     }
 

@@ -39,24 +39,58 @@ async def websocket_endpoint(
     """
     logger.info(f"WebSocket connection attempt: {client_id}")
     
-    # Connect client to the hub
-    connected = await ws_hub.connect_client(client_id, websocket)
-    if not connected:
-        logger.error(f"Failed to connect WebSocket client: {client_id}")
-        return
-    
     try:
+        # Connect client to the hub with validation
+        connected = await ws_hub.connect_client(client_id, websocket)
+        if not connected:
+            logger.error(f"Failed to connect WebSocket client: {client_id}")
+            await websocket.close(code=1011, reason="Server error: failed to register client")
+            return
+        
+        logger.info(f"WebSocket client {client_id} connected successfully")
+        
         # Handle incoming messages from client
         while True:
-            data = await websocket.receive_text()
-            await ws_hub.handle_client_message(client_id, data)
+            try:
+                data = await websocket.receive_text()
+                logger.debug(f"Received message from {client_id}: {data[:100]}...")
+                await ws_hub.handle_client_message(client_id, data)
+                
+            except WebSocketDisconnect:
+                logger.info(f"WebSocket client {client_id} disconnected normally")
+                break
+            except Exception as msg_error:
+                logger.error(f"Error processing message from {client_id}: {msg_error}")
+                # Send error response to client
+                try:
+                    error_message = WebSocketMessage(
+                        id=str(uuid.uuid4()),
+                        type=MessageType.ERROR,
+                        channel=Channel.SYSTEM,
+                        data={
+                            "error": "Message processing failed",
+                            "details": str(msg_error),
+                            "client_id": client_id
+                        },
+                        timestamp=None
+                    )
+                    await websocket.send_text(error_message.to_json())
+                except:
+                    # If we can't send error message, connection is likely broken
+                    logger.error(f"Failed to send error message to {client_id}, closing connection")
+                    break
             
     except WebSocketDisconnect:
-        logger.info(f"WebSocket client disconnected normally: {client_id}")
+        logger.info(f"WebSocket client {client_id} disconnected during setup")
     except Exception as e:
-        logger.error(f"WebSocket error for client {client_id}: {e}")
+        logger.error(f"Critical WebSocket error for client {client_id}: {e}", exc_info=True)
     finally:
-        await ws_hub.disconnect_client(client_id, "Connection closed")
+        # Ensure cleanup happens regardless of how we exit
+        try:
+            await ws_hub.disconnect_client(client_id, "Connection closed")
+            logger.debug(f"WebSocket client {client_id} cleanup completed")
+        except Exception as cleanup_error:
+            logger.error(f"Error during WebSocket cleanup for {client_id}: {cleanup_error}")
 
 
 @router.get("/status")
@@ -67,38 +101,174 @@ async def websocket_status():
     Returns:
         Dict containing hub status, connection count, and channel subscriptions
     """
-    return {
-        "status": "operational",
-        "hub_stats": ws_hub.get_connection_stats(),
-        "endpoints": {
-            "main": "/ws/{client_id}",
-            "description": "Single WebSocket endpoint with channel subscriptions"
+    try:
+        hub_stats = ws_hub.get_connection_stats() if ws_hub else {"error": "hub_not_available"}
+        
+        return {
+            "status": "operational" if ws_hub and hasattr(ws_hub, '_running') and ws_hub._running else "degraded",
+            "hub_stats": hub_stats,
+            "endpoints": {
+                "main": "/ws/{client_id}",
+                "legacy": "/ws/autotrade",
+                "description": "Single WebSocket endpoint with channel subscriptions"
+            }
         }
-    }
+    except Exception as e:
+        logger.error(f"Error getting WebSocket status: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "hub_stats": {"error": "unable_to_retrieve"}
+        }
 
 
 @router.get("/test")
 async def websocket_test_page():
     """
-    Simple test page for WebSocket connections during development.
+    Production-ready WebSocket test page with proper heartbeat handling.
     
     Returns:
-        HTML page with WebSocket test client
+        HTML page with enhanced WebSocket test client
     """
     html_content = """
     <!DOCTYPE html>
     <html>
     <head>
-        <title>DEX Sniper Pro - WebSocket Test</title>
+        <title>DEX Sniper Pro - WebSocket Test Client</title>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
-            body { font-family: Arial, sans-serif; margin: 20px; }
-            .container { max-width: 800px; margin: 0 auto; }
-            .status { padding: 10px; margin: 10px 0; border-radius: 4px; }
-            .connected { background-color: #d4edda; color: #155724; }
-            .disconnected { background-color: #f8d7da; color: #721c24; }
-            .messages { height: 300px; border: 1px solid #ccc; padding: 10px; overflow-y: scroll; }
-            button { padding: 8px 16px; margin: 5px; cursor: pointer; }
-            input, select { padding: 5px; margin: 5px; }
+            body { 
+                font-family: 'Segoe UI', Arial, sans-serif; 
+                margin: 20px; 
+                background-color: #f5f5f5; 
+            }
+            .container { 
+                max-width: 1000px; 
+                margin: 0 auto; 
+                background: white; 
+                padding: 20px; 
+                border-radius: 8px;
+                box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            }
+            .status { 
+                padding: 12px; 
+                margin: 15px 0; 
+                border-radius: 6px; 
+                font-weight: bold;
+                text-align: center;
+            }
+            .connected { 
+                background-color: #d4edda; 
+                color: #155724; 
+                border: 1px solid #c3e6cb;
+            }
+            .disconnected { 
+                background-color: #f8d7da; 
+                color: #721c24; 
+                border: 1px solid #f5c6cb;
+            }
+            .messages { 
+                height: 400px; 
+                border: 2px solid #ddd; 
+                padding: 15px; 
+                overflow-y: auto; 
+                background: #fafafa;
+                font-family: 'Courier New', monospace;
+                font-size: 12px;
+                line-height: 1.4;
+            }
+            .message {
+                margin-bottom: 8px;
+                padding: 4px 8px;
+                border-radius: 4px;
+            }
+            .message.received {
+                background-color: #e8f4f8;
+                border-left: 4px solid #007bff;
+            }
+            .message.sent {
+                background-color: #fff3cd;
+                border-left: 4px solid #ffc107;
+            }
+            .message.system {
+                background-color: #f8f9fa;
+                border-left: 4px solid #6c757d;
+            }
+            .message.error {
+                background-color: #f8d7da;
+                border-left: 4px solid #dc3545;
+            }
+            button { 
+                padding: 10px 16px; 
+                margin: 5px; 
+                cursor: pointer; 
+                border: none;
+                border-radius: 4px;
+                font-weight: bold;
+                transition: background-color 0.2s;
+            }
+            button:hover {
+                opacity: 0.8;
+            }
+            .btn-primary {
+                background-color: #007bff;
+                color: white;
+            }
+            .btn-success {
+                background-color: #28a745;
+                color: white;
+            }
+            .btn-warning {
+                background-color: #ffc107;
+                color: black;
+            }
+            .btn-danger {
+                background-color: #dc3545;
+                color: white;
+            }
+            .btn-secondary {
+                background-color: #6c757d;
+                color: white;
+            }
+            input, select { 
+                padding: 8px; 
+                margin: 5px; 
+                border: 1px solid #ddd;
+                border-radius: 4px;
+            }
+            .controls {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+                gap: 10px;
+                margin: 15px 0;
+                padding: 15px;
+                background: #f8f9fa;
+                border-radius: 6px;
+            }
+            .stats {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                gap: 15px;
+                margin: 20px 0;
+            }
+            .stat-box {
+                padding: 15px;
+                background: #e9ecef;
+                border-radius: 6px;
+                text-align: center;
+            }
+            .stat-value {
+                font-size: 24px;
+                font-weight: bold;
+                color: #495057;
+            }
+            .stat-label {
+                font-size: 14px;
+                color: #6c757d;
+                margin-top: 5px;
+            }
         </style>
     </head>
     <body>
@@ -107,119 +277,259 @@ async def websocket_test_page():
             
             <div id="status" class="status disconnected">Disconnected</div>
             
-            <div>
-                <button onclick="connect()">Connect</button>
-                <button onclick="disconnect()">Disconnect</button>
-                <button onclick="sendHeartbeat()">Send Heartbeat</button>
+            <div class="stats">
+                <div class="stat-box">
+                    <div class="stat-value" id="connectionCount">0</div>
+                    <div class="stat-label">Connections Made</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-value" id="messagesReceived">0</div>
+                    <div class="stat-label">Messages Received</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-value" id="messagesSent">0</div>
+                    <div class="stat-label">Messages Sent</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-value" id="heartbeatCount">0</div>
+                    <div class="stat-label">Heartbeats</div>
+                </div>
             </div>
             
-            <div>
+            <div class="controls">
+                <button onclick="connect()" class="btn-success">Connect</button>
+                <button onclick="disconnect()" class="btn-danger">Disconnect</button>
+                <button onclick="sendManualHeartbeat()" class="btn-warning">Send Heartbeat</button>
+                <button onclick="testConnection()" class="btn-secondary">Test Connection</button>
+            </div>
+            
+            <div class="controls">
                 <select id="channel">
                     <option value="autotrade">Autotrade</option>
                     <option value="discovery">Discovery</option>
                     <option value="system">System</option>
                 </select>
-                <button onclick="subscribe()">Subscribe to Channel</button>
-                <button onclick="unsubscribe()">Unsubscribe</button>
+                <button onclick="subscribe()" class="btn-primary">Subscribe to Channel</button>
+                <button onclick="unsubscribe()" class="btn-secondary">Unsubscribe</button>
             </div>
             
             <div>
-                <h3>Messages:</h3>
+                <h3>Real-time Messages:</h3>
                 <div id="messages" class="messages"></div>
-                <button onclick="clearMessages()">Clear Messages</button>
+                <div class="controls">
+                    <button onclick="clearMessages()" class="btn-secondary">Clear Messages</button>
+                    <button onclick="exportLogs()" class="btn-primary">Export Logs</button>
+                </div>
             </div>
         </div>
 
         <script>
             let ws = null;
             let clientId = 'test_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+            let stats = {
+                connectionCount: 0,
+                messagesReceived: 0,
+                messagesSent: 0,
+                heartbeatCount: 0
+            };
+            let heartbeatInterval = null;
+            let reconnectAttempts = 0;
+            let maxReconnectAttempts = 5;
+            let messageLog = [];
 
-            function updateStatus(connected) {
+            function updateStatus(connected, details = '') {
                 const statusEl = document.getElementById('status');
                 if (connected) {
-                    statusEl.textContent = `Connected (Client ID: ${clientId})`;
+                    statusEl.textContent = `Connected (Client ID: ${clientId}) ${details}`;
                     statusEl.className = 'status connected';
                 } else {
-                    statusEl.textContent = 'Disconnected';
+                    statusEl.textContent = `Disconnected ${details}`;
                     statusEl.className = 'status disconnected';
                 }
             }
 
-            function addMessage(message) {
+            function updateStats() {
+                document.getElementById('connectionCount').textContent = stats.connectionCount;
+                document.getElementById('messagesReceived').textContent = stats.messagesReceived;
+                document.getElementById('messagesSent').textContent = stats.messagesSent;
+                document.getElementById('heartbeatCount').textContent = stats.heartbeatCount;
+            }
+
+            function addMessage(message, type = 'system') {
                 const messagesEl = document.getElementById('messages');
                 const timestamp = new Date().toLocaleTimeString();
-                messagesEl.innerHTML += `<div><strong>[${timestamp}]</strong> ${message}</div>`;
+                const messageDiv = document.createElement('div');
+                messageDiv.className = `message ${type}`;
+                messageDiv.innerHTML = `<strong>[${timestamp}]</strong> ${message}`;
+                messagesEl.appendChild(messageDiv);
                 messagesEl.scrollTop = messagesEl.scrollHeight;
+                
+                // Log message for export
+                messageLog.push({
+                    timestamp: new Date().toISOString(),
+                    type: type,
+                    message: message
+                });
             }
 
             function connect() {
                 if (ws && ws.readyState === WebSocket.OPEN) {
-                    addMessage('Already connected');
+                    addMessage('Already connected', 'system');
                     return;
                 }
 
-                const wsUrl = `ws://localhost:8000/ws/${clientId}`;
-                addMessage(`Connecting to: ${wsUrl}`);
+                const wsUrl = `ws://localhost:8001/ws/${clientId}`;
+                addMessage(`Connecting to: ${wsUrl}`, 'system');
                 
-                ws = new WebSocket(wsUrl);
+                try {
+                    ws = new WebSocket(wsUrl);
 
-                ws.onopen = function(event) {
-                    updateStatus(true);
-                    addMessage('✅ WebSocket connected successfully');
-                };
+                    ws.onopen = function(event) {
+                        stats.connectionCount++;
+                        reconnectAttempts = 0;
+                        updateStatus(true, '- Ready for messages');
+                        updateStats();
+                        addMessage('WebSocket connected successfully', 'system');
+                        
+                        // Start automatic heartbeat response
+                        setupAutomaticHeartbeat();
+                    };
 
-                ws.onmessage = function(event) {
-                    try {
-                        const data = JSON.parse(event.data);
-                        addMessage(`📨 Received: ${data.type} on ${data.channel} - ${JSON.stringify(data.data)}`);
-                    } catch (e) {
-                        addMessage(`📨 Raw message: ${event.data}`);
-                    }
-                };
+                    ws.onmessage = function(event) {
+                        stats.messagesReceived++;
+                        updateStats();
+                        
+                        try {
+                            const data = JSON.parse(event.data);
+                            const messageContent = `${data.type} on ${data.channel} - ${JSON.stringify(data.data)}`;
+                            addMessage(`Received: ${messageContent}`, 'received');
+                            
+                            // Handle heartbeat messages automatically
+                            if (data.type === 'heartbeat' && data.data && data.data.ping) {
+                                stats.heartbeatCount++;
+                                updateStats();
+                                respondToHeartbeat();
+                                addMessage('Heartbeat ping received, sending pong', 'system');
+                            }
+                        } catch (e) {
+                            addMessage(`Raw message: ${event.data}`, 'received');
+                        }
+                    };
 
-                ws.onclose = function(event) {
-                    updateStatus(false);
-                    addMessage(`❌ WebSocket closed: ${event.code} - ${event.reason}`);
-                };
+                    ws.onclose = function(event) {
+                        updateStatus(false, `Code: ${event.code}, Reason: ${event.reason || 'Unknown'}`);
+                        addMessage(`WebSocket closed: ${event.code} - ${event.reason || 'No reason provided'}`, 'error');
+                        
+                        // Stop heartbeat
+                        if (heartbeatInterval) {
+                            clearInterval(heartbeatInterval);
+                            heartbeatInterval = null;
+                        }
+                        
+                        // Attempt reconnection for unexpected closures
+                        if (event.code !== 1000 && reconnectAttempts < maxReconnectAttempts) {
+                            scheduleReconnect();
+                        }
+                    };
 
-                ws.onerror = function(error) {
-                    addMessage(`🚨 WebSocket error: ${error}`);
-                };
+                    ws.onerror = function(error) {
+                        addMessage(`WebSocket error: ${error}`, 'error');
+                    };
+                    
+                } catch (error) {
+                    addMessage(`Failed to create WebSocket: ${error}`, 'error');
+                }
             }
 
             function disconnect() {
                 if (ws) {
-                    ws.close();
+                    // Stop heartbeat
+                    if (heartbeatInterval) {
+                        clearInterval(heartbeatInterval);
+                        heartbeatInterval = null;
+                    }
+                    
+                    ws.close(1000, 'Manual disconnect');
                     ws = null;
+                    addMessage('Manually disconnected', 'system');
                 }
+            }
+
+            function setupAutomaticHeartbeat() {
+                // Clear any existing interval
+                if (heartbeatInterval) {
+                    clearInterval(heartbeatInterval);
+                }
+                
+                // Send heartbeat every 25 seconds (before server timeout)
+                heartbeatInterval = setInterval(() => {
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        sendManualHeartbeat();
+                    }
+                }, 25000);
+            }
+
+            function respondToHeartbeat() {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    const pongMessage = {
+                        id: Date.now().toString(),
+                        type: 'heartbeat',
+                        channel: 'system',
+                        data: { pong: true },
+                        timestamp: new Date().toISOString(),
+                        client_id: clientId
+                    };
+                    
+                    ws.send(JSON.stringify(pongMessage));
+                    stats.messagesSent++;
+                    updateStats();
+                }
+            }
+
+            function scheduleReconnect() {
+                const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
+                addMessage(`Reconnecting in ${delay/1000}s (attempt ${reconnectAttempts + 1}/${maxReconnectAttempts})`, 'system');
+                
+                setTimeout(() => {
+                    reconnectAttempts++;
+                    connect();
+                }, delay);
             }
 
             function sendMessage(type, channel, data) {
                 if (!ws || ws.readyState !== WebSocket.OPEN) {
-                    addMessage('❌ Not connected');
-                    return;
+                    addMessage('Not connected - cannot send message', 'error');
+                    return false;
                 }
 
-                const message = {
-                    id: Date.now().toString(),
-                    type: type,
-                    channel: channel,
-                    data: data,
-                    timestamp: new Date().toISOString(),
-                    client_id: clientId
-                };
+                try {
+                    const message = {
+                        id: Date.now().toString(),
+                        type: type,
+                        channel: channel,
+                        data: data,
+                        timestamp: new Date().toISOString(),
+                        client_id: clientId
+                    };
 
-                ws.send(JSON.stringify(message));
-                addMessage(`📤 Sent: ${type} to ${channel}`);
+                    ws.send(JSON.stringify(message));
+                    stats.messagesSent++;
+                    updateStats();
+                    addMessage(`Sent: ${type} to ${channel}`, 'sent');
+                    return true;
+                } catch (error) {
+                    addMessage(`Failed to send message: ${error}`, 'error');
+                    return false;
+                }
             }
 
-            function sendHeartbeat() {
-                sendMessage('heartbeat', 'system', { ping: true });
+            function sendManualHeartbeat() {
+                return sendMessage('heartbeat', 'system', { ping: true });
             }
 
             function subscribe() {
                 const channel = document.getElementById('channel').value;
-                sendMessage('subscription_ack', 'system', { 
+                return sendMessage('subscription_ack', 'system', { 
                     action: 'subscribe', 
                     channel: channel 
                 });
@@ -227,20 +537,67 @@ async def websocket_test_page():
 
             function unsubscribe() {
                 const channel = document.getElementById('channel').value;
-                sendMessage('subscription_ack', 'system', { 
+                return sendMessage('subscription_ack', 'system', { 
                     action: 'unsubscribe', 
                     channel: channel 
                 });
             }
 
+            function testConnection() {
+                if (!ws || ws.readyState !== WebSocket.OPEN) {
+                    addMessage('Connection test failed - not connected', 'error');
+                    return;
+                }
+                
+                addMessage('Testing connection...', 'system');
+                
+                // Test with a simple heartbeat
+                if (sendManualHeartbeat()) {
+                    addMessage('Connection test successful', 'system');
+                } else {
+                    addMessage('Connection test failed', 'error');
+                }
+            }
+
             function clearMessages() {
                 document.getElementById('messages').innerHTML = '';
+                messageLog = [];
+                addMessage('Message log cleared', 'system');
+            }
+
+            function exportLogs() {
+                const logData = {
+                    clientId: clientId,
+                    stats: stats,
+                    messages: messageLog,
+                    exportTime: new Date().toISOString()
+                };
+                
+                const blob = new Blob([JSON.stringify(logData, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `websocket-log-${clientId}.json`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                
+                addMessage('Logs exported successfully', 'system');
             }
 
             // Auto-connect on page load
             window.onload = function() {
-                addMessage('WebSocket Test Client loaded');
-                addMessage(`Generated Client ID: ${clientId}`);
+                addMessage('DEX Sniper Pro WebSocket Test Client loaded', 'system');
+                addMessage(`Generated Client ID: ${clientId}`, 'system');
+                updateStats();
+            };
+            
+            // Cleanup on page unload
+            window.onbeforeunload = function() {
+                if (ws) {
+                    ws.close(1000, 'Page unload');
+                }
             };
         </script>
     </body>
@@ -262,15 +619,26 @@ async def broadcast_autotrade_message(message_type: MessageType, data: dict) -> 
     Returns:
         int: Number of clients message was sent to
     """
-    message = WebSocketMessage(
-        id=str(uuid.uuid4()),
-        type=message_type,
-        channel=Channel.AUTOTRADE,
-        data=data,
-        timestamp=None  # Will be set automatically
-    )
-    
-    return await ws_hub.broadcast_to_channel(Channel.AUTOTRADE, message)
+    try:
+        if not ws_hub:
+            logger.error("WebSocket hub not available for autotrade broadcast")
+            return 0
+            
+        message = WebSocketMessage(
+            id=str(uuid.uuid4()),
+            type=message_type,
+            channel=Channel.AUTOTRADE,
+            data=data,
+            timestamp=None  # Will be set automatically
+        )
+        
+        sent_count = await ws_hub.broadcast_to_channel(Channel.AUTOTRADE, message)
+        logger.debug(f"Autotrade message broadcast to {sent_count} clients")
+        return sent_count
+        
+    except Exception as e:
+        logger.error(f"Failed to broadcast autotrade message: {e}")
+        return 0
 
 
 async def broadcast_discovery_message(message_type: MessageType, data: dict) -> int:
@@ -284,15 +652,26 @@ async def broadcast_discovery_message(message_type: MessageType, data: dict) -> 
     Returns:
         int: Number of clients message was sent to
     """
-    message = WebSocketMessage(
-        id=str(uuid.uuid4()),
-        type=message_type,
-        channel=Channel.DISCOVERY,
-        data=data,
-        timestamp=None  # Will be set automatically
-    )
-    
-    return await ws_hub.broadcast_to_channel(Channel.DISCOVERY, message)
+    try:
+        if not ws_hub:
+            logger.error("WebSocket hub not available for discovery broadcast")
+            return 0
+            
+        message = WebSocketMessage(
+            id=str(uuid.uuid4()),
+            type=message_type,
+            channel=Channel.DISCOVERY,
+            data=data,
+            timestamp=None  # Will be set automatically
+        )
+        
+        sent_count = await ws_hub.broadcast_to_channel(Channel.DISCOVERY, message)
+        logger.debug(f"Discovery message broadcast to {sent_count} clients")
+        return sent_count
+        
+    except Exception as e:
+        logger.error(f"Failed to broadcast discovery message: {e}")
+        return 0
 
 
 async def broadcast_system_message(message_type: MessageType, data: dict) -> int:
@@ -306,38 +685,116 @@ async def broadcast_system_message(message_type: MessageType, data: dict) -> int
     Returns:
         int: Number of clients message was sent to
     """
-    message = WebSocketMessage(
-        id=str(uuid.uuid4()),
-        type=message_type,
-        channel=Channel.SYSTEM,
-        data=data,
-        timestamp=None  # Will be set automatically
-    )
-    
-    return await ws_hub.broadcast_to_channel(Channel.SYSTEM, message)
-
-
-
-
-
+    try:
+        if not ws_hub:
+            logger.error("WebSocket hub not available for system broadcast")
+            return 0
+            
+        message = WebSocketMessage(
+            id=str(uuid.uuid4()),
+            type=message_type,
+            channel=Channel.SYSTEM,
+            data=data,
+            timestamp=None  # Will be set automatically
+        )
+        
+        sent_count = await ws_hub.broadcast_to_channel(Channel.SYSTEM, message)
+        logger.debug(f"System message broadcast to {sent_count} clients")
+        return sent_count
+        
+    except Exception as e:
+        logger.error(f"Failed to broadcast system message: {e}")
+        return 0
 
 
 @router.websocket("/autotrade")
 async def websocket_autotrade_endpoint(websocket: WebSocket):
-    """Legacy autotrade WebSocket endpoint for frontend compatibility."""
+    """
+    Legacy autotrade WebSocket endpoint for frontend compatibility.
+    Maintained for backward compatibility with existing frontends.
+    """
     client_id = f"autotrade_{uuid.uuid4().hex[:8]}"
-    logger.info(f"Autotrade WebSocket connection: {client_id}")
-    
-    # Use existing hub connection logic
-    connected = await ws_hub.connect_client(client_id, websocket)
-    if not connected:
-        return
+    logger.info(f"Legacy autotrade WebSocket connection: {client_id}")
     
     try:
+        # Use existing hub connection logic
+        connected = await ws_hub.connect_client(client_id, websocket)
+        if not connected:
+            logger.error(f"Failed to connect legacy autotrade client: {client_id}")
+            await websocket.close(code=1011, reason="Server error")
+            return
+        
+        # Auto-subscribe to autotrade channel for legacy clients
+        try:
+            await ws_hub.subscribe_to_channel(client_id, Channel.AUTOTRADE)
+            logger.info(f"Legacy client {client_id} auto-subscribed to autotrade channel")
+        except Exception as sub_error:
+            logger.error(f"Failed to auto-subscribe legacy client: {sub_error}")
+        
+        # Handle messages
         while True:
-            data = await websocket.receive_text()
-            await ws_hub.handle_client_message(client_id, data)
-    except WebSocketDisconnect:
-        logger.info(f"Autotrade WebSocket disconnected: {client_id}")
+            try:
+                data = await websocket.receive_text()
+                await ws_hub.handle_client_message(client_id, data)
+            except WebSocketDisconnect:
+                logger.info(f"Legacy autotrade client {client_id} disconnected")
+                break
+            except Exception as e:
+                logger.error(f"Error in legacy autotrade endpoint for {client_id}: {e}")
+                break
+                
+    except Exception as e:
+        logger.error(f"Critical error in legacy autotrade endpoint: {e}")
     finally:
-        await ws_hub.disconnect_client(client_id, "Connection closed")
+        try:
+            await ws_hub.disconnect_client(client_id, "Legacy connection closed")
+        except Exception as cleanup_error:
+            logger.error(f"Error cleaning up legacy client {client_id}: {cleanup_error}")
+
+
+# Health check endpoint for WebSocket system
+@router.get("/health")
+async def websocket_health():
+    """
+    Detailed health check for WebSocket system components.
+    
+    Returns:
+        Dict containing detailed health information
+    """
+    try:
+        health_info = {
+            "status": "healthy",
+            "timestamp": str(uuid.uuid4()),  # Using timestamp placeholder
+            "components": {
+                "hub_available": ws_hub is not None,
+                "hub_running": False,
+                "connection_count": 0,
+                "channel_count": 0
+            }
+        }
+        
+        if ws_hub:
+            try:
+                stats = ws_hub.get_connection_stats()
+                health_info["components"].update({
+                    "hub_running": hasattr(ws_hub, '_running') and ws_hub._running,
+                    "connection_count": stats.get("total_connections", 0),
+                    "channel_count": len(stats.get("channel_subscriptions", {}))
+                })
+                health_info["hub_stats"] = stats
+            except Exception as stats_error:
+                health_info["components"]["stats_error"] = str(stats_error)
+                health_info["status"] = "degraded"
+        else:
+            health_info["status"] = "unhealthy"
+            health_info["error"] = "WebSocket hub not available"
+        
+        return health_info
+        
+    except Exception as e:
+        logger.error(f"WebSocket health check failed: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "timestamp": str(uuid.uuid4())
+        }
