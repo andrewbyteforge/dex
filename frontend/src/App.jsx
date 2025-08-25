@@ -1,6 +1,7 @@
 /**
  * Enhanced main App component for DEX Sniper Pro with centralized state management and wallet integration.
  * Removes redundant WebSocket connections to prevent connection churn.
+ * UPDATED: Added TradingInterface and TradingTestPage components.
  *
  * File: frontend/src/App.jsx
  */
@@ -17,6 +18,8 @@ import Autotrade from './components/Autotrade.jsx';
 import PairDiscovery from './components/PairDiscovery.jsx';
 import WalletTestComponent from './components/WalletTestComponent.jsx';
 import WalletConnect from './components/WalletConnect.jsx';
+import TradingInterface from './components/TradingInterface.jsx';
+import TradingTestPage from './pages/TradingTestPage.jsx';
 import { useWallet } from './hooks/useWallet.js';
 
 /**
@@ -279,15 +282,16 @@ const MobileLayout = ({
   const [touchEnd, setTouchEnd] = useState(null);
   const [connectionAttempts, setConnectionAttempts] = useState(0);
 
-  // Navigation items configuration - Added wallet test tab
+  // UPDATED: Navigation items configuration - Added trading test tab
   const navItems = [
     { key: 'trade', label: 'Trade', icon: Home, mobileOrder: 1 },
-    { key: 'autotrade', label: 'Auto', icon: Bot, mobileOrder: 2 },
-    { key: 'discovery', label: 'Discovery', icon: Activity, mobileOrder: 3 },
-    { key: 'analytics', label: 'Stats', icon: BarChart3, mobileOrder: 4 },
-    { key: 'orders', label: 'Orders', icon: TrendingUp, mobileOrder: 5 },
-    { key: 'wallet-test', label: 'Wallet Test', icon: TestTube, mobileOrder: 6 },
-    { key: 'settings', label: 'Settings', icon: Settings, mobileOrder: 7 }
+    { key: 'trading-test', label: 'Trading Test', icon: TestTube, mobileOrder: 2 },
+    { key: 'autotrade', label: 'Auto', icon: Bot, mobileOrder: 3 },
+    { key: 'discovery', label: 'Discovery', icon: Activity, mobileOrder: 4 },
+    { key: 'analytics', label: 'Stats', icon: BarChart3, mobileOrder: 5 },
+    { key: 'orders', label: 'Orders', icon: TrendingUp, mobileOrder: 6 },
+    { key: 'wallet-test', label: 'Wallet Test', icon: TestTube, mobileOrder: 7 },
+    { key: 'settings', label: 'Settings', icon: Settings, mobileOrder: 8 }
   ];
 
   // Responsive breakpoint detection with proper cleanup
@@ -405,14 +409,14 @@ const MobileLayout = ({
       }
       
       // Safe address formatting using our helper
-          const formattedAddress = safeFormatAddress(address, trace_id);
-          
-          logMessage('info', 'Wallet connected via navbar', {
-            trace_id,
-            wallet_address: formattedAddress,
-            wallet_type: type,
-            chain: chain
-          });
+      const formattedAddress = safeFormatAddress(address, trace_id);
+      
+      logMessage('info', 'Wallet connected via navbar', {
+        trace_id,
+        wallet_address: formattedAddress,
+        wallet_type: type,
+        chain: chain
+      });
       
       // CRITICAL FIX: Don't increment connection attempts on successful connection
       setConnectionAttempts(0);
@@ -813,10 +817,11 @@ const MobileLayout = ({
 
 /**
  * Main App Component with centralized state management, wallet integration, and comprehensive error handling
+ * UPDATED: Added TradingInterface and TradingTestPage routing
  */
 function App() {
   const [systemHealth, setSystemHealth] = useState(null);
-  const [activeTab, setActiveTab] = useState('wallet-test'); // Start with wallet test for debugging
+  const [activeTab, setActiveTab] = useState('trading-test'); // UPDATED: Start with trading test for debugging
   const [error, setError] = useState(null);
   const [healthCheckErrors, setHealthCheckErrors] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
@@ -996,7 +1001,7 @@ function App() {
     };
   }, []); // Keep empty dependency array
 
-  // Content rendering with error boundaries for each tab
+  // UPDATED: Content rendering with error boundaries for each tab
   const renderContent = () => {
     if (isLoading) {
       return (
@@ -1013,40 +1018,11 @@ function App() {
 
     try {
       switch (activeTab) {
-        case 'trade':
-          return (
-            <Card>
-              <Card.Header className="d-flex align-items-center">
-                <TrendingUp className="me-2" size={20} />
-                Manual Trading
-              </Card.Header>
-              <Card.Body>
-                <div className="d-flex align-items-center mb-3">
-                  <Wallet className="me-2" size={20} />
-                  <span>
-                    {wallet.isConnected ? 
-                      `Connected: ${wallet.walletType} (${wallet.selectedChain})` : 
-                      'Connect your wallet to start trading'
-                    }
-                  </span>
-                </div>
-                
-                {wallet.isConnected ? (
-                  <Alert variant="success">
-                    <strong>Ready to Trade!</strong> Your wallet is connected and ready for manual trading.
-                  </Alert>
-                ) : (
-                  <Alert variant="info">
-                    <strong>Connect Wallet:</strong> Use the wallet button in the top navigation to connect your wallet.
-                  </Alert>
-                )}
-                
-                <p className="text-muted">
-                  Execute manual trades with real-time quotes and execution across multiple DEXs.
-                </p>
-              </Card.Body>
-            </Card>
-          );
+        case 'trade': // UPDATED: Now uses TradingInterface component
+          return <TradingInterface />;
+
+        case 'trading-test': // NEW: Trading test page
+          return <TradingTestPage />;
 
         case 'autotrade':
           return <Autotrade wallet={wallet} systemHealth={systemHealth} />;
@@ -1179,8 +1155,8 @@ function App() {
               <AlertTriangle size={16} className="me-2" />
               <strong>Unknown page:</strong> {activeTab}
               <div className="mt-2">
-                <Button variant="outline-primary" onClick={() => setActiveTab('wallet-test')}>
-                  Go to Wallet Test
+                <Button variant="outline-primary" onClick={() => setActiveTab('trading-test')}>
+                  Go to Trading Test
                 </Button>
               </div>
             </Alert>
@@ -1204,9 +1180,9 @@ function App() {
               variant="outline-primary" 
               size="sm" 
               className="me-2"
-              onClick={() => setActiveTab('wallet-test')}
+              onClick={() => setActiveTab('trading-test')}
             >
-              Go to Wallet Test
+              Go to Trading Test
             </Button>
             <Button 
               variant="outline-secondary" 
@@ -1235,10 +1211,10 @@ function App() {
     }
   }, [systemHealth]);
 
-  // Tab change handler with comprehensive logging and validation
+  // UPDATED: Tab change handler with comprehensive logging and validation
   const handleTabChange = useCallback((newTab) => {
     try {
-      const validTabs = ['trade', 'autotrade', 'discovery', 'analytics', 'orders', 'wallet-test', 'settings'];
+      const validTabs = ['trade', 'trading-test', 'autotrade', 'discovery', 'analytics', 'orders', 'wallet-test', 'settings'];
       
       if (!validTabs.includes(newTab)) {
         logMessage('warn', 'Invalid tab change requested', { 
