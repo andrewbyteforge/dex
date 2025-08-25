@@ -33,10 +33,10 @@ class Settings(BaseSettings):
     
     # CORS settings
     cors_origins: List[str] = [
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:5173",  # Vite dev server
-        "http://127.0.0.1:5173"
+        "http://localhost:3000",    # Frontend dev server
+        "http://localhost:5173",    # Vite alternative port  
+        "http://127.0.0.1:3000",    # Localhost alternative
+        "http://127.0.0.1:5173",    # Vite localhost alternative
     ]
     cors_allow_credentials: bool = True
     cors_allow_methods: List[str] = ["*"]

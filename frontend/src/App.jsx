@@ -1,14 +1,14 @@
 /**
- * Enhanced main App component for DEX Sniper Pro with centralized state management.
- * Removes redundant WebSocket connections to prevent connection churn.
+ * Enhanced main App component for DEX Sniper Pro with centralized state management and wallet integration.
+ * FIXED: Proper wallet connection handling, error boundaries, and CORS issues.
  *
  * File: frontend/src/App.jsx
  */
-import React, { useState, useEffect, useRef } from 'react';
-import { Container, Row, Col, Navbar, Nav, Offcanvas, Button, Card, Alert, Badge } from 'react-bootstrap';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Container, Row, Col, Navbar, Nav, Offcanvas, Button, Card, Alert, Badge, Spinner } from 'react-bootstrap';
 import { 
   Activity, TrendingUp, Settings, BarChart3, Zap, Bot, 
-  Menu, X, Home, Smartphone, Tablet, Monitor, AlertTriangle, TestTube
+  Menu, X, Home, Smartphone, Tablet, Monitor, AlertTriangle, TestTube, Wallet
 } from 'lucide-react';
 
 // Static imports to prevent dynamic import issues
@@ -16,6 +16,15 @@ import Analytics from './components/Analytics.jsx';
 import Autotrade from './components/Autotrade.jsx';
 import PairDiscovery from './components/PairDiscovery.jsx';
 import WalletTestComponent from './components/WalletTestComponent.jsx';
+import WalletConnect from './components/WalletConnect.jsx';
+import { useWallet } from './hooks/useWallet.js';
+
+/**
+ * Generate trace ID for logging
+ */
+const generateTraceId = (prefix = 'trace') => {
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+};
 
 /**
  * Structured logging for App component lifecycle and errors
@@ -25,24 +34,34 @@ const logMessage = (level, message, data = {}) => {
     timestamp: new Date().toISOString(),
     level,
     component: 'App',
+    trace_id: data.trace_id || generateTraceId('app'),
+    session_id: data.session_id || sessionStorage.getItem('dex_session_id'),
+    message,
     ...data
   };
 
-  switch (level) {
-    case 'error':
-      console.error(`[App] ${message}`, logEntry);
-      break;
-    case 'warn':
-      console.warn(`[App] ${message}`, logEntry);
-      break;
-    case 'info':
-      console.info(`[App] ${message}`, logEntry);
-      break;
-    default:
-      console.log(`[App] ${message}`, logEntry);
+  try {
+    switch (level) {
+      case 'error':
+        console.error(`[App] ${message}`, logEntry);
+        break;
+      case 'warn':
+        console.warn(`[App] ${message}`, logEntry);
+        break;
+      case 'info':
+        console.info(`[App] ${message}`, logEntry);
+        break;
+      case 'debug':
+        console.debug(`[App] ${message}`, logEntry);
+        break;
+      default:
+        console.log(`[App] ${message}`, logEntry);
+    }
+  } catch (loggingError) {
+    console.error('[App] Logging failed:', loggingError);
   }
 
-  return logEntry;
+  return logEntry.trace_id;
 };
 
 /**
@@ -55,12 +74,13 @@ class AppErrorBoundary extends React.Component {
       hasError: false, 
       error: null, 
       errorInfo: null,
-      errorId: null
+      errorId: null,
+      retryCount: 0
     };
   }
   
   static getDerivedStateFromError(error) {
-    const errorId = Date.now().toString(36);
+    const errorId = generateTraceId('error');
     return { 
       hasError: true, 
       error, 
@@ -72,10 +92,13 @@ class AppErrorBoundary extends React.Component {
     const errorRecord = {
       timestamp: new Date().toISOString(),
       errorId: this.state.errorId,
-      message: error.message,
-      stack: error.stack,
-      componentStack: errorInfo.componentStack,
-      errorBoundary: 'App'
+      message: error?.message || 'Unknown error',
+      stack: error?.stack || 'No stack trace',
+      componentStack: errorInfo?.componentStack || 'No component stack',
+      errorBoundary: 'App',
+      retryCount: this.state.retryCount,
+      userAgent: navigator.userAgent,
+      url: window.location.href
     };
 
     console.error('[App] Error boundary caught error:', errorRecord);
@@ -84,19 +107,34 @@ class AppErrorBoundary extends React.Component {
 
     // In production, send to error tracking service
     if (import.meta.env.PROD) {
-      // Example: errorTrackingService.captureException(error, errorRecord);
+      try {
+        fetch('/api/v1/errors/report', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(errorRecord)
+        }).catch(reportError => {
+          console.error('[App] Failed to report error to backend:', reportError);
+        });
+      } catch (reportError) {
+        console.error('[App] Error reporting failed:', reportError);
+      }
     }
   }
   
   handleRetry = () => {
+    const newRetryCount = this.state.retryCount + 1;
+    
     logMessage('info', 'Error boundary retry requested', {
-      errorId: this.state.errorId
+      errorId: this.state.errorId,
+      retryCount: newRetryCount
     });
+    
     this.setState({ 
       hasError: false, 
       error: null, 
       errorInfo: null,
-      errorId: null
+      errorId: null,
+      retryCount: newRetryCount
     });
   };
   
@@ -117,17 +155,32 @@ class AppErrorBoundary extends React.Component {
                 </div>
                 <div className="small text-muted mb-3">
                   <strong>Error ID:</strong> {this.state.errorId}
+                  {this.state.retryCount > 0 && (
+                    <span className="ms-2">
+                      <strong>Retry Attempts:</strong> {this.state.retryCount}
+                    </span>
+                  )}
                 </div>
                 
                 <div className="d-flex gap-2">
-                  <Button variant="outline-danger" onClick={this.handleRetry}>
-                    Retry Application
+                  <Button 
+                    variant="outline-danger" 
+                    onClick={this.handleRetry}
+                    disabled={this.state.retryCount >= 3}
+                  >
+                    {this.state.retryCount >= 3 ? 'Max Retries Reached' : 'Retry Application'}
                   </Button>
                   <Button 
                     variant="outline-secondary" 
                     onClick={() => window.location.reload()}
                   >
                     Reload Page
+                  </Button>
+                  <Button 
+                    variant="outline-info" 
+                    onClick={() => window.location.href = '/'}
+                  >
+                    Go Home
                   </Button>
                 </div>
 
@@ -144,6 +197,16 @@ class AppErrorBoundary extends React.Component {
                     }}>
                       {this.state.error.stack}
                     </pre>
+                    {this.state.errorInfo && (
+                      <pre className="small mt-2 p-2 bg-secondary rounded text-white" style={{
+                        fontSize: '0.75rem',
+                        maxHeight: '200px',
+                        overflow: 'auto',
+                        whiteSpace: 'pre-wrap'
+                      }}>
+                        {this.state.errorInfo.componentStack}
+                      </pre>
+                    )}
                   </details>
                 )}
               </div>
@@ -158,20 +221,26 @@ class AppErrorBoundary extends React.Component {
 }
 
 /**
- * Enhanced MobileLayout component with better responsive handling
+ * Enhanced MobileLayout component with better responsive handling and wallet integration
  */
 const MobileLayout = ({ 
   children, 
   activeTab, 
   onTabChange, 
   systemHealth,
-  showHealthBadge = true 
+  showHealthBadge = true,
+  wallet
 }) => {
   const [isMobile, setIsMobile] = useState(false);
   const [isTablet, setIsTablet] = useState(false);
   const [showSidebar, setShowSidebar] = useState(false);
   const [touchStart, setTouchStart] = useState(null);
   const [touchEnd, setTouchEnd] = useState(null);
+  const [connectionAttempts, setConnectionAttempts] = useState(0);
+  const [screenDimensions, setScreenDimensions] = useState({
+    width: window.innerWidth,
+    height: window.innerHeight
+  });
 
   // Navigation items configuration - Added wallet test tab
   const navItems = [
@@ -187,217 +256,451 @@ const MobileLayout = ({
   // Responsive breakpoint detection with proper cleanup
   useEffect(() => {
     const checkScreenSize = () => {
-      const width = window.innerWidth;
-      setIsMobile(width < 768);
-      setIsTablet(width >= 768 && width < 992);
+      try {
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+        
+        setScreenDimensions({ width, height });
+        setIsMobile(width < 768);
+        setIsTablet(width >= 768 && width < 992);
+        
+        logMessage('debug', 'Screen size updated', {
+          width,
+          height,
+          isMobile: width < 768,
+          isTablet: width >= 768 && width < 992
+        });
+      } catch (error) {
+        logMessage('error', 'Screen size check failed', {
+          error: error.message
+        });
+      }
     };
 
     checkScreenSize();
     window.addEventListener('resize', checkScreenSize);
-    return () => window.removeEventListener('resize', checkScreenSize);
+    window.addEventListener('orientationchange', checkScreenSize);
+    
+    return () => {
+      window.removeEventListener('resize', checkScreenSize);
+      window.removeEventListener('orientationchange', checkScreenSize);
+    };
   }, []);
 
-  // Enhanced touch gesture handling
-  const handleTouchStart = (e) => {
-    setTouchEnd(null);
-    setTouchStart(e.targetTouches[0].clientX);
-  };
-
-  const handleTouchMove = (e) => {
-    setTouchEnd(e.targetTouches[0].clientX);
-  };
-
-  const handleTouchEnd = () => {
-    if (!touchStart || !touchEnd) return;
-    
-    const distance = touchStart - touchEnd;
-    const isLeftSwipe = distance > 50;
-    const isRightSwipe = distance < -50;
-
-    if (isRightSwipe && !showSidebar) {
-      setShowSidebar(true);
-    } else if (isLeftSwipe && showSidebar) {
-      setShowSidebar(false);
+  // Enhanced touch gesture handling with error boundaries
+  const handleTouchStart = useCallback((e) => {
+    try {
+      setTouchEnd(null);
+      setTouchStart(e.targetTouches[0]?.clientX || 0);
+    } catch (error) {
+      logMessage('error', 'Touch start error', { error: error.message });
     }
-  };
+  }, []);
 
-  // Health status indicators
-  const getHealthVariant = () => {
-    if (!systemHealth) return 'secondary';
-    return systemHealth.status === 'healthy' ? 'success' : 'danger';
-  };
+  const handleTouchMove = useCallback((e) => {
+    try {
+      setTouchEnd(e.targetTouches[0]?.clientX || 0);
+    } catch (error) {
+      logMessage('error', 'Touch move error', { error: error.message });
+    }
+  }, []);
 
-  const getHealthText = () => {
-    if (!systemHealth) return 'Loading...';
-    return systemHealth.status === 'healthy' ? 'Online' : 'Issues';
-  };
+  const handleTouchEnd = useCallback(() => {
+    try {
+      if (!touchStart || !touchEnd) return;
+      
+      const distance = touchStart - touchEnd;
+      const isLeftSwipe = distance > 50;
+      const isRightSwipe = distance < -50;
 
-  // Mobile bottom navigation
-  const renderMobileNavigation = () => (
-    <div className="fixed-bottom bg-white border-top shadow-sm d-md-none">
-      <Nav className="justify-content-around py-2">
-        {navItems
-          .sort((a, b) => a.mobileOrder - b.mobileOrder)
-          .slice(0, 4)
-          .map(({ key, label, icon: Icon }) => (
-            <Nav.Item key={key} className="text-center">
+      if (isRightSwipe && !showSidebar) {
+        setShowSidebar(true);
+        logMessage('debug', 'Right swipe detected - opening sidebar');
+      } else if (isLeftSwipe && showSidebar) {
+        setShowSidebar(false);
+        logMessage('debug', 'Left swipe detected - closing sidebar');
+      }
+    } catch (error) {
+      logMessage('error', 'Touch end error', { error: error.message });
+    }
+  }, [touchStart, touchEnd, showSidebar]);
+
+  // Health status indicators with error handling
+  const getHealthVariant = useCallback(() => {
+    try {
+      if (!systemHealth) return 'secondary';
+      return systemHealth.status === 'healthy' ? 'success' : 'danger';
+    } catch (error) {
+      logMessage('error', 'Health variant calculation error', { error: error.message });
+      return 'warning';
+    }
+  }, [systemHealth]);
+
+  const getHealthText = useCallback(() => {
+    try {
+      if (!systemHealth) return 'Loading...';
+      return systemHealth.status === 'healthy' ? 'Online' : 'Issues';
+    } catch (error) {
+      logMessage('error', 'Health text calculation error', { error: error.message });
+      return 'Error';
+    }
+  }, [systemHealth]);
+
+  // FIXED: Wallet connection handlers with comprehensive error handling and validation
+  const handleWalletConnect = useCallback((walletData) => {
+    try {
+      // CRITICAL FIX: Proper validation and address extraction
+      let walletAddress = null;
+      let walletType = null;
+
+      // Handle different wallet data formats
+      if (typeof walletData === 'string') {
+        if (walletData === 'provided' || walletData.length < 20) {
+          throw new Error('Invalid wallet address format received');
+        }
+        walletAddress = walletData;
+      } else if (walletData && typeof walletData === 'object') {
+        walletAddress = walletData.walletAddress || walletData.address;
+        walletType = walletData.walletType || walletData.type;
+      }
+
+      // Validate address format
+      if (!walletAddress || typeof walletAddress !== 'string') {
+        throw new Error('Invalid wallet address: not a string');
+      }
+
+      if (walletAddress.length < 20) {
+        throw new Error('Invalid wallet address: too short');
+      }
+
+      // Address validation - basic format check
+      const isEthAddress = /^0x[a-fA-F0-9]{40}$/.test(walletAddress);
+      const isSolanaAddress = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(walletAddress);
+      
+      if (!isEthAddress && !isSolanaAddress) {
+        logMessage('warn', 'Wallet address format validation failed', {
+          address_length: walletAddress.length,
+          address_prefix: walletAddress.substring(0, 6),
+          is_eth_format: isEthAddress,
+          is_solana_format: isSolanaAddress
+        });
+      }
+
+      const trace_id = logMessage('info', 'Wallet connected via navbar', {
+        wallet_address: `${walletAddress.substring(0, 6)}...${walletAddress.substring(walletAddress.length - 4)}`,
+        wallet_type: walletType || 'unknown',
+        connection_attempt: connectionAttempts + 1,
+        address_length: walletAddress.length
+      });
+      
+      setConnectionAttempts(0);
+      
+      // Success callback - could add toast notification here
+      
+    } catch (error) {
+      const newAttempts = connectionAttempts + 1;
+      setConnectionAttempts(newAttempts);
+      
+      logMessage('error', 'Wallet connect handler error', {
+        error: error.message,
+        wallet_data_type: typeof walletData,
+        wallet_data: walletData === 'provided' ? 'provided_string' : 'other',
+        connection_attempt: newAttempts
+      });
+    }
+  }, [connectionAttempts]);
+
+  const handleWalletDisconnect = useCallback(() => {
+    try {
+      logMessage('info', 'Wallet disconnected via navbar');
+      setConnectionAttempts(0);
+    } catch (error) {
+      logMessage('error', 'Wallet disconnect handler error', {
+        error: error.message
+      });
+    }
+  }, []);
+
+  const handleWalletError = useCallback((error) => {
+    const newAttempts = connectionAttempts + 1;
+    setConnectionAttempts(newAttempts);
+    
+    logMessage('error', 'Wallet connection error in navbar', {
+      error: error?.message || 'Unknown wallet error',
+      connection_attempt: newAttempts,
+      max_attempts: 5
+    });
+  }, [connectionAttempts]);
+
+  // Handle chain changes from WalletConnect component
+  const handleChainChange = useCallback((chainName) => {
+    try {
+      logMessage('info', 'Chain change requested from navbar', {
+        new_chain: chainName,
+        wallet_connected: wallet?.isConnected || false
+      });
+      
+      if (wallet?.switchChain) {
+        wallet.switchChain(chainName);
+      }
+    } catch (error) {
+      logMessage('error', 'Chain change handler error', {
+        error: error.message,
+        requested_chain: chainName
+      });
+    }
+  }, [wallet]);
+
+  // Mobile bottom navigation with error handling
+  const renderMobileNavigation = () => {
+    try {
+      return (
+        <div className="fixed-bottom bg-white border-top shadow-sm d-md-none">
+          <Nav className="justify-content-around py-2">
+            {navItems
+              .sort((a, b) => a.mobileOrder - b.mobileOrder)
+              .slice(0, 4)
+              .map(({ key, label, icon: Icon }) => (
+                <Nav.Item key={key} className="text-center">
+                  <Button
+                    variant={activeTab === key ? 'primary' : 'link'}
+                    size="sm"
+                    className="d-flex flex-column align-items-center border-0 text-decoration-none"
+                    style={{ minHeight: '44px', fontSize: '0.75rem' }}
+                    onClick={() => onTabChange(key)}
+                  >
+                    <Icon size={18} className="mb-1" />
+                    <span>{label}</span>
+                  </Button>
+                </Nav.Item>
+              ))}
+            
+            <Nav.Item className="text-center">
               <Button
-                variant={activeTab === key ? 'primary' : 'link'}
+                variant="link"
                 size="sm"
                 className="d-flex flex-column align-items-center border-0 text-decoration-none"
                 style={{ minHeight: '44px', fontSize: '0.75rem' }}
-                onClick={() => onTabChange(key)}
+                onClick={() => setShowSidebar(true)}
               >
-                <Icon size={18} className="mb-1" />
-                <span>{label}</span>
+                <Menu size={18} className="mb-1" />
+                <span>More</span>
               </Button>
             </Nav.Item>
-          ))}
-        
-        <Nav.Item className="text-center">
-          <Button
-            variant="link"
-            size="sm"
-            className="d-flex flex-column align-items-center border-0 text-decoration-none"
-            style={{ minHeight: '44px', fontSize: '0.75rem' }}
-            onClick={() => setShowSidebar(true)}
-          >
-            <Menu size={18} className="mb-1" />
-            <span>More</span>
-          </Button>
-        </Nav.Item>
-      </Nav>
-    </div>
-  );
+          </Nav>
+        </div>
+      );
+    } catch (error) {
+      logMessage('error', 'Mobile navigation rendering error', {
+        error: error.message
+      });
+      return null;
+    }
+  };
 
-  // Desktop/Tablet top navigation
-  const renderDesktopNavigation = () => (
-    <Navbar bg="light" expand="lg" className="border-bottom mb-3">
-      <Container fluid>
-        <Navbar.Brand className="d-flex align-items-center">
-          <Zap className="me-2" size={24} />
-          <span className="fw-bold">DEX Sniper Pro</span>
-          {showHealthBadge && (
-            <Badge 
-              bg={getHealthVariant()} 
-              className="ms-2"
-              title={`System ${getHealthText()}`}
-            >
-              <Activity size={12} className="me-1" />
-              {getHealthText()}
-            </Badge>
-          )}
-        </Navbar.Brand>
-
-        <Nav className="me-auto">
-          {navItems.map(({ key, label, icon: Icon }) => (
-            <Nav.Link
-              key={key}
-              active={activeTab === key}
-              onClick={() => onTabChange(key)}
-              className="d-flex align-items-center"
-            >
-              <Icon size={16} className="me-2" />
-              {label}
-            </Nav.Link>
-          ))}
-        </Nav>
-
-        <Nav>
-          <Button
-            variant="outline-secondary"
-            size="sm"
-            onClick={() => setShowSidebar(true)}
-            className="d-lg-none"
-          >
-            <Menu size={16} />
-          </Button>
-        </Nav>
-      </Container>
-    </Navbar>
-  );
-
-  // Enhanced sidebar with system diagnostics
-  const renderSidebarNavigation = () => (
-    <Offcanvas
-      show={showSidebar}
-      onHide={() => setShowSidebar(false)}
-      placement="end"
-      backdrop={true}
-      scroll={false}
-    >
-      <Offcanvas.Header closeButton>
-        <Offcanvas.Title className="d-flex align-items-center">
-          <Settings size={20} className="me-2" />
-          More Options
-        </Offcanvas.Title>
-      </Offcanvas.Header>
-      
-      <Offcanvas.Body>
-        <Nav className="flex-column">
-          {navItems
-            .filter(item => !['trade', 'autotrade', 'discovery', 'analytics'].includes(item.key))
-            .map(({ key, label, icon: Icon }) => (
-              <Nav.Link
-                key={key}
-                active={activeTab === key}
-                onClick={() => {
-                  onTabChange(key);
-                  setShowSidebar(false);
-                }}
-                className="d-flex align-items-center py-3"
-              >
-                <Icon size={18} className="me-3" />
-                {label}
-              </Nav.Link>
-            ))}
-          
-          <hr />
-          
-          {/* System status section */}
-          <div className="px-3 py-2">
-            <h6 className="text-muted">System Status</h6>
-            <div className="d-flex align-items-center mb-2">
-              <Badge bg={getHealthVariant()} className="me-2">
-                <Activity size={12} />
-              </Badge>
-              <span className="small">
-                {systemHealth ? 
-                  (systemHealth.status === 'healthy' ? 'All systems operational' : 'System issues detected') : 
-                  'Loading system status...'
-                }
-              </span>
-            </div>
-            
-            {systemHealth?.services && (
-              <div className="small text-muted">
-                <div>API: {systemHealth.services.api === 'operational' ? '✓' : '✗'}</div>
-                <div>Database: {systemHealth.services.database === 'operational' ? '✓' : '✗'}</div>
-                <div>WebSocket Hub: {systemHealth.services.websocket_hub === 'operational' ? '✓' : '✗'}</div>
-              </div>
-            )}
-          </div>
-          
-          {/* Device info */}
-          <div className="px-3 py-2 border-top mt-auto">
-            <h6 className="text-muted small">Device Info</h6>
-            <div className="d-flex align-items-center small text-muted">
-              {isMobile ? (
-                <><Smartphone size={14} className="me-2" />Mobile</>
-              ) : isTablet ? (
-                <><Tablet size={14} className="me-2" />Tablet</>
-              ) : (
-                <><Monitor size={14} className="me-2" />Desktop</>
+  // Desktop/Tablet top navigation with integrated wallet
+  const renderDesktopNavigation = () => {
+    try {
+      return (
+        <Navbar bg="light" expand="lg" className="border-bottom mb-3">
+          <Container fluid>
+            <Navbar.Brand className="d-flex align-items-center">
+              <Zap className="me-2" size={24} />
+              <span className="fw-bold">DEX Sniper Pro</span>
+              {showHealthBadge && (
+                <Badge 
+                  bg={getHealthVariant()} 
+                  className="ms-2"
+                  title={`System ${getHealthText()}`}
+                >
+                  <Activity size={12} className="me-1" />
+                  {getHealthText()}
+                </Badge>
               )}
-            </div>
-            <div className="small text-muted">
-              Viewport: {window.innerWidth}x{window.innerHeight}
-            </div>
-          </div>
-        </Nav>
-      </Offcanvas.Body>
-    </Offcanvas>
-  );
+            </Navbar.Brand>
+
+            <Nav className="me-auto">
+              {navItems.map(({ key, label, icon: Icon }) => (
+                <Nav.Link
+                  key={key}
+                  active={activeTab === key}
+                  onClick={() => onTabChange(key)}
+                  className="d-flex align-items-center"
+                >
+                  <Icon size={16} className="me-2" />
+                  {label}
+                </Nav.Link>
+              ))}
+            </Nav>
+
+            {/* FIXED: Integrated Wallet Connection with proper error handling */}
+            <Nav className="d-flex align-items-center">
+              <div className="me-3">
+                <WalletConnect 
+                  selectedChain={wallet?.selectedChain || 'ethereum'}
+                  onChainChange={handleChainChange}
+                  onWalletConnect={handleWalletConnect}
+                  onWalletDisconnect={handleWalletDisconnect}
+                  onError={handleWalletError}
+                />
+              </div>
+              
+              <Button
+                variant="outline-secondary"
+                size="sm"
+                onClick={() => setShowSidebar(true)}
+                className="d-lg-none"
+              >
+                <Menu size={16} />
+              </Button>
+            </Nav>
+          </Container>
+        </Navbar>
+      );
+    } catch (error) {
+      logMessage('error', 'Desktop navigation rendering error', {
+        error: error.message
+      });
+      
+      // Fallback minimal navigation
+      return (
+        <Navbar bg="light" className="border-bottom mb-3">
+          <Container fluid>
+            <Navbar.Brand>DEX Sniper Pro</Navbar.Brand>
+            <Badge bg="warning">Navigation Error</Badge>
+          </Container>
+        </Navbar>
+      );
+    }
+  };
+
+  // Enhanced sidebar with system diagnostics and wallet status
+  const renderSidebarNavigation = () => {
+    try {
+      return (
+        <Offcanvas
+          show={showSidebar}
+          onHide={() => setShowSidebar(false)}
+          placement="end"
+          backdrop={true}
+          scroll={false}
+        >
+          <Offcanvas.Header closeButton>
+            <Offcanvas.Title className="d-flex align-items-center">
+              <Settings size={20} className="me-2" />
+              More Options
+            </Offcanvas.Title>
+          </Offcanvas.Header>
+          
+          <Offcanvas.Body>
+            <Nav className="flex-column">
+              {navItems
+                .filter(item => !['trade', 'autotrade', 'discovery', 'analytics'].includes(item.key))
+                .map(({ key, label, icon: Icon }) => (
+                  <Nav.Link
+                    key={key}
+                    active={activeTab === key}
+                    onClick={() => {
+                      onTabChange(key);
+                      setShowSidebar(false);
+                    }}
+                    className="d-flex align-items-center py-3"
+                  >
+                    <Icon size={18} className="me-3" />
+                    {label}
+                  </Nav.Link>
+                ))}
+              
+              <hr />
+              
+              {/* Wallet Status Section */}
+              <div className="px-3 py-2">
+                <h6 className="text-muted">Wallet Status</h6>
+                <div className="d-flex align-items-center mb-2">
+                  <Badge 
+                    bg={wallet?.isConnected ? 'success' : 'secondary'} 
+                    className="me-2"
+                  >
+                    <Wallet size={12} />
+                  </Badge>
+                  <span className="small">
+                    {wallet?.isConnected ? 
+                      `Connected: ${wallet.walletType}` : 
+                      'No wallet connected'
+                    }
+                  </span>
+                </div>
+                
+                {wallet?.isConnected && wallet.walletAddress && (
+                  <div className="small text-muted">
+                    <div>Address: {`${wallet.walletAddress.substring(0, 6)}...${wallet.walletAddress.substring(wallet.walletAddress.length - 4)}`}</div>
+                    <div>Chain: {wallet.selectedChain}</div>
+                    {wallet.balances?.native && (
+                      <div>Balance: {wallet.balances.native}</div>
+                    )}
+                  </div>
+                )}
+                
+                {connectionAttempts > 0 && (
+                  <div className="small text-warning mt-1">
+                    Connection attempts: {connectionAttempts}
+                  </div>
+                )}
+              </div>
+              
+              <hr />
+              
+              {/* System status section */}
+              <div className="px-3 py-2">
+                <h6 className="text-muted">System Status</h6>
+                <div className="d-flex align-items-center mb-2">
+                  <Badge bg={getHealthVariant()} className="me-2">
+                    <Activity size={12} />
+                  </Badge>
+                  <span className="small">
+                    {systemHealth ? 
+                      (systemHealth.status === 'healthy' ? 'All systems operational' : 'System issues detected') : 
+                      'Loading system status...'
+                    }
+                  </span>
+                </div>
+                
+                {systemHealth?.services && (
+                  <div className="small text-muted">
+                    <div>API: {systemHealth.services.api === 'operational' ? '✓' : '✗'}</div>
+                    <div>Database: {systemHealth.services.database === 'operational' ? '✓' : '✗'}</div>
+                    <div>WebSocket Hub: {systemHealth.services.websocket_hub === 'operational' ? '✓' : '✗'}</div>
+                  </div>
+                )}
+              </div>
+              
+              {/* Device info */}
+              <div className="px-3 py-2 border-top mt-auto">
+                <h6 className="text-muted small">Device Info</h6>
+                <div className="d-flex align-items-center small text-muted">
+                  {isMobile ? (
+                    <><Smartphone size={14} className="me-2" />Mobile</>
+                  ) : isTablet ? (
+                    <><Tablet size={14} className="me-2" />Tablet</>
+                  ) : (
+                    <><Monitor size={14} className="me-2" />Desktop</>
+                  )}
+                </div>
+                <div className="small text-muted">
+                  Viewport: {screenDimensions.width}x{screenDimensions.height}
+                </div>
+              </div>
+            </Nav>
+          </Offcanvas.Body>
+        </Offcanvas>
+      );
+    } catch (error) {
+      logMessage('error', 'Sidebar navigation rendering error', {
+        error: error.message
+      });
+      return null;
+    }
+  };
 
   return (
     <div 
@@ -420,6 +723,15 @@ const MobileLayout = ({
           {systemHealth.error && (
             <div className="small mt-1">Error: {systemHealth.error}</div>
           )}
+        </Alert>
+      )}
+      
+      {/* Wallet connection errors */}
+      {connectionAttempts > 3 && (
+        <Alert variant="danger" className="mx-3 mb-3">
+          <AlertTriangle size={16} className="me-2" />
+          Multiple wallet connection failures detected. Please check your wallet extension.
+          <div className="small mt-1">Attempts: {connectionAttempts}</div>
         </Alert>
       )}
       
@@ -500,47 +812,101 @@ const MobileLayout = ({
 };
 
 /**
- * Main App Component with centralized state management and single WebSocket strategy
+ * Main App Component with centralized state management, wallet integration, and comprehensive error handling
  */
 function App() {
   const [systemHealth, setSystemHealth] = useState(null);
   const [activeTab, setActiveTab] = useState('wallet-test'); // Start with wallet test for debugging
   const [error, setError] = useState(null);
   const [healthCheckErrors, setHealthCheckErrors] = useState(0);
+  const [isLoading, setIsLoading] = useState(true);
   const isMountedRef = useRef(true);
+  const healthCheckTimeoutRef = useRef(null);
+  const sessionId = useRef(null);
 
-  // Component lifecycle logging
+  // FIXED: Initialize wallet with comprehensive error handling - Disable auto-connect
+  const wallet = useWallet({ 
+    autoConnect: false, // CRITICAL FIX: Disable auto-connect to prevent unwanted connections
+    defaultChain: 'ethereum',
+    persistConnection: true,
+    onError: (error) => {
+      logMessage('error', 'Wallet hook error in App', {
+        error: error?.message || 'Unknown wallet error',
+        session_id: sessionId.current
+      });
+    }
+  });
+
+  // Component lifecycle logging with session management
   useEffect(() => {
+    // Initialize session
+    sessionId.current = sessionStorage.getItem('dex_session_id') || 
+      generateTraceId('session');
+    sessionStorage.setItem('dex_session_id', sessionId.current);
+    
     isMountedRef.current = true;
-    logMessage('info', 'App component mounted - wallet testing enabled');
+    
+    logMessage('info', 'App component mounted - wallet testing enabled', {
+      session_id: sessionId.current,
+      user_agent: navigator.userAgent,
+      viewport: `${window.innerWidth}x${window.innerHeight}`,
+      wallet_auto_connect: false // Updated to reflect actual setting
+    });
 
     return () => {
       isMountedRef.current = false;
-      logMessage('info', 'App component unmounting');
+      if (healthCheckTimeoutRef.current) {
+        clearTimeout(healthCheckTimeoutRef.current);
+      }
+      logMessage('info', 'App component unmounting', {
+        session_id: sessionId.current
+      });
     };
   }, []);
 
   /**
-   * Enhanced health check with retry logic and proper error handling
+   * FIXED: Enhanced health check with retry logic, proper error handling, and circuit breaker pattern
    */
-  const performHealthCheck = async (retryCount = 0) => {
+  const performHealthCheck = useCallback(async (retryCount = 0) => {
     if (!isMountedRef.current) return;
 
-    logMessage('debug', 'Performing system health check');
+    const trace_id = logMessage('debug', 'Performing system health check', {
+      retry_count: retryCount,
+      max_retries: 5,
+      session_id: sessionId.current
+    });
 
     try {
-      // Add small delay on retries to handle race conditions
+      // Clear any existing timeout
+      if (healthCheckTimeoutRef.current) {
+        clearTimeout(healthCheckTimeoutRef.current);
+      }
+
+      // Add exponential backoff delay on retries
       if (retryCount > 0) {
-        await new Promise(resolve => setTimeout(resolve, 100 * retryCount));
+        const delay = Math.min(1000 * Math.pow(2, retryCount - 1), 10000);
+        await new Promise(resolve => {
+          healthCheckTimeoutRef.current = setTimeout(resolve, delay);
+        });
       }
       
-      const response = await fetch('/api/v1/health', {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+      
+      // FIXED: Use correct health endpoint and add CORS headers
+      const response = await fetch('http://localhost:3000/api/v1/health', {
         method: 'GET',
         headers: {
           'Accept': 'application/json',
-          'Content-Type': 'application/json'
-        }
+          'Content-Type': 'application/json',
+          'X-Session-ID': sessionId.current,
+          'X-Trace-ID': trace_id
+        },
+        signal: controller.signal,
+        mode: 'cors' // FIXED: Explicit CORS mode
       });
+
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
         throw new Error(`Health check failed: ${response.status} ${response.statusText}`);
@@ -551,53 +917,90 @@ function App() {
       if (isMountedRef.current) {
         logMessage('debug', 'System health check successful', {
           status: healthData.status,
-          services: healthData.services || [],
-          uptime: healthData.uptime
+          services: healthData.services || {},
+          uptime: healthData.uptime_seconds,
+          trace_id,
+          session_id: sessionId.current
         });
         
         setSystemHealth(healthData);
         setError(null);
         setHealthCheckErrors(0);
+        setIsLoading(false);
       }
     } catch (err) {
       const errorCount = retryCount + 1;
       
       logMessage('error', 'System health check failed', {
         error: err.message,
+        error_type: err.name,
         attempt: errorCount,
-        maxAttempts: 5
+        maxAttempts: 5,
+        trace_id,
+        session_id: sessionId.current,
+        is_abort_error: err.name === 'AbortError',
+        is_network_error: err.message.includes('fetch'),
+        is_cors_error: err.message.includes('CORS')
       });
 
-      if (errorCount < 5) {
-        // Retry up to 5 times with exponential backoff
-        setTimeout(() => performHealthCheck(errorCount), Math.pow(2, retryCount) * 1000);
+      if (errorCount < 5 && isMountedRef.current) {
+        // Retry with exponential backoff
+        healthCheckTimeoutRef.current = setTimeout(
+          () => performHealthCheck(errorCount), 
+          Math.min(1000 * Math.pow(2, errorCount), 30000)
+        );
       } else if (isMountedRef.current) {
         setSystemHealth(prevHealth => ({
           ...prevHealth,
           status: 'unhealthy',
-          error: err.message
+          error: err.message,
+          last_check: new Date().toISOString()
         }));
         setError(`System health check failed: ${err.message}`);
         setHealthCheckErrors(errorCount);
+        setIsLoading(false);
       }
     }
-  };
+  }, []);
 
-  // Enhanced health polling with proper error handling
+  // Enhanced health polling with proper error handling and cleanup
   useEffect(() => {
     // Initial health check
     performHealthCheck();
     
-    // Set up polling interval - every 30 seconds
-    const healthInterval = setInterval(() => performHealthCheck(), 30000);
+    // Set up polling interval - every 30 seconds with jitter to prevent thundering herd
+    const jitter = Math.random() * 5000; // 0-5 second jitter
+    const intervalMs = 30000 + jitter;
+    
+    const healthInterval = setInterval(() => {
+      if (isMountedRef.current) {
+        performHealthCheck();
+      }
+    }, intervalMs);
     
     return () => {
       clearInterval(healthInterval);
+      if (healthCheckTimeoutRef.current) {
+        clearTimeout(healthCheckTimeoutRef.current);
+      }
     };
   }, []); // Remove dependencies to prevent recreation
 
   // Content rendering with error boundaries for each tab
   const renderContent = () => {
+    if (isLoading) {
+      return (
+        <div className="d-flex justify-content-center align-items-center" style={{ minHeight: '50vh' }}>
+          <div className="text-center">
+            <Spinner animation="border" role="status" className="mb-3">
+              <span className="visually-hidden">Loading...</span>
+            </Spinner>
+            <div className="text-muted">Loading DEX Sniper Pro...</div>
+          </div>
+        </div>
+      );
+    }
+
     try {
       switch (activeTab) {
         case 'trade':
@@ -608,24 +1011,41 @@ function App() {
                 Manual Trading
               </Card.Header>
               <Card.Body>
+                <div className="d-flex align-items-center mb-3">
+                  <Wallet className="me-2" size={20} />
+                  <span>
+                    {wallet?.isConnected ? 
+                      `Connected: ${wallet.walletType} (${wallet.selectedChain})` : 
+                      'Connect your wallet to start trading'
+                    }
+                  </span>
+                </div>
+                
+                {wallet?.isConnected ? (
+                  <Alert variant="success">
+                    <strong>Ready to Trade!</strong> Your wallet is connected and ready for manual trading.
+                  </Alert>
+                ) : (
+                  <Alert variant="info">
+                    <strong>Connect Wallet:</strong> Use the wallet button in the top navigation to connect your wallet.
+                  </Alert>
+                )}
+                
                 <p className="text-muted">
-                  Connect your wallet to start manual trading with real-time quotes and execution.
+                  Execute manual trades with real-time quotes and execution across multiple DEXs.
                 </p>
-                <Alert variant="info">
-                  <strong>Coming Soon:</strong> Manual trading interface with wallet integration.
-                </Alert>
               </Card.Body>
             </Card>
           );
 
         case 'autotrade':
-          return <Autotrade />;
+          return <Autotrade wallet={wallet} systemHealth={systemHealth} />;
 
         case 'discovery':
-          return <PairDiscovery selectedChain="ethereum" />;
+          return <PairDiscovery selectedChain={wallet?.selectedChain || "ethereum"} />;
 
         case 'analytics':
-          return <Analytics />;
+          return <Analytics wallet={wallet} />;
 
         case 'orders':
           return (
@@ -635,18 +1055,29 @@ function App() {
                 Advanced Orders
               </Card.Header>
               <Card.Body>
+                <div className="d-flex align-items-center mb-3">
+                  <Badge bg={wallet?.isConnected ? 'success' : 'secondary'} className="me-2">
+                    {wallet?.isConnected ? 'Connected' : 'Disconnected'}
+                  </Badge>
+                  {wallet?.isConnected && (
+                    <span className="small text-muted">
+                      {wallet.walletType} on {wallet.selectedChain}
+                    </span>
+                  )}
+                </div>
+                
                 <p className="text-muted">
-                  Manage stop-loss, take-profit, and trailing stop orders.
+                  Manage stop-loss, take-profit, and trailing stop orders with advanced automation.
                 </p>
                 <Alert variant="info">
-                  <strong>Coming Soon:</strong> Advanced order management and automation.
+                  <strong>Coming Soon:</strong> Advanced order management and automation features.
                 </Alert>
               </Card.Body>
             </Card>
           );
 
         case 'wallet-test':
-          return <WalletTestComponent />;
+          return <WalletTestComponent systemHealth={systemHealth} />;
 
         case 'settings':
           return (
@@ -659,8 +1090,40 @@ function App() {
                 <p className="text-muted">
                   Configure your trading preferences, risk management, and system settings.
                 </p>
+                
+                {/* Wallet Configuration Section */}
+                <div className="mb-4">
+                  <h6>Wallet Configuration</h6>
+                  <div className="small">
+                    <div className="row">
+                      <div className="col-sm-6">
+                        <div>Status: <Badge bg={wallet?.isConnected ? 'success' : 'secondary'}>
+                          {wallet?.isConnected ? 'Connected' : 'Disconnected'}
+                        </Badge></div>
+                        {wallet?.isConnected && (
+                          <>
+                            <div>Type: {wallet.walletType}</div>
+                            <div>Chain: {wallet.selectedChain}</div>
+                            <div>Address: {wallet.walletAddress ? 
+                              `${wallet.walletAddress.substring(0, 6)}...${wallet.walletAddress.substring(wallet.walletAddress.length - 4)}` : 
+                              'N/A'
+                            }</div>
+                          </>
+                        )}
+                      </div>
+                      <div className="col-sm-6">
+                        <div>Auto-connect: {wallet?.autoConnect ? '✓' : '✗'}</div>
+                        <div>Persist: {wallet?.persistConnection ? '✓' : '✗'}</div>
+                        {wallet?.connectionError && (
+                          <div className="text-danger small">Error: {wallet.connectionError}</div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                
                 <Alert variant="info">
-                  <strong>Coming Soon:</strong> Comprehensive settings panel.
+                  <strong>Coming Soon:</strong> Comprehensive settings panel with risk management, notifications, and advanced trading preferences.
                 </Alert>
                 
                 {systemHealth && (
@@ -672,6 +1135,7 @@ function App() {
                           <div>Status: <Badge bg={getHealthVariant()}>{systemHealth.status}</Badge></div>
                           <div>Uptime: {systemHealth.uptime_seconds ? `${Math.floor(systemHealth.uptime_seconds / 60)}m` : 'N/A'}</div>
                           <div>Error Count: {healthCheckErrors}</div>
+                          <div>Session ID: {sessionId.current?.substring(0, 8)}...</div>
                         </div>
                         <div className="col-sm-6">
                           {systemHealth.services && (
@@ -696,52 +1160,105 @@ function App() {
           );
 
         default:
-          logMessage('warn', 'Unknown tab requested', { activeTab });
+          logMessage('warn', 'Unknown tab requested', { 
+            activeTab,
+            session_id: sessionId.current 
+          });
           return (
             <Alert variant="warning">
               <AlertTriangle size={16} className="me-2" />
               <strong>Unknown page:</strong> {activeTab}
+              <div className="mt-2">
+                <Button variant="outline-primary" onClick={() => setActiveTab('wallet-test')}>
+                  Go to Wallet Test
+                </Button>
+              </div>
             </Alert>
           );
       }
     } catch (renderError) {
       logMessage('error', 'Content rendering error', {
         activeTab,
-        error: renderError.message
+        error: renderError?.message || 'Unknown render error',
+        stack: renderError?.stack || 'No stack trace',
+        session_id: sessionId.current
       });
 
       return (
         <Alert variant="danger">
           <AlertTriangle size={16} className="me-2" />
           <strong>Rendering Error:</strong> Failed to load {activeTab} content.
-          <div className="small mt-1">{renderError.message}</div>
-          <Button 
-            variant="outline-primary" 
-            size="sm" 
-            className="mt-2"
-            onClick={() => setActiveTab('wallet-test')}
-          >
-            Go to Wallet Test
-          </Button>
+          <div className="small mt-1">{renderError?.message || 'Unknown error'}</div>
+          <div className="mt-2">
+            <Button 
+              variant="outline-primary" 
+              size="sm" 
+              className="me-2"
+              onClick={() => setActiveTab('wallet-test')}
+            >
+              Go to Wallet Test
+            </Button>
+            <Button 
+              variant="outline-secondary" 
+              size="sm"
+              onClick={() => window.location.reload()}
+            >
+              Reload Page
+            </Button>
+          </div>
         </Alert>
       );
     }
   };
 
-  // Health status helper
-  const getHealthVariant = () => {
-    if (!systemHealth) return 'secondary';
-    return systemHealth.status === 'healthy' ? 'success' : 'danger';
-  };
+  // Health status helper with error handling
+  const getHealthVariant = useCallback(() => {
+    try {
+      if (!systemHealth) return 'secondary';
+      return systemHealth.status === 'healthy' ? 'success' : 'danger';
+    } catch (error) {
+      logMessage('error', 'Health variant calculation error', {
+        error: error?.message || 'Unknown health variant error',
+        session_id: sessionId.current
+      });
+      return 'warning';
+    }
+  }, [systemHealth]);
 
-  // Tab change handler with logging
-  const handleTabChange = (newTab) => {
-    logMessage('info', 'Tab change requested', { 
-      from: activeTab, 
-      to: newTab 
-    });
-    setActiveTab(newTab);
-  };
+  // Tab change handler with comprehensive logging and validation
+  const handleTabChange = useCallback((newTab) => {
+    try {
+      const validTabs = ['trade', 'autotrade', 'discovery', 'analytics', 'orders', 'wallet-test', 'settings'];
+      
+      if (!validTabs.includes(newTab)) {
+        logMessage('warn', 'Invalid tab change requested', { 
+          from: activeTab, 
+          to: newTab,
+          valid_tabs: validTabs,
+          session_id: sessionId.current
+        });
+        return;
+      }
+
+      logMessage('info', 'Tab change requested', { 
+        from: activeTab, 
+        to: newTab,
+        session_id: sessionId.current,
+        wallet_connected: wallet?.isConnected || false,
+        wallet_type: wallet?.walletType || 'none',
+        system_health: systemHealth?.status || 'unknown'
+      });
+      
+      setActiveTab(newTab);
+    } catch (error) {
+      logMessage('error', 'Tab change handler error', {
+        error: error?.message || 'Unknown tab change error',
+        from: activeTab,
+        to: newTab,
+        session_id: sessionId.current
+      });
+    }
+  }, [activeTab, wallet?.isConnected, wallet?.walletType, systemHealth?.status]);
 
   return (
     <AppErrorBoundary>
@@ -750,6 +1267,7 @@ function App() {
         onTabChange={handleTabChange}
         systemHealth={systemHealth}
         showHealthBadge={true}
+        wallet={wallet}
       >
         {renderContent()}
       </MobileLayout>

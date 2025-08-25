@@ -90,7 +90,7 @@ class SolanaWalletService {
     this.currentProvider = null;
     this.network = 'mainnet';
     this.eventListeners = new Map();
-    this.apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+    this.apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8001';
     this.isInitialized = false;
 
     this.initialize();

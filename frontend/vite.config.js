@@ -43,7 +43,7 @@ export default defineConfig({
               res.writeHead(503, { 'Content-Type': 'application/json' });
               res.end(JSON.stringify({
                 error: 'Backend API unavailable',
-                message: 'Make sure the backend server is running on port 8000',
+                message: 'Make sure the backend server is running on port 8001',
                 timestamp: new Date().toISOString()
               }));
             }
@@ -89,8 +89,8 @@ export default defineConfig({
 
             // Check for specific error types with detailed explanations
             if (err.code === 'ECONNREFUSED') {
-              console.error('[Vite] ❌ Backend WebSocket server is not running or not accepting connections on port 8000');
-              console.error('[Vite] 💡 Solution: Make sure your backend server is started with: python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload');
+              console.error('[Vite] ❌ Backend WebSocket server is not running or not accepting connections on port 8001');
+              console.error('[Vite] 💡 Solution: Make sure your backend server is started with: python -m uvicorn main:app --host 0.0.0.0 --port 8001 --reload');
             } else if (err.code === 'ECONNRESET') {
               console.error('[Vite] ❌ Backend WebSocket connection was reset - WebSocket route may not exist');
               console.error('[Vite] 💡 Check if your backend has WebSocket routes configured for:', req?.url);

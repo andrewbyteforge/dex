@@ -131,7 +131,7 @@ class WalletService {
     this.currentChain = null;
     this.currentWalletType = null;
     this.eventListeners = new Map();
-    this.apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+    this.apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8001';
     this.isInitialized = false;
     this.publicClients = new Map();
     
@@ -347,7 +347,13 @@ class WalletService {
       this.currentWalletType = walletType;
 
       // Register wallet with backend
-      await this.registerWallet(account, walletType, chainName);
+      // Register wallet with backend (non-blocking)
+      this.registerWallet(account, walletType, chainName).catch(error => {
+        logWalletService('debug', 'Backend registration failed but continuing connection', {
+          error: error.message,
+          wallet_address: account
+        });
+      });
 
       logWalletService('info', 'Wallet connected successfully', {
         wallet_address: account,
@@ -571,44 +577,412 @@ class WalletService {
   /**
    * Register wallet with backend API
    */
-  async registerWallet(address, walletType, chainName) {
+/**
+ * Register wallet with backend API with comprehensive error handling and retry logic
+ * @param {string} address - Wallet address
+ * @param {string} walletType - Type of wallet (metamask, phantom, etc.)
+ * @param {string} chainName - Blockchain name (ethereum, bsc, etc.)
+ * @param {Object} options - Additional options
+ * @param {number} options.timeout - Request timeout in milliseconds (default: 10000)
+ * @param {number} options.retries - Number of retry attempts (default: 2)
+ * @param {boolean} options.requireSuccess - Whether to throw on registration failure (default: false)
+ * @returns {Promise<Object|null>} Registration result or null if failed
+ */
+async registerWallet(address, walletType, chainName, options = {}) {
+  const {
+    timeout = 10000,
+    retries = 2,
+    requireSuccess = false
+  } = options;
+
+  // Generate trace ID for request correlation
+  const traceId = `wallet_reg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  
+  // Input validation with detailed logging
+  const validationResult = this._validateRegistrationInputs(address, walletType, chainName, traceId);
+  if (!validationResult.valid) {
+    if (requireSuccess) {
+      throw new Error(`Wallet registration validation failed: ${validationResult.error}`);
+    }
+    return null;
+  }
+
+  let lastError = null;
+  let attemptCount = 0;
+  const maxAttempts = retries + 1;
+
+  while (attemptCount < maxAttempts) {
+    attemptCount++;
+    
     try {
+      logWalletService('info', 'Attempting wallet registration with backend', {
+        wallet_address: `${address.substring(0, 6)}...${address.substring(address.length - 4)}`,
+        wallet_type: walletType,
+        chain: chainName,
+        attempt: attemptCount,
+        max_attempts: maxAttempts,
+        timeout_ms: timeout,
+        trace_id: traceId
+      });
+
+      // Create abort controller for request timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        controller.abort();
+      }, timeout);
+
+      // Prepare registration payload
+      const registrationPayload = {
+        address,
+        wallet_type: walletType,
+        chain: chainName,
+        timestamp: new Date().toISOString(),
+        user_agent: navigator.userAgent || 'unknown',
+        session_id: sessionStorage.getItem('dex_session_id') || 'unknown',
+        trace_id: traceId,
+        client_info: {
+          viewport: `${window.innerWidth}x${window.innerHeight}`,
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          language: navigator.language || 'unknown'
+        }
+      };
+
+      logWalletService('debug', 'Sending registration payload to backend', {
+        payload_size: JSON.stringify(registrationPayload).length,
+        endpoint: `${this.apiBaseUrl}/api/wallets/register`,
+        trace_id: traceId
+      });
+
+      // Make the registration request
       const response = await fetch(`${this.apiBaseUrl}/api/wallets/register`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'X-Trace-ID': traceId,
+          'X-Client-Version': '1.0.0',
+          'X-Wallet-Type': walletType,
+          'X-Chain': chainName
         },
-        body: JSON.stringify({
-          address,
-          wallet_type: walletType,
-          chain: chainName,
-          timestamp: new Date().toISOString()
-        })
+        body: JSON.stringify(registrationPayload),
+        signal: controller.signal,
+        credentials: 'omit', // Don't send cookies to prevent CORS issues
       });
 
+      // Clear timeout since request completed
+      clearTimeout(timeoutId);
+
+      // Handle HTTP errors
       if (!response.ok) {
-        throw new Error(`Backend registration failed: ${response.status}`);
+        const errorInfo = await this._extractErrorInfo(response, traceId);
+        throw new Error(`Backend registration failed: HTTP ${response.status} ${response.statusText} - ${errorInfo.message}`);
       }
 
-      const result = await response.json();
-      
-      logWalletService('debug', 'Wallet registered with backend', {
-        wallet_address: address,
+      // Parse successful response
+      let result;
+      try {
+        result = await response.json();
+      } catch (parseError) {
+        logWalletService('warn', 'Backend response parsing failed, assuming success', {
+          parse_error: parseError.message,
+          response_status: response.status,
+          trace_id: traceId
+        });
+        
+        result = {
+          success: true,
+          message: 'Registration completed (response parsing failed)',
+          trace_id: traceId
+        };
+      }
+
+      // Validate response structure
+      if (typeof result !== 'object' || result === null) {
+        throw new Error('Invalid response format from backend');
+      }
+
+      logWalletService('info', 'Wallet registration successful', {
+        wallet_address: `${address.substring(0, 6)}...${address.substring(address.length - 4)}`,
         wallet_type: walletType,
-        chain: chainName
+        chain: chainName,
+        attempt: attemptCount,
+        response_time_ms: Date.now() - parseInt(traceId.split('_')[2]),
+        backend_trace_id: result.trace_id || 'not_provided',
+        trace_id: traceId
       });
 
-      return result;
+      return {
+        success: true,
+        ...result,
+        client_trace_id: traceId,
+        attempts_made: attemptCount
+      };
 
     } catch (error) {
-      logWalletService('warn', 'Backend wallet registration failed', {
-        wallet_address: address,
-        error: error.message
+      lastError = error;
+      
+      // Classify error type for better handling
+      const errorClassification = this._classifyRegistrationError(error);
+      
+      logWalletService('warn', `Wallet registration attempt ${attemptCount} failed`, {
+        wallet_address: address ? `${address.substring(0, 6)}...${address.substring(address.length - 4)}` : 'invalid',
+        wallet_type: walletType,
+        chain: chainName,
+        attempt: attemptCount,
+        max_attempts: maxAttempts,
+        error: error.message,
+        error_type: error.name,
+        error_classification: errorClassification.type,
+        should_retry: errorClassification.shouldRetry && attemptCount < maxAttempts,
+        trace_id: traceId,
+        stack_trace: error.stack
       });
-      // Don't fail connection if backend registration fails
-      return null;
+
+      // Check if we should retry
+      if (!errorClassification.shouldRetry || attemptCount >= maxAttempts) {
+        break;
+      }
+
+      // Calculate exponential backoff delay
+      const baseDelay = 1000; // 1 second
+      const backoffDelay = baseDelay * Math.pow(2, attemptCount - 1);
+      const jitter = Math.random() * 500; // Add up to 500ms jitter
+      const totalDelay = backoffDelay + jitter;
+
+      logWalletService('debug', `Retrying wallet registration after delay`, {
+        delay_ms: Math.round(totalDelay),
+        next_attempt: attemptCount + 1,
+        trace_id: traceId
+      });
+
+      // Wait before retry
+      await new Promise(resolve => setTimeout(resolve, totalDelay));
     }
   }
+
+  // All attempts failed
+  const finalError = lastError || new Error('Registration failed for unknown reason');
+  
+  logWalletService('error', 'Wallet registration failed after all attempts', {
+    wallet_address: address ? `${address.substring(0, 6)}...${address.substring(address.length - 4)}` : 'invalid',
+    wallet_type: walletType,
+    chain: chainName,
+    total_attempts: attemptCount,
+    final_error: finalError.message,
+    error_type: finalError.name,
+    trace_id: traceId
+  });
+
+  if (requireSuccess) {
+    throw new Error(`Wallet registration failed after ${attemptCount} attempts: ${finalError.message}`);
+  }
+
+  // Return failure result instead of null for better error tracking
+  return {
+    success: false,
+    error: finalError.message,
+    attempts_made: attemptCount,
+    client_trace_id: traceId,
+    message: 'Wallet registration failed - connection will continue without backend registration'
+  };
+}
+
+/**
+ * Validate wallet registration inputs
+ * @private
+ */
+_validateRegistrationInputs(address, walletType, chainName, traceId) {
+  const errors = [];
+
+  // Validate wallet address
+  if (!address || typeof address !== 'string') {
+    errors.push('Address is required and must be a string');
+  } else {
+    // Basic format validation
+    const trimmedAddress = address.trim();
+    if (trimmedAddress.length < 20) {
+      errors.push('Address too short');
+    } else if (trimmedAddress.length > 100) {
+      errors.push('Address too long');
+    } else {
+      // Ethereum address format check
+      if (trimmedAddress.startsWith('0x') && !/^0x[a-fA-F0-9]{40}$/.test(trimmedAddress)) {
+        errors.push('Invalid Ethereum address format');
+      }
+      // Solana address format check (basic)
+      else if (!trimmedAddress.startsWith('0x') && !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(trimmedAddress)) {
+        errors.push('Invalid address format');
+      }
+    }
+  }
+
+  // Validate wallet type
+  if (!walletType || typeof walletType !== 'string') {
+    errors.push('Wallet type is required and must be a string');
+  } else {
+    const validWalletTypes = ['metamask', 'phantom', 'walletconnect', 'coinbase', 'trust'];
+    if (!validWalletTypes.includes(walletType.toLowerCase())) {
+      errors.push(`Unsupported wallet type: ${walletType}`);
+    }
+  }
+
+  // Validate chain name
+  if (!chainName || typeof chainName !== 'string') {
+    errors.push('Chain name is required and must be a string');
+  } else {
+    const validChains = ['ethereum', 'bsc', 'polygon', 'solana', 'arbitrum', 'base'];
+    if (!validChains.includes(chainName.toLowerCase())) {
+      errors.push(`Unsupported chain: ${chainName}`);
+    }
+  }
+
+  const isValid = errors.length === 0;
+  
+  if (!isValid) {
+    logWalletService('error', 'Wallet registration input validation failed', {
+      errors,
+      provided_address: address ? `${address.substring(0, 6)}...` : 'missing',
+      provided_wallet_type: walletType || 'missing',
+      provided_chain: chainName || 'missing',
+      trace_id: traceId
+    });
+  }
+
+  return {
+    valid: isValid,
+    error: errors.join(', '),
+    errors
+  };
+}
+
+/**
+ * Extract detailed error information from failed response
+ * @private
+ */
+async _extractErrorInfo(response, traceId) {
+  let errorMessage = 'Unknown error';
+  let errorDetails = {};
+
+  try {
+    const contentType = response.headers.get('content-type');
+    
+    if (contentType && contentType.includes('application/json')) {
+      const errorData = await response.json();
+      errorMessage = errorData.message || errorData.error || errorData.detail || 'API error';
+      errorDetails = {
+        ...errorData,
+        response_headers: Object.fromEntries(response.headers.entries())
+      };
+    } else {
+      const textResponse = await response.text();
+      errorMessage = textResponse || `HTTP ${response.status}`;
+      errorDetails = {
+        response_text: textResponse.substring(0, 200), // Limit text length
+        response_headers: Object.fromEntries(response.headers.entries())
+      };
+    }
+  } catch (parseError) {
+    errorMessage = `Response parsing failed: ${parseError.message}`;
+    errorDetails = {
+      parse_error: parseError.message,
+      response_status: response.status,
+      response_status_text: response.statusText
+    };
+  }
+
+  logWalletService('debug', 'Extracted error information from failed response', {
+    status: response.status,
+    status_text: response.statusText,
+    error_message: errorMessage,
+    error_details: errorDetails,
+    trace_id: traceId
+  });
+
+  return {
+    message: errorMessage,
+    details: errorDetails
+  };
+}
+
+/**
+ * Classify registration error for retry logic
+ * @private
+ */
+_classifyRegistrationError(error) {
+  const errorMessage = error.message.toLowerCase();
+  const errorName = error.name.toLowerCase();
+
+  // Network/timeout errors - should retry
+  if (errorName === 'aborterror' || errorMessage.includes('timeout')) {
+    return {
+      type: 'timeout',
+      shouldRetry: true,
+      description: 'Request timeout - network may be slow'
+    };
+  }
+
+  if (errorMessage.includes('network') || errorMessage.includes('fetch')) {
+    return {
+      type: 'network',
+      shouldRetry: true,
+      description: 'Network error - connection issue'
+    };
+  }
+
+  // Server errors (5xx) - should retry
+  if (errorMessage.includes('500') || errorMessage.includes('502') || 
+      errorMessage.includes('503') || errorMessage.includes('504')) {
+    return {
+      type: 'server_error',
+      shouldRetry: true,
+      description: 'Server error - backend may be temporarily unavailable'
+    };
+  }
+
+  // Client errors (4xx) - usually don't retry
+  if (errorMessage.includes('400') || errorMessage.includes('401') || 
+      errorMessage.includes('403') || errorMessage.includes('422')) {
+    return {
+      type: 'client_error',
+      shouldRetry: false,
+      description: 'Client error - invalid request or authentication issue'
+    };
+  }
+
+  // 404 - endpoint doesn't exist, don't retry
+  if (errorMessage.includes('404')) {
+    return {
+      type: 'not_found',
+      shouldRetry: false,
+      description: 'API endpoint not found - backend may not implement wallet registration'
+    };
+  }
+
+  // CORS errors - don't retry
+  if (errorMessage.includes('cors') || errorMessage.includes('origin')) {
+    return {
+      type: 'cors',
+      shouldRetry: false,
+      description: 'CORS error - backend configuration issue'
+    };
+  }
+
+  // Validation errors - don't retry
+  if (errorMessage.includes('validation') || errorMessage.includes('invalid')) {
+    return {
+      type: 'validation',
+      shouldRetry: false,
+      description: 'Validation error - invalid input data'
+    };
+  }
+
+  // Unknown errors - retry once
+  return {
+    type: 'unknown',
+    shouldRetry: true,
+    description: 'Unknown error - will attempt retry'
+  };
+}
 
   /**
    * Unregister wallet from backend API
