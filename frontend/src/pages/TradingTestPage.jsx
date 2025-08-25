@@ -1,6 +1,7 @@
 /**
  * DEX Sniper Pro - Trading Test Page
  * 
+ * CORRECTED: Fixed property names to match actual useWallet hook
  * Test page to verify TradingInterface and TokenSelector components
  * work with the operational wallet service and backend APIs.
  * 
@@ -15,13 +16,14 @@ import { useWallet } from '../hooks/useWallet';
 import { useWebSocket } from '../hooks/useWebSocket';
 
 const TradingTestPage = () => {
+  // CORRECTED: Use actual property names from useWallet hook
   const { 
     isConnected, 
-    account, 
-    chainId, 
-    balance,
-    connect,
-    disconnect,
+    walletAddress,      // FIXED: was 'account'
+    selectedChain,      // FIXED: was 'chainId'
+    balances,           // FIXED: was 'balance' - this is an object
+    connectWallet,     
+    disconnectWallet,  
     switchChain 
   } = useWallet();
 
@@ -40,6 +42,21 @@ const TradingTestPage = () => {
   const [apiTests, setApiTests] = useState({});
   const [testResults, setTestResults] = useState([]);
 
+  // Get native token balance for display
+  const getNativeBalance = () => {
+    if (!balances || typeof balances !== 'object') return '0.0';
+    
+    const nativeTokens = {
+      'ethereum': 'ETH',
+      'bsc': 'BNB', 
+      'polygon': 'MATIC',
+      'base': 'ETH'
+    };
+    
+    const nativeToken = nativeTokens[selectedChain] || 'ETH';
+    return balances[nativeToken] || '0.0';
+  };
+
   /**
    * Test backend API connectivity
    */
@@ -55,9 +72,9 @@ const TradingTestPage = () => {
         endpoint: '/api/v1/wallets/register',
         method: 'POST',
         body: {
-          address: account || '0x1234567890123456789012345678901234567890',
+          address: walletAddress || '0x1234567890123456789012345678901234567890',
           wallet_type: 'metamask',
-          chain: 'ethereum',
+          chain: selectedChain || 'ethereum',
           timestamp: new Date().toISOString(),
           session_id: 'test_session'
         }
@@ -73,7 +90,7 @@ const TradingTestPage = () => {
         method: 'POST',
         body: {
           token_address: '0xA0b86a33E6441c84C0BB2a35B9A4A2E3C9C8e4d4',
-          chain: 'ethereum'
+          chain: selectedChain || 'ethereum'
         }
       }
     ];
@@ -137,9 +154,11 @@ const TradingTestPage = () => {
   const testWalletConnection = async () => {
     try {
       if (isConnected) {
-        await disconnect();
+        console.log('Disconnecting wallet...');
+        await disconnectWallet();
       } else {
-        await connect();
+        console.log('Connecting wallet...');
+        await connectWallet('metamask');
       }
     } catch (error) {
       console.error('Wallet test error:', error);
@@ -149,9 +168,10 @@ const TradingTestPage = () => {
   /**
    * Test chain switching
    */
-  const testChainSwitch = async (targetChainId) => {
+  const testChainSwitch = async (targetChain) => {
     try {
-      await switchChain(targetChainId);
+      console.log(`Switching to ${targetChain}...`);
+      await switchChain(targetChain);
     } catch (error) {
       console.error('Chain switch test error:', error);
     }
@@ -190,19 +210,19 @@ const TradingTestPage = () => {
                 <Badge bg={isConnected ? 'success' : 'secondary'}>
                   {isConnected ? 'Connected' : 'Disconnected'}
                 </Badge>
-                {isConnected && (
+                {isConnected && walletAddress && (
                   <small className="text-muted ms-2">
-                    {account?.substring(0, 8)}...
+                    {walletAddress.substring(0, 8)}...
                   </small>
                 )}
               </div>
               
               <div className="mb-2">
                 <strong>Chain: </strong>
-                <Badge bg="info">{chainId || 'Unknown'}</Badge>
-                {balance && (
+                <Badge bg="info">{selectedChain || 'Unknown'}</Badge>
+                {getNativeBalance() !== '0.0' && (
                   <small className="text-muted ms-2">
-                    Balance: {balance}
+                    Balance: {getNativeBalance()}
                   </small>
                 )}
               </div>
@@ -249,59 +269,64 @@ const TradingTestPage = () => {
             <Card.Body>
               <div className="mb-2">
                 <strong>Current Chain: </strong>
-                {chainId ? (
-                  <>
-                    <Badge bg="primary">{chainId}</Badge>
-                    <small className="text-muted ms-2">
-                      {chainId === 1 && 'Ethereum'}
-                      {chainId === 56 && 'BSC'}
-                      {chainId === 137 && 'Polygon'}
-                      {chainId === 8453 && 'Base'}
-                    </small>
-                  </>
-                ) : (
-                  <Badge bg="secondary">Not Connected</Badge>
-                )}
+                <Badge bg="info">{selectedChain || 'Not connected'}</Badge>
               </div>
-
-              <div className="mt-3">
+              
+              <div className="mb-3">
+                <strong>Switch to:</strong>
+              </div>
+              
+              <div className="d-flex flex-wrap gap-2">
                 <Button 
-                  variant="outline-primary" 
-                  size="sm" 
-                  className="me-1 mb-1"
-                  onClick={() => testChainSwitch(1)}
+                  variant={selectedChain === 'ethereum' ? 'primary' : 'outline-primary'}
+                  size="sm"
+                  onClick={() => testChainSwitch('ethereum')}
                   disabled={!isConnected}
                 >
                   Ethereum
                 </Button>
                 <Button 
-                  variant="outline-success" 
-                  size="sm" 
-                  className="me-1 mb-1"
-                  onClick={() => testChainSwitch(56)}
+                  variant={selectedChain === 'bsc' ? 'warning' : 'outline-warning'}
+                  size="sm"
+                  onClick={() => testChainSwitch('bsc')}
                   disabled={!isConnected}
                 >
                   BSC
                 </Button>
                 <Button 
-                  variant="outline-info" 
-                  size="sm" 
-                  className="me-1 mb-1"
-                  onClick={() => testChainSwitch(137)}
+                  variant={selectedChain === 'polygon' ? 'info' : 'outline-info'}
+                  size="sm"
+                  onClick={() => testChainSwitch('polygon')}
                   disabled={!isConnected}
                 >
                   Polygon
                 </Button>
                 <Button 
-                  variant="outline-warning" 
-                  size="sm" 
-                  className="me-1 mb-1"
-                  onClick={() => testChainSwitch(8453)}
+                  variant={selectedChain === 'base' ? 'secondary' : 'outline-secondary'}
+                  size="sm"
+                  onClick={() => testChainSwitch('base')}
                   disabled={!isConnected}
                 >
                   Base
                 </Button>
               </div>
+
+              {/* Show current balances if available */}
+              {balances && Object.keys(balances).length > 0 && (
+                <div className="mt-3">
+                  <strong>Current Balances:</strong>
+                  <div className="small text-muted">
+                    {Object.entries(balances).slice(0, 3).map(([token, amount]) => (
+                      <div key={token}>
+                        {token}: {parseFloat(amount).toFixed(4)}
+                      </div>
+                    ))}
+                    {Object.keys(balances).length > 3 && (
+                      <div>... and {Object.keys(balances).length - 3} more</div>
+                    )}
+                  </div>
+                </div>
+              )}
             </Card.Body>
           </Card>
         </Col>
@@ -317,12 +342,22 @@ const TradingTestPage = () => {
               </Card.Header>
               <Card.Body>
                 {testResults.map((result, index) => (
-                  <div key={index} className="mb-2">
-                    <Badge bg={result.status === 'success' ? 'success' : 'danger'}>
+                  <div key={index} className="d-flex align-items-center mb-2">
+                    <Badge 
+                      bg={result.status === 'success' ? 'success' : 'danger'} 
+                      className="me-2"
+                    >
                       {result.statusCode}
                     </Badge>
-                    <strong className="ms-2">{result.name}:</strong>
-                    <span className="ms-2">{result.message}</span>
+                    <strong className="me-2">{result.name}:</strong>
+                    <span className={result.status === 'success' ? 'text-success' : 'text-danger'}>
+                      {result.message}
+                    </span>
+                    {result.responseTime && (
+                      <small className="text-muted ms-2">
+                        ({result.responseTime}ms)
+                      </small>
+                    )}
                   </div>
                 ))}
               </Card.Body>
@@ -333,74 +368,60 @@ const TradingTestPage = () => {
 
       {/* Token Selector Test */}
       <Row className="mb-4">
-        <Col xs={12} md={6}>
+        <Col>
           <Card>
             <Card.Header>
-              <h6 className="mb-0">Token Selector Test</h6>
-            </Card.Header>
-            <Card.Body>
-              <div className="mb-3">
+              <div className="d-flex align-items-center justify-content-between">
+                <h6 className="mb-0">Token Selector Test</h6>
                 <Button 
-                  variant="outline-primary" 
-                  onClick={() => setShowTokenSelector(true)}
-                  disabled={!chainId}
+                  variant="outline-primary"
+                  size="sm"
+                  onClick={() => setShowTokenSelector(!showTokenSelector)}
                 >
-                  Open Token Selector
+                  {showTokenSelector ? 'Hide' : 'Show'} Token Selector
                 </Button>
               </div>
-              
-              {selectedToken && (
-                <div>
-                  <strong>Selected Token:</strong>
-                  <div className="mt-2 p-2 border rounded">
-                    <div><strong>{selectedToken.symbol}</strong></div>
-                    <small className="text-muted">{selectedToken.name}</small>
-                    <br />
-                    <small className="text-muted">
-                      Address: {selectedToken.address}
-                    </small>
-                  </div>
-                </div>
-              )}
-            </Card.Body>
-          </Card>
-        </Col>
-
-        <Col xs={12} md={6}>
-          <Card>
-            <Card.Header>
-              <h6 className="mb-0">WebSocket Data</h6>
             </Card.Header>
-            <Card.Body>
-              <div style={{ fontSize: '12px', maxHeight: '200px', overflowY: 'auto' }}>
-                <pre>{JSON.stringify(wsData, null, 2)}</pre>
-              </div>
-            </Card.Body>
+            {showTokenSelector && (
+              <Card.Body>
+                <TokenSelector
+                  selectedToken={selectedToken}
+                  onTokenSelect={handleTokenSelect}
+                  showBalances={isConnected}
+                  chain={selectedChain}
+                />
+                {selectedToken && (
+                  <Alert variant="info" className="mt-3">
+                    <strong>Selected Token:</strong> {selectedToken.symbol} - {selectedToken.name}
+                    <br />
+                    <small className="text-muted">Address: {selectedToken.address}</small>
+                  </Alert>
+                )}
+              </Card.Body>
+            )}
           </Card>
         </Col>
       </Row>
 
-      {/* Main Trading Interface */}
+      {/* Trading Interface */}
       <Row>
         <Col>
           <Card>
             <Card.Header>
-              <h6 className="mb-0">Trading Interface Component</h6>
+              <h6 className="mb-0">Trading Interface Test</h6>
             </Card.Header>
-            <Card.Body className="p-0">
-              <TradingInterface />
+            <Card.Body>
+              {isConnected ? (
+                <TradingInterface />
+              ) : (
+                <Alert variant="warning">
+                  Connect your wallet to test the trading interface.
+                </Alert>
+              )}
             </Card.Body>
           </Card>
         </Col>
       </Row>
-
-      {/* Token Selector Modal */}
-      <TokenSelector
-        show={showTokenSelector}
-        onHide={() => setShowTokenSelector(false)}
-        onSelect={handleTokenSelect}
-        currentToken={selectedToken}
-      />
     </Container>
   );
 };
