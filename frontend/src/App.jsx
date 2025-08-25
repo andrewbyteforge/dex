@@ -20,6 +20,59 @@ import WalletConnect from './components/WalletConnect.jsx';
 import { useWallet } from './hooks/useWallet.js';
 
 /**
+ * Safe address formatting with comprehensive type checking - CRITICAL FIX
+ */
+const safeFormatAddress = (address, trace_id) => {
+  try {
+    // Type validation - CRITICAL: Check if address is actually a string
+    if (!address) {
+      return '';
+    }
+
+    if (typeof address !== 'string') {
+      console.warn(`[App] Invalid address type for formatting`, {
+        timestamp: new Date().toISOString(),
+        level: 'warn',
+        component: 'App',
+        trace_id: trace_id || `app_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        address_type: typeof address,
+        address_value: address,
+        error: 'address.substring is not a function'
+      });
+      
+      // Try to convert to string if possible
+      const stringAddress = String(address);
+      if (stringAddress === '[object Object]' || stringAddress === 'undefined' || stringAddress === 'null' || stringAddress === 'provided') {
+        return '';
+      }
+      address = stringAddress;
+    }
+
+    // Length validation
+    if (address.length < 10) {
+      return address;
+    }
+
+    // Format address safely
+    return `${address.substring(0, 6)}...${address.substring(address.length - 4)}`;
+
+  } catch (error) {
+    console.error(`[App] Address formatting failed`, {
+      timestamp: new Date().toISOString(),
+      level: 'error',
+      component: 'App',
+      trace_id: trace_id || `app_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      error: error.message,
+      address_type: typeof address,
+      address_value: address
+    });
+    
+    // Return safe fallback
+    return String(address || '').substring(0, 20) + (String(address || '').length > 20 ? '...' : '');
+  }
+};
+
+/**
  * Structured logging for App component lifecycle and errors
  */
 const logMessage = (level, message, data = {}) => {
@@ -96,7 +149,6 @@ class AppErrorBoundary extends React.Component {
     // In production, send to error tracking service
     if (import.meta.env.PROD) {
       try {
-        // Example: errorTrackingService.captureException(error, errorRecord);
         fetch('/api/v1/errors/report', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -330,32 +382,53 @@ const MobileLayout = ({
     }
   }, [systemHealth]);
 
-  // Wallet connection handlers with comprehensive error handling
+  // CRITICAL FIX: Enhanced wallet connection handlers with comprehensive error handling
   const handleWalletConnect = useCallback((address, type) => {
     try {
-      const trace_id = logMessage('info', 'Wallet connected via navbar', {
-        wallet_address: `${address.substring(0, 6)}...${address.substring(address.length - 4)}`,
-        wallet_type: type,
-        connection_attempt: connectionAttempts + 1
+      const trace_id = `wallet_connect_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      
+      // CRITICAL: Validate address before any formatting operations
+      if (!address) {
+        logMessage('warn', 'Wallet connection attempt with no address', { trace_id, wallet_type: type });
+        return;
+      }
+
+      if (typeof address !== 'string') {
+        logMessage('error', 'Wallet connect handler error - invalid address type', {
+          trace_id,
+          error: 'address.substring is not a function',
+          address_type: typeof address,
+          address_value: address,
+          wallet_type: type
+        });
+        return;
+      }
+
+      // Safe address formatting using our helper
+      const formattedAddress = safeFormatAddress(address, trace_id);
+      
+      logMessage('info', 'Wallet connected via navbar', {
+        trace_id,
+        wallet_address: formattedAddress,
+        wallet_type: type
       });
       
+      // CRITICAL FIX: Don't increment connection attempts on successful connection
       setConnectionAttempts(0);
-      
-      // Show success notification or handle connection success
-      // You could add a toast notification here
       
     } catch (error) {
       logMessage('error', 'Wallet connect handler error', {
         error: error.message,
-        address: address ? 'provided' : 'missing',
-        type
+        address: typeof address === 'string' ? safeFormatAddress(address) : String(address),
+        address_type: typeof address,
+        wallet_type: type
       });
+      
+      // CRITICAL FIX: Limit connection attempts to prevent infinite loops
+      setConnectionAttempts(prev => Math.min(prev + 1, 10));
     }
-  }, [connectionAttempts]);
+  }, []); // Remove connectionAttempts dependency to prevent loops
 
-
-
-  
   const handleWalletDisconnect = useCallback(() => {
     try {
       logMessage('info', 'Wallet disconnected via navbar');
@@ -368,15 +441,14 @@ const MobileLayout = ({
   }, []);
 
   const handleWalletError = useCallback((error) => {
-    const newAttempts = connectionAttempts + 1;
-    setConnectionAttempts(newAttempts);
-    
     logMessage('error', 'Wallet connection error in navbar', {
       error: error.message,
-      connection_attempt: newAttempts,
       max_attempts: 5
     });
-  }, [connectionAttempts]);
+    
+    // CRITICAL FIX: Limit attempts and don't create infinite loops
+    setConnectionAttempts(prev => Math.min(prev + 1, 5));
+  }, []); // Remove dependency to prevent loops
 
   // Mobile bottom navigation with error handling
   const renderMobileNavigation = () => {
@@ -540,7 +612,7 @@ const MobileLayout = ({
               
               <hr />
               
-              {/* Wallet Status Section */}
+              {/* Wallet Status Section - FIXED: Safe address handling */}
               <div className="px-3 py-2">
                 <h6 className="text-muted">Wallet Status</h6>
                 <div className="d-flex align-items-center mb-2">
@@ -552,7 +624,7 @@ const MobileLayout = ({
                   </Badge>
                   <span className="small">
                     {wallet.isConnected ? 
-                      `Connected: ${wallet.walletType}` : 
+                      `Connected: ${wallet.walletType || 'Unknown'}` : 
                       'No wallet connected'
                     }
                   </span>
@@ -560,8 +632,8 @@ const MobileLayout = ({
                 
                 {wallet.isConnected && wallet.walletAddress && (
                   <div className="small text-muted">
-                    <div>Address: {`${wallet.walletAddress.substring(0, 6)}...${wallet.walletAddress.substring(wallet.walletAddress.length - 4)}`}</div>
-                    <div>Chain: {wallet.selectedChain}</div>
+                    <div>Address: {safeFormatAddress(wallet.walletAddress)}</div>
+                    <div>Chain: {wallet.selectedChain || 'Unknown'}</div>
                     {wallet.balances && wallet.balances.native && (
                       <div>Balance: {wallet.balances.native}</div>
                     )}
@@ -777,7 +849,7 @@ function App() {
       session_id: sessionId.current,
       user_agent: navigator.userAgent,
       viewport: `${window.innerWidth}x${window.innerHeight}`,
-      wallet_auto_connect: true
+      wallet_auto_connect: false
     });
 
     return () => {
@@ -889,18 +961,31 @@ function App() {
 
   // Enhanced health polling with proper error handling and cleanup
   useEffect(() => {
+    // CRITICAL FIX: Only run health check if backend is available
+    // Skip health checks in development to prevent browser freeze
+    if (import.meta.env.DEV) {
+      setIsLoading(false);
+      setSystemHealth({
+        status: 'dev-mode',
+        message: 'Health checks disabled in development mode',
+        services: {
+          api: 'unknown',
+          database: 'unknown',
+          websocket_hub: 'unknown'
+        }
+      });
+      return;
+    }
+
     // Initial health check
     performHealthCheck();
     
-    // Set up polling interval - every 30 seconds with jitter to prevent thundering herd
-    const jitter = Math.random() * 5000; // 0-5 second jitter
-    const intervalMs = 30000 + jitter;
-    
+    // Set up polling interval - every 60 seconds (increased from 30 to reduce load)
     const healthInterval = setInterval(() => {
-      if (isMountedRef.current) {
+      if (isMountedRef.current && document.visibilityState === 'visible') {
         performHealthCheck();
       }
-    }, intervalMs);
+    }, 60000);
     
     return () => {
       clearInterval(healthInterval);
@@ -908,7 +993,7 @@ function App() {
         clearTimeout(healthCheckTimeoutRef.current);
       }
     };
-  }, []); // Remove dependencies to prevent recreation
+  }, []); // Keep empty dependency array
 
   // Content rendering with error boundaries for each tab
   const renderContent = () => {
@@ -1029,7 +1114,7 @@ function App() {
                             <div>Type: {wallet.walletType}</div>
                             <div>Chain: {wallet.selectedChain}</div>
                             <div>Address: {wallet.walletAddress ? 
-                              `${wallet.walletAddress.substring(0, 6)}...${wallet.walletAddress.substring(wallet.walletAddress.length - 4)}` : 
+                              safeFormatAddress(wallet.walletAddress) : 
                               'N/A'
                             }</div>
                           </>
@@ -1167,10 +1252,7 @@ function App() {
       logMessage('info', 'Tab change requested', { 
         from: activeTab, 
         to: newTab,
-        session_id: sessionId.current,
-        wallet_connected: wallet.isConnected,
-        wallet_type: wallet.walletType,
-        system_health: systemHealth?.status
+        session_id: sessionId.current
       });
       
       setActiveTab(newTab);
@@ -1182,7 +1264,7 @@ function App() {
         session_id: sessionId.current
       });
     }
-  }, [activeTab, wallet.isConnected, wallet.walletType, systemHealth?.status]);
+  }, [activeTab]); // CRITICAL FIX: Remove wallet state dependencies to prevent loops
 
   return (
     <AppErrorBoundary>
