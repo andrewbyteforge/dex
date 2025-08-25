@@ -1,5 +1,5 @@
 /**
- * WalletConnect - FIXED component that uses centralized useWallet hook
+ * WalletConnect - FIXED component with complete wallet context logging
  * 
  * This component provides wallet connection UI and integrates with the useWallet hook
  * for consistent state management across the application.
@@ -7,7 +7,7 @@
  * File: frontend/src/components/WalletConnect.jsx
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Card, Button, Alert, Badge, Dropdown, Spinner, Modal } from 'react-bootstrap';
 import { Wallet, ChevronDown, Copy, ExternalLink, LogOut, AlertCircle } from 'lucide-react';
 import { useWallet } from '../hooks/useWallet';
@@ -74,8 +74,13 @@ const WalletConnect = ({
     clearError
   } = wallet;
 
-  // Local UI state only
+  // FIXED: Local UI state only - ALL STATE DECLARATIONS TOGETHER
   const [showWalletModal, setShowWalletModal] = useState(false);
+  const [isChainSwitching, setIsChainSwitching] = useState(false);
+  
+  // FIXED: Race condition prevention - track programmatic chain switches
+  const programmaticChainSwitchRef = useRef(false);
+  const lastSelectedChain = useRef(selectedChain);
 
   // Chain configuration
   const chains = {
@@ -174,28 +179,70 @@ const WalletConnect = ({
         trace_id
       });
     } else if (!isConnected && !walletAddress) {
-      const trace_id = logWalletConnect('debug', 'Wallet disconnection state changed - notifying parent');
+      const trace_id = logWalletConnect('debug', 'Wallet disconnection state changed - notifying parent', {
+        wallet_address: walletAddress,
+        wallet_type: walletType,
+        chain: selectedChain
+      });
       onWalletDisconnect?.({ trace_id });
     }
   }, [isConnected, walletAddress, walletType, selectedChain, onWalletConnect, onWalletDisconnect]);
 
-  // Notify parent of chain changes
+  // FIXED: Notify parent of chain changes with race condition prevention
   useEffect(() => {
-    if (selectedChain && onChainChange) {
-      const trace_id = logWalletConnect('debug', 'Chain changed - notifying parent', {
-        chain: selectedChain
-      });
-      onChainChange(selectedChain, { trace_id });
+    if (selectedChain && selectedChain !== lastSelectedChain.current) {
+      // Check if this change was caused by our programmatic switch
+      if (programmaticChainSwitchRef.current) {
+        logWalletConnect('debug', 'Chain changed programmatically - clearing flag and skipping parent notification', {
+          wallet_address: walletAddress,
+          wallet_type: walletType,
+          chain: selectedChain,
+          from_chain: lastSelectedChain.current,
+          to_chain: selectedChain,
+          programmatic: true,
+          skip_parent_notification: true
+        });
+        
+        // Clear the flag since our programmatic switch completed
+        programmaticChainSwitchRef.current = false;
+        
+        // Skip parent notification for programmatic changes to prevent duplicate switch calls
+      } else {
+        logWalletConnect('debug', 'Chain changed externally (from wallet) - notifying parent', {
+          wallet_address: walletAddress,
+          wallet_type: walletType,
+          chain: selectedChain,
+          from_chain: lastSelectedChain.current,
+          to_chain: selectedChain,
+          programmatic: false
+        });
+
+        // Only notify parent for external chain changes
+        if (onChainChange) {
+          const trace_id = logWalletConnect('debug', 'Chain changed externally - notifying parent', {
+            wallet_address: walletAddress,
+            wallet_type: walletType,
+            chain: selectedChain,
+            source: 'external'
+          });
+          onChainChange(selectedChain, { trace_id });
+        }
+      }
+      
+      // Update last selected chain
+      lastSelectedChain.current = selectedChain;
     }
-  }, [selectedChain, onChainChange]);
+  }, [selectedChain, walletAddress, walletType, onChainChange]);
 
   /**
    * Handle wallet connection from modal
    */
   const handleWalletConnection = async (walletId) => {
     const trace_id = logWalletConnect('info', 'Initiating wallet connection from UI', {
-      wallet_id: walletId,
-      chain: selectedChain
+      wallet_address: walletAddress,
+      wallet_type: walletType,
+      chain: selectedChain,
+      wallet_id: walletId
     });
 
     try {
@@ -205,12 +252,18 @@ const WalletConnect = ({
 
       if (result.success) {
         logWalletConnect('info', 'Wallet connection successful', {
+          wallet_address: result.address,
+          wallet_type: walletId,
+          chain: selectedChain,
           wallet_id: walletId,
           address: result.address,
           trace_id
         });
       } else {
         logWalletConnect('error', 'Wallet connection failed from UI', {
+          wallet_address: walletAddress,
+          wallet_type: walletType,
+          chain: selectedChain,
           wallet_id: walletId,
           error: result.error,
           trace_id
@@ -218,6 +271,9 @@ const WalletConnect = ({
       }
     } catch (error) {
       logWalletConnect('error', 'Wallet connection error in UI handler', {
+        wallet_address: walletAddress,
+        wallet_type: walletType,
+        chain: selectedChain,
         wallet_id: walletId,
         error: error.message,
         trace_id
@@ -226,50 +282,86 @@ const WalletConnect = ({
   };
 
   /**
-   * Handle chain change from UI
+   * Handle chain change from UI - FIXED with enhanced race condition prevention
    */
   const handleChainChange = async (chainName) => {
     if (chainName === selectedChain) {
       logWalletConnect('debug', 'Chain change requested but already on target chain', {
+        wallet_address: walletAddress,
+        wallet_type: walletType,
+        chain: selectedChain,
         current_chain: selectedChain,
         requested_chain: chainName
       });
       return;
     }
 
+    if (isChainSwitching) {
+      logWalletConnect('debug', 'Chain switch already in progress, ignoring duplicate request', {
+        wallet_address: walletAddress,
+        wallet_type: walletType,
+        chain: selectedChain,
+        requested_chain: chainName
+      });
+      return;
+    }
+
+    // FIXED: Set flag to indicate we're starting a programmatic chain switch
+    programmaticChainSwitchRef.current = true;
+
     const trace_id = logWalletConnect('info', 'Chain change requested from UI', {
+      wallet_address: walletAddress,
+      wallet_type: walletType,
+      chain: selectedChain,
       current_chain: selectedChain,
       requested_chain: chainName,
       is_connected: isConnected,
-      wallet_type: walletType,
-      wallet_address: walletAddress
+      programmatic_flag_set: true
     });
 
     try {
-      // FIXED: Use the hook's switchChain method with proper validation
+      setIsChainSwitching(true);
+      
       const result = await switchChain(chainName);
 
       if (result.success) {
         logWalletConnect('info', 'Chain switch successful from UI', {
+          wallet_address: walletAddress,
+          wallet_type: walletType,
+          chain: chainName,
           from_chain: selectedChain,
           to_chain: chainName,
           trace_id
         });
       } else {
         logWalletConnect('error', 'Chain switch failed from UI', {
+          wallet_address: walletAddress,
+          wallet_type: walletType,
+          chain: selectedChain,
           from_chain: selectedChain,
           to_chain: chainName,
           error: result.error,
           trace_id
         });
+        
+        // FIXED: Clear flag on failure
+        programmaticChainSwitchRef.current = false;
       }
     } catch (error) {
       logWalletConnect('error', 'Chain switch error in UI handler', {
+        wallet_address: walletAddress,
+        wallet_type: walletType,
+        chain: selectedChain,
         from_chain: selectedChain,
         to_chain: chainName,
         error: error.message,
         trace_id
       });
+      
+      // FIXED: Clear flag on exception
+      programmaticChainSwitchRef.current = false;
+    } finally {
+      setIsChainSwitching(false);
     }
   };
 
@@ -279,22 +371,38 @@ const WalletConnect = ({
   const handleDisconnect = async () => {
     const trace_id = logWalletConnect('info', 'Initiating wallet disconnection from UI', {
       wallet_address: walletAddress,
-      wallet_type: walletType
+      wallet_type: walletType,
+      chain: selectedChain
     });
 
     try {
       const result = await disconnectWallet();
       
       if (result.success) {
-        logWalletConnect('info', 'Wallet disconnection successful from UI', { trace_id });
+        logWalletConnect('info', 'Wallet disconnection successful from UI', { 
+          wallet_address: walletAddress,
+          wallet_type: walletType,
+          chain: selectedChain,
+          trace_id 
+        });
+        
+        // FIXED: Reset chain tracking on disconnect
+        lastSelectedChain.current = null;
+        programmaticChainSwitchRef.current = false;
       } else {
         logWalletConnect('error', 'Wallet disconnection failed from UI', {
+          wallet_address: walletAddress,
+          wallet_type: walletType,
+          chain: selectedChain,
           error: result.error,
           trace_id
         });
       }
     } catch (error) {
       logWalletConnect('error', 'Wallet disconnection error in UI handler', {
+        wallet_address: walletAddress,
+        wallet_type: walletType,
+        chain: selectedChain,
         error: error.message,
         trace_id
       });
@@ -310,10 +418,15 @@ const WalletConnect = ({
     try {
       await navigator.clipboard.writeText(walletAddress);
       logWalletConnect('debug', 'Address copied to clipboard', {
-        wallet_address: walletAddress
+        wallet_address: walletAddress,
+        wallet_type: walletType,
+        chain: selectedChain
       });
     } catch (error) {
       logWalletConnect('warn', 'Failed to copy address to clipboard', {
+        wallet_address: walletAddress,
+        wallet_type: walletType,
+        chain: selectedChain,
         error: error.message
       });
     }
@@ -336,6 +449,7 @@ const WalletConnect = ({
     
     logWalletConnect('debug', 'Opened address in block explorer', {
       wallet_address: walletAddress,
+      wallet_type: walletType,
       chain: selectedChain,
       url
     });
@@ -354,7 +468,11 @@ const WalletConnect = ({
    */
   const handleClearError = () => {
     clearError();
-    logWalletConnect('debug', 'Connection error cleared from UI');
+    logWalletConnect('debug', 'Connection error cleared from UI', {
+      wallet_address: walletAddress,
+      wallet_type: walletType,
+      chain: selectedChain
+    });
   };
 
   // Render disconnected state
@@ -511,9 +629,13 @@ const WalletConnect = ({
                   variant={selectedChain === chainId ? chain.color : 'outline-secondary'}
                   size="sm"
                   onClick={() => handleChainChange(chainId)}
-                  disabled={isConnecting}
+                  disabled={isConnecting || isChainSwitching}
                 >
-                  {chain.name}
+                  {isChainSwitching && selectedChain === chainId ? (
+                    <Spinner size="sm" />
+                  ) : (
+                    chain.name
+                  )}
                 </Button>
               );
             })}

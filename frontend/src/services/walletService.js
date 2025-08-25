@@ -1,5 +1,5 @@
 /**
- * Simplified EVM Wallet Service - Compatible with wagmi version issues
+ * Simplified EVM Wallet Service - FIXED with complete wallet context logging
  * 
  * Uses direct wallet provider methods and minimal wagmi integration
  * to avoid version compatibility problems.
@@ -87,18 +87,19 @@ const CHAIN_CONFIGS = {
 };
 
 /**
- * Structured logging for wallet service operations
+ * Structured logging for wallet service operations - FIXED with current state context
  */
-const logWalletService = (level, message, data = {}) => {
+const logWalletService = (level, message, data = {}, currentState = {}) => {
   const logEntry = {
     timestamp: new Date().toISOString(),
     level,
     service: 'walletService',
     trace_id: data.trace_id || `wallet_svc_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
     message,
-    chain: data.chain,
-    wallet_type: data.wallet_type,
-    wallet_address: data.wallet_address ? `${data.wallet_address.substring(0, 6)}...${data.wallet_address.substring(data.wallet_address.length - 4)}` : null,
+    chain: data.chain || currentState.currentChainName,
+    wallet_type: data.wallet_type || currentState.currentWalletType,
+    wallet_address: (data.wallet_address || currentState.currentAccount) ? 
+      `${(data.wallet_address || currentState.currentAccount).substring(0, 6)}...${(data.wallet_address || currentState.currentAccount).substring((data.wallet_address || currentState.currentAccount).length - 4)}` : null,
     ...data
   };
 
@@ -123,19 +124,31 @@ const logWalletService = (level, message, data = {}) => {
 };
 
 /**
- * Simplified EVM Wallet Service Class
+ * Simplified EVM Wallet Service Class - FIXED with complete context tracking
  */
 class WalletService {
   constructor() {
     this.currentAccount = null;
     this.currentChain = null;
+    this.currentChainName = null;
     this.currentWalletType = null;
     this.eventListeners = new Map();
-    this.apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+    this.apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8001';
     this.isInitialized = false;
     this.publicClients = new Map();
     
     this.initialize();
+  }
+
+  /**
+   * Get current state for logging context - FIXED helper method
+   */
+  getCurrentStateForLogging() {
+    return {
+      currentAccount: this.currentAccount,
+      currentChainName: this.currentChainName,
+      currentWalletType: this.currentWalletType
+    };
   }
 
   /**
@@ -157,12 +170,12 @@ class WalletService {
       logWalletService('info', 'WalletService initialized successfully', {
         api_base_url: this.apiBaseUrl,
         supported_chains: Object.keys(CHAIN_CONFIGS)
-      });
+      }, this.getCurrentStateForLogging());
 
     } catch (error) {
       logWalletService('error', 'WalletService initialization failed', {
         error: error.message
-      });
+      }, this.getCurrentStateForLogging());
       throw error;
     }
   }
@@ -180,8 +193,9 @@ class WalletService {
         this.publicClients.set(chainName, client);
       } catch (error) {
         logWalletService('warn', `Failed to initialize public client for ${chainName}`, {
-          error: error.message
-        });
+          error: error.message,
+          chain_name: chainName
+        }, this.getCurrentStateForLogging());
       }
     });
   }
@@ -194,8 +208,9 @@ class WalletService {
       // Account changed
       window.ethereum.on('accountsChanged', (accounts) => {
         logWalletService('debug', 'Accounts changed', {
-          accounts: accounts.length
-        });
+          accounts: accounts.length,
+          new_account: accounts[0] || null
+        }, this.getCurrentStateForLogging());
 
         if (accounts.length === 0) {
           // Wallet disconnected
@@ -214,13 +229,16 @@ class WalletService {
       window.ethereum.on('chainChanged', (chainId) => {
         const chainIdNumber = parseInt(chainId, 16);
         const chainConfig = Object.values(CHAIN_CONFIGS).find(c => c.id === chainIdNumber);
+        const chainName = Object.keys(CHAIN_CONFIGS).find(name => CHAIN_CONFIGS[name].id === chainIdNumber);
         
         logWalletService('debug', 'Chain changed', {
           chainId: chainIdNumber,
-          chainName: chainConfig?.name || 'Unknown'
-        });
+          chainName: chainConfig?.name || 'Unknown',
+          new_chain_name: chainName
+        }, this.getCurrentStateForLogging());
 
         this.currentChain = chainIdNumber;
+        this.currentChainName = chainName || null;
         this.emit('chainChanged', { 
           chainId: chainIdNumber, 
           chainName: chainConfig?.name || 'Unknown'
@@ -231,17 +249,18 @@ class WalletService {
       window.ethereum.on('connect', (connectInfo) => {
         logWalletService('debug', 'Wallet connected', {
           chainId: parseInt(connectInfo.chainId, 16)
-        });
+        }, this.getCurrentStateForLogging());
         this.emit('connect', connectInfo);
       });
 
       window.ethereum.on('disconnect', (error) => {
         logWalletService('debug', 'Wallet disconnected', {
           error: error.message
-        });
+        }, this.getCurrentStateForLogging());
         this.currentAccount = null;
         this.currentWalletType = null;
         this.currentChain = null;
+        this.currentChainName = null;
         this.emit('disconnect', error);
       });
     }
@@ -258,7 +277,7 @@ class WalletService {
           error: event.error.message,
           filename: event.filename,
           lineno: event.lineno
-        });
+        }, this.getCurrentStateForLogging());
       }
     });
 
@@ -268,7 +287,7 @@ class WalletService {
         logWalletService('error', 'Unhandled wallet promise rejection', {
           error: event.reason.message,
           stack: event.reason.stack
-        });
+        }, this.getCurrentStateForLogging());
       }
     });
   }
@@ -297,13 +316,14 @@ class WalletService {
   }
 
   /**
-   * Connect to an EVM wallet using direct provider methods
+   * Connect to an EVM wallet using direct provider methods - FIXED with context logging
    */
   async connect(walletType = 'metamask', chainName = 'ethereum') {
     const trace_id = logWalletService('info', 'Initiating wallet connection', {
       wallet_type: walletType,
-      chain: chainName
-    });
+      chain: chainName,
+      target_chain: chainName
+    }, this.getCurrentStateForLogging());
 
     try {
       this.ensureInitialized();
@@ -341,18 +361,20 @@ class WalletService {
         await this.switchChain(chainName);
       }
 
-      // Update internal state
+      // Update internal state BEFORE logging success
       this.currentAccount = account;
       this.currentChain = chainConfig.id;
+      this.currentChainName = chainName;
       this.currentWalletType = walletType;
 
-      // Register wallet with backend
       // Register wallet with backend (non-blocking)
       this.registerWallet(account, walletType, chainName).catch(error => {
         logWalletService('debug', 'Backend registration failed but continuing connection', {
           error: error.message,
-          wallet_address: account
-        });
+          wallet_address: account,
+          wallet_type: walletType,
+          chain: chainName
+        }, this.getCurrentStateForLogging());
       });
 
       logWalletService('info', 'Wallet connected successfully', {
@@ -361,7 +383,7 @@ class WalletService {
         chain: chainName,
         chain_id: chainConfig.id,
         trace_id
-      });
+      }, this.getCurrentStateForLogging());
 
       return {
         success: true,
@@ -377,7 +399,7 @@ class WalletService {
         error: error.message,
         code: error.code,
         trace_id
-      });
+      }, this.getCurrentStateForLogging());
 
       return {
         success: false,
@@ -388,21 +410,28 @@ class WalletService {
   }
 
   /**
-   * Disconnect from current wallet
+   * Disconnect from current wallet - FIXED with context logging
    */
   async disconnect() {
-    const trace_id = logWalletService('info', 'Initiating wallet disconnection');
+    const trace_id = logWalletService('info', 'Initiating wallet disconnection', {}, this.getCurrentStateForLogging());
 
     try {
-      // Clear internal state
-      this.currentAccount = null;
-      this.currentChain = null;
-      this.currentWalletType = null;
-
       // Unregister from backend
       await this.unregisterWallet();
 
-      logWalletService('info', 'Wallet disconnected successfully', { trace_id });
+      // Clear internal state AFTER logging but BEFORE success log
+      const previousState = this.getCurrentStateForLogging();
+      this.currentAccount = null;
+      this.currentChain = null;
+      this.currentChainName = null;
+      this.currentWalletType = null;
+
+      logWalletService('info', 'Wallet disconnected successfully', { 
+        trace_id,
+        previous_wallet_address: previousState.currentAccount,
+        previous_wallet_type: previousState.currentWalletType,
+        previous_chain: previousState.currentChainName
+      }, this.getCurrentStateForLogging());
 
       return { success: true };
 
@@ -410,7 +439,7 @@ class WalletService {
       logWalletService('error', 'Wallet disconnection failed', {
         error: error.message,
         trace_id
-      });
+      }, this.getCurrentStateForLogging());
 
       return {
         success: false,
@@ -420,12 +449,14 @@ class WalletService {
   }
 
   /**
-   * Switch to a different blockchain network using wallet provider directly
+   * Switch to a different blockchain network - FIXED with complete context logging
    */
   async switchChain(chainName) {
     const trace_id = logWalletService('info', 'Switching blockchain network', {
-      to_chain: chainName
-    });
+      to_chain: chainName,
+      from_chain: this.currentChainName,
+      target_chain: chainName
+    }, this.getCurrentStateForLogging());
 
     try {
       this.ensureInitialized();
@@ -466,14 +497,18 @@ class WalletService {
         }
       }
 
-      // Update internal state
+      // Update internal state BEFORE logging success
       this.currentChain = chainConfig.id;
+      this.currentChainName = chainName;
 
       logWalletService('info', 'Chain switched successfully', {
         chain: chainConfig.name,
         chain_id: chainConfig.id,
+        chain_name: chainName,
+        from_chain: this.currentChainName,
+        to_chain: chainName,
         trace_id
-      });
+      }, this.getCurrentStateForLogging());
 
       return {
         success: true,
@@ -484,10 +519,11 @@ class WalletService {
     } catch (error) {
       logWalletService('error', 'Chain switch failed', {
         to_chain: chainName,
+        from_chain: this.currentChainName,
         error: error.message,
         code: error.code,
         trace_id
-      });
+      }, this.getCurrentStateForLogging());
 
       return {
         success: false,
@@ -498,13 +534,15 @@ class WalletService {
   }
 
   /**
-   * Get wallet balances for current address using viem directly
+   * Get wallet balances for current address - FIXED with context logging
    */
   async getBalances(address, chainName) {
     const trace_id = logWalletService('debug', 'Fetching wallet balances', {
       wallet_address: address,
-      chain: chainName
-    });
+      chain: chainName,
+      target_address: address,
+      target_chain: chainName
+    }, this.getCurrentStateForLogging());
 
     try {
       this.ensureInitialized();
@@ -541,8 +579,10 @@ class WalletService {
       } catch (backendError) {
         logWalletService('warn', 'Backend token balance fetch failed', {
           error: backendError.message,
+          wallet_address: address,
+          chain: chainName,
           trace_id
-        });
+        }, this.getCurrentStateForLogging());
         // Continue without token balances
       }
 
@@ -552,7 +592,7 @@ class WalletService {
         native_balance: balances.native.balance,
         token_count: Object.keys(balances.tokens || {}).length,
         trace_id
-      });
+      }, this.getCurrentStateForLogging());
 
       return {
         success: true,
@@ -565,7 +605,7 @@ class WalletService {
         chain: chainName,
         error: error.message,
         trace_id
-      });
+      }, this.getCurrentStateForLogging());
 
       return {
         success: false,
@@ -575,11 +615,11 @@ class WalletService {
   }
 
   /**
-   * Register wallet with backend API
+   * Register wallet with backend API - FIXED with context logging
    */
   async registerWallet(address, walletType, chainName) {
     try {
-      const response = await fetch(`${this.apiBaseUrl}/api/wallets/register`, {
+      const response = await fetch(`${this.apiBaseUrl}/api/v1/wallets/register`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -602,28 +642,30 @@ class WalletService {
         wallet_address: address,
         wallet_type: walletType,
         chain: chainName
-      });
+      }, this.getCurrentStateForLogging());
 
       return result;
 
     } catch (error) {
       logWalletService('warn', 'Backend wallet registration failed', {
         wallet_address: address,
+        wallet_type: walletType,
+        chain: chainName,
         error: error.message
-      });
+      }, this.getCurrentStateForLogging());
       // Don't fail connection if backend registration fails
       return null;
     }
   }
 
   /**
-   * Unregister wallet from backend API
+   * Unregister wallet from backend API - FIXED with context logging
    */
   async unregisterWallet() {
     try {
       if (!this.currentAccount) return;
 
-      const response = await fetch(`${this.apiBaseUrl}/api/wallets/unregister`, {
+      const response = await fetch(`${this.apiBaseUrl}/api/v1/wallets/unregister`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -637,22 +679,22 @@ class WalletService {
       if (response.ok) {
         logWalletService('debug', 'Wallet unregistered from backend', {
           wallet_address: this.currentAccount
-        });
+        }, this.getCurrentStateForLogging());
       }
 
     } catch (error) {
       logWalletService('warn', 'Backend wallet unregistration failed', {
         error: error.message
-      });
+      }, this.getCurrentStateForLogging());
       // Don't fail disconnection if backend unregistration fails
     }
   }
 
   /**
-   * Fetch token balances from backend API
+   * Fetch token balances from backend API - FIXED with context logging
    */
   async fetchTokenBalancesFromBackend(address, chainName) {
-    const response = await fetch(`${this.apiBaseUrl}/api/wallets/balances`, {
+    const response = await fetch(`${this.apiBaseUrl}/api/v1/wallets/balances`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -678,6 +720,7 @@ class WalletService {
       address: this.currentAccount,
       isConnected: !!this.currentAccount,
       chainId: this.currentChain,
+      chainName: this.currentChainName,
       walletType: this.currentWalletType
     };
   }
@@ -763,7 +806,7 @@ class WalletService {
           logWalletService('error', 'Event listener callback failed', {
             event,
             error: error.message
-          });
+          }, this.getCurrentStateForLogging());
         }
       });
     }
@@ -777,6 +820,7 @@ class WalletService {
       initialized: this.isInitialized,
       currentAccount: this.currentAccount,
       currentChain: this.currentChain,
+      currentChainName: this.currentChainName,
       currentWalletType: this.currentWalletType,
       supportedChains: Object.keys(CHAIN_CONFIGS),
       publicClientsCount: this.publicClients.size,
@@ -792,6 +836,7 @@ class WalletService {
     this.publicClients.clear();
     this.currentAccount = null;
     this.currentChain = null;
+    this.currentChainName = null;
     this.currentWalletType = null;
   }
 }

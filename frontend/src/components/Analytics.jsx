@@ -81,7 +81,7 @@ function Analytics() {
     setError(null);
     
     try {
-      const baseUrl = 'http://127.0.0.1:8000/api/v1/analytics';
+      const baseUrl = 'http://127.0.0.1:8001/api/v1/analytics';
       
       // Fetch summary data
       if (dataType === 'all' || dataType === 'summary') {
@@ -160,7 +160,7 @@ function Analytics() {
 
     } catch (err) {
       console.error('Failed to fetch analytics data:', err);
-      setError('Failed to load analytics data. Please ensure the backend server is running on port 8000.');
+      setError('Failed to load analytics data. Please ensure the backend server is running on port 8001.');
     } finally {
       setLoading(false);
     }

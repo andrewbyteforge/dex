@@ -116,7 +116,7 @@ const PairDiscovery = ({ walletAddress, selectedChain = 'ethereum', onTradeReque
 
     try {
       const clientId = `discovery_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      const wsUrl = `ws://localhost:8000/ws/discovery/${clientId}`;
+      const wsUrl = `ws://localhost:8001/ws/discovery/${clientId}`;
       
       wsRef.current = new WebSocket(wsUrl);
 

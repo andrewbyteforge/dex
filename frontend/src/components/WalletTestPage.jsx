@@ -136,7 +136,7 @@ const WalletTestPage = () => {
       // Test 5: API endpoints
       setTimeout(async () => {
         try {
-          const apiBase = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
+          const apiBase = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8001';
           const response = await fetch(`${apiBase}/api/v1/health`, { 
             method: 'GET',
             signal: AbortSignal.timeout(5000) // 5 second timeout

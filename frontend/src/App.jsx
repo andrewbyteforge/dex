@@ -383,9 +383,9 @@ const MobileLayout = ({
   }, [systemHealth]);
 
   // CRITICAL FIX: Enhanced wallet connection handlers with comprehensive error handling
-  const handleWalletConnect = useCallback((address, type) => {
+  const handleWalletConnect = useCallback((walletData) => {
     try {
-      const trace_id = `wallet_connect_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const { address, type, chain, trace_id } = walletData || {};
       
       // CRITICAL: Validate address before any formatting operations
       if (!address) {
@@ -403,15 +403,16 @@ const MobileLayout = ({
         });
         return;
       }
-
-      // Safe address formatting using our helper
-      const formattedAddress = safeFormatAddress(address, trace_id);
       
-      logMessage('info', 'Wallet connected via navbar', {
-        trace_id,
-        wallet_address: formattedAddress,
-        wallet_type: type
-      });
+      // Safe address formatting using our helper
+          const formattedAddress = safeFormatAddress(address, trace_id);
+          
+          logMessage('info', 'Wallet connected via navbar', {
+            trace_id,
+            wallet_address: formattedAddress,
+            wallet_type: type,
+            chain: chain
+          });
       
       // CRITICAL FIX: Don't increment connection attempts on successful connection
       setConnectionAttempts(0);

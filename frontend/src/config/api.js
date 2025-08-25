@@ -4,11 +4,11 @@
  * File: frontend/src/config/api.js
  */
 
-// API base URL configuration
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
+// API base URL configuration - FIXED to match backend port 8001
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8001';
 
 /**
- * Fetch wrapper with automatic base URL prepending
+ * Fetch wrapper with automatic base URL prepending and comprehensive error handling
  * 
  * @param {string} endpoint - API endpoint (without base URL)
  * @param {object} options - Fetch options
@@ -17,9 +17,10 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000
 export const apiClient = async (endpoint, options = {}) => {
   const url = `${API_BASE_URL}${endpoint}`;
   
-  // Default headers
+  // Default headers with CORS support
   const defaultHeaders = {
     'Content-Type': 'application/json',
+    'Accept': 'application/json',
   };
 
   // Merge headers
@@ -32,11 +33,28 @@ export const apiClient = async (endpoint, options = {}) => {
     const response = await fetch(url, {
       ...options,
       headers,
+      // Add credentials for CORS if needed
+      credentials: 'omit', // Changed from 'include' to avoid CORS issues
     });
 
     return response;
   } catch (error) {
-    console.error(`API request failed: ${url}`, error);
+    // Enhanced error logging with network details
+    console.error(`API request failed: ${url}`, {
+      error: error.message,
+      name: error.name,
+      stack: error.stack,
+      endpoint,
+      timestamp: new Date().toISOString()
+    });
+    
+    // Check for specific network errors
+    if (error.name === 'TypeError' && error.message.includes('Failed to fetch')) {
+      throw new Error(`Backend server unavailable. Please ensure the server is running on port 8001.`);
+    } else if (error.message.includes('CORS')) {
+      throw new Error(`CORS error: ${error.message}. Check backend CORS configuration.`);
+    }
+    
     throw error;
   }
 };
@@ -47,6 +65,7 @@ export const apiClient = async (endpoint, options = {}) => {
 export const API_ENDPOINTS = {
   // Health endpoints
   HEALTH: '/api/v1/health',
+  PING: '/ping',
   
   // Quote endpoints
   QUOTES: '/api/v1/quotes/',
@@ -68,6 +87,7 @@ export const API_ENDPOINTS = {
   // Wallet endpoints
   WALLET_BALANCE: '/api/v1/wallet/balance',
   WALLET_TOKENS: '/api/v1/wallet/tokens',
+  WALLET_REGISTER: '/api/wallets/register', // Fixed endpoint from error message
   
   // Database endpoints
   DATABASE_STATS: '/api/v1/database/stats',
@@ -81,6 +101,11 @@ export const api = {
    * Get health status
    */
   health: () => apiClient(API_ENDPOINTS.HEALTH),
+  
+  /**
+   * Ping server
+   */
+  ping: () => apiClient(API_ENDPOINTS.PING),
   
   /**
    * Get trade preview
@@ -120,6 +145,14 @@ export const api = {
    * Risk assessment
    */
   riskAssessment: (data) => apiClient(API_ENDPOINTS.RISK_ASSESSMENT, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
+  
+  /**
+   * Register wallet
+   */
+  registerWallet: (data) => apiClient(API_ENDPOINTS.WALLET_REGISTER, {
     method: 'POST',
     body: JSON.stringify(data),
   }),

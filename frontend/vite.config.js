@@ -20,7 +20,7 @@ export default defineConfig({
     // Ensure proper CORS headers
     cors: true,
    
-    // Explicit proxy configuration for backend
+    // Explicit proxy configuration for backend - FIXED to consistently use port 8001
     proxy: {
       '/api': {
         target: 'http://localhost:8001',
@@ -38,7 +38,7 @@ export default defineConfig({
               timestamp: new Date().toISOString()
             });
             
-            // Send meaningful error response
+            // Send meaningful error response with CORRECT port number
             if (res && !res.headersSent) {
               res.writeHead(503, { 'Content-Type': 'application/json' });
               res.end(JSON.stringify({
@@ -87,7 +87,7 @@ export default defineConfig({
               timestamp: new Date().toISOString()
             });
 
-            // Check for specific error types with detailed explanations
+            // Check for specific error types with detailed explanations - FIXED port reference
             if (err.code === 'ECONNREFUSED') {
               console.error('[Vite] ❌ Backend WebSocket server is not running or not accepting connections on port 8001');
               console.error('[Vite] 💡 Solution: Make sure your backend server is started with: python -m uvicorn main:app --host 0.0.0.0 --port 8001 --reload');
@@ -107,108 +107,13 @@ export default defineConfig({
             console.log('[Vite] 🔄 WebSocket proxy request:', {
               url: req.url,
               method: req.method,
-              origin: req.headers.origin,
-              userAgent: req.headers['user-agent']?.substring(0, 50) + '...',
-              target: `http://localhost:8001${req.url}`, // Fixed: proper string interpolation
+              headers: Object.keys(req.headers),
               timestamp: new Date().toISOString()
             });
-
-            // Enhanced socket error handling
-            socket.on('error', (err) => {
-              console.error('[Vite] 💥 WebSocket client socket error:', {
-                message: err.message,
-                code: err.code,
-                errno: err.errno,
-                url: req.url,
-                timestamp: new Date().toISOString()
-              });
-              
-              // Provide context-specific error messages
-              if (err.code === 'ECONNRESET') {
-                console.error('[Vite] 💡 Client disconnected or backend rejected the WebSocket handshake');
-              } else if (err.code === 'EPIPE') {
-                console.error('[Vite] 💡 Broken pipe - connection was closed unexpectedly');
-              }
-            });
-
-            socket.on('timeout', () => {
-              console.error('[Vite] ⏰ WebSocket client socket timed out for:', req.url);
-            });
-
-            socket.on('close', (hadError) => {
-              if (hadError) {
-                console.error('[Vite] 🔌 WebSocket client socket closed with error for:', req.url);
-              } else {
-                console.log('[Vite] 🔌 WebSocket client socket closed normally for:', req.url);
-              }
-            });
-          });
-
-          proxy.on('open', (proxySocket) => {
-            console.log('[Vite] ✅ WebSocket proxy connection opened successfully');
             
-            proxySocket.on('error', (err) => {
-              console.error('[Vite] 💥 WebSocket proxy socket error (backend side):', {
-                message: err.message,
-                code: err.code,
-                errno: err.errno,
-                timestamp: new Date().toISOString()
-              });
-              
-              if (err.code === 'ECONNRESET') {
-                console.error('[Vite] 💡 Backend closed the WebSocket connection unexpectedly');
-              } else if (err.code === 'ETIMEDOUT') {
-                console.error('[Vite] 💡 Backend WebSocket connection timed out');
-              }
-            });
-
-            proxySocket.on('close', (hadError) => {
-              console.log('[Vite] 🔌 WebSocket proxy socket closed:', {
-                hadError,
-                timestamp: new Date().toISOString()
-              });
-              
-              if (hadError) {
-                console.error('[Vite] ❌ WebSocket proxy socket closed due to error');
-              }
-            });
-
-            proxySocket.on('timeout', () => {
-              console.error('[Vite] ⏰ WebSocket proxy socket timed out');
-            });
-
-            // Log data flow for debugging
-            proxySocket.on('data', (chunk) => {
-              console.log('[Vite] 📨 WebSocket data from backend:', {
-                size: chunk.length,
-                timestamp: new Date().toISOString()
-              });
-            });
-          });
-
-          proxy.on('close', (res, socket, head) => {
-            console.log('[Vite] 🔌 WebSocket proxy connection closed');
-          });
-
-          // Handle upgrade errors specifically with detailed logging
-          proxy.on('upgrade', (req, socket, head) => {
-            console.log('[Vite] ⬆️ WebSocket upgrade attempt:', {
-              url: req.url,
-              method: req.method,
-              headers: {
-                upgrade: req.headers.upgrade,
-                connection: req.headers.connection,
-                'sec-websocket-version': req.headers['sec-websocket-version'],
-                'sec-websocket-key': req.headers['sec-websocket-key']
-              },
-              timestamp: new Date().toISOString()
-            });
-          });
-
-          // Additional proxy events for comprehensive monitoring
-          proxy.on('proxyReq', (proxyReq, req, res, options) => {
+            // Log the WebSocket upgrade request (before upgrade)
             if (req.url?.startsWith('/ws')) {
-              console.log('[Vite] 🌐 HTTP request to WebSocket endpoint (before upgrade):', {
+              console.log('[Vite] 📤 WebSocket upgrade request to endpoint (before upgrade):', {
                 url: req.url,
                 method: req.method,
                 headers: Object.keys(req.headers),

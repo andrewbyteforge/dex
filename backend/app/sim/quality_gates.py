@@ -629,7 +629,7 @@ class QualityGatesVerifier:
             
             start_time = time.time()
             async with httpx.AsyncClient() as client:
-                response = await client.get("http://127.0.0.1:8000/health")
+                response = await client.get("http://127.0.0.1:8001/health")
                 response_time = (time.time() - start_time) * 1000  # ms
                 
                 # Check response time < 500ms and status OK
@@ -748,7 +748,7 @@ class QualityGatesVerifier:
                 for endpoint in endpoints_to_test:
                     try:
                         start_time = time.time()
-                        response = await client.get(f"http://127.0.0.1:8000{endpoint}")
+                        response = await client.get(f"http://127.0.0.1:8001{endpoint}")
                         response_time = (time.time() - start_time) * 1000  # ms
                         
                         endpoint_name = endpoint.replace("/", "_").replace("-", "_")
