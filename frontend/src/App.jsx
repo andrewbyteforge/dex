@@ -1,6 +1,6 @@
 /**
  * Enhanced main App component for DEX Sniper Pro with centralized state management and wallet integration.
- * FIXED: Proper wallet connection handling, error boundaries, and CORS issues.
+ * Removes redundant WebSocket connections to prevent connection churn.
  *
  * File: frontend/src/App.jsx
  */
@@ -20,13 +20,6 @@ import WalletConnect from './components/WalletConnect.jsx';
 import { useWallet } from './hooks/useWallet.js';
 
 /**
- * Generate trace ID for logging
- */
-const generateTraceId = (prefix = 'trace') => {
-  return `${prefix}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-};
-
-/**
  * Structured logging for App component lifecycle and errors
  */
 const logMessage = (level, message, data = {}) => {
@@ -34,31 +27,26 @@ const logMessage = (level, message, data = {}) => {
     timestamp: new Date().toISOString(),
     level,
     component: 'App',
-    trace_id: data.trace_id || generateTraceId('app'),
+    trace_id: data.trace_id || `app_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
     session_id: data.session_id || sessionStorage.getItem('dex_session_id'),
-    message,
     ...data
   };
 
-  try {
-    switch (level) {
-      case 'error':
-        console.error(`[App] ${message}`, logEntry);
-        break;
-      case 'warn':
-        console.warn(`[App] ${message}`, logEntry);
-        break;
-      case 'info':
-        console.info(`[App] ${message}`, logEntry);
-        break;
-      case 'debug':
-        console.debug(`[App] ${message}`, logEntry);
-        break;
-      default:
-        console.log(`[App] ${message}`, logEntry);
-    }
-  } catch (loggingError) {
-    console.error('[App] Logging failed:', loggingError);
+  switch (level) {
+    case 'error':
+      console.error(`[App] ${message}`, logEntry);
+      break;
+    case 'warn':
+      console.warn(`[App] ${message}`, logEntry);
+      break;
+    case 'info':
+      console.info(`[App] ${message}`, logEntry);
+      break;
+    case 'debug':
+      console.debug(`[App] ${message}`, logEntry);
+      break;
+    default:
+      console.log(`[App] ${message}`, logEntry);
   }
 
   return logEntry.trace_id;
@@ -80,7 +68,7 @@ class AppErrorBoundary extends React.Component {
   }
   
   static getDerivedStateFromError(error) {
-    const errorId = generateTraceId('error');
+    const errorId = `error_${Date.now().toString(36)}_${Math.random().toString(36).substr(2, 9)}`;
     return { 
       hasError: true, 
       error, 
@@ -92,9 +80,9 @@ class AppErrorBoundary extends React.Component {
     const errorRecord = {
       timestamp: new Date().toISOString(),
       errorId: this.state.errorId,
-      message: error?.message || 'Unknown error',
-      stack: error?.stack || 'No stack trace',
-      componentStack: errorInfo?.componentStack || 'No component stack',
+      message: error.message,
+      stack: error.stack,
+      componentStack: errorInfo.componentStack,
       errorBoundary: 'App',
       retryCount: this.state.retryCount,
       userAgent: navigator.userAgent,
@@ -108,6 +96,7 @@ class AppErrorBoundary extends React.Component {
     // In production, send to error tracking service
     if (import.meta.env.PROD) {
       try {
+        // Example: errorTrackingService.captureException(error, errorRecord);
         fetch('/api/v1/errors/report', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -237,10 +226,6 @@ const MobileLayout = ({
   const [touchStart, setTouchStart] = useState(null);
   const [touchEnd, setTouchEnd] = useState(null);
   const [connectionAttempts, setConnectionAttempts] = useState(0);
-  const [screenDimensions, setScreenDimensions] = useState({
-    width: window.innerWidth,
-    height: window.innerHeight
-  });
 
   // Navigation items configuration - Added wallet test tab
   const navItems = [
@@ -260,7 +245,6 @@ const MobileLayout = ({
         const width = window.innerWidth;
         const height = window.innerHeight;
         
-        setScreenDimensions({ width, height });
         setIsMobile(width < 768);
         setIsTablet(width >= 768 && width < 992);
         
@@ -291,7 +275,7 @@ const MobileLayout = ({
   const handleTouchStart = useCallback((e) => {
     try {
       setTouchEnd(null);
-      setTouchStart(e.targetTouches[0]?.clientX || 0);
+      setTouchStart(e.targetTouches[0].clientX);
     } catch (error) {
       logMessage('error', 'Touch start error', { error: error.message });
     }
@@ -299,7 +283,7 @@ const MobileLayout = ({
 
   const handleTouchMove = useCallback((e) => {
     try {
-      setTouchEnd(e.targetTouches[0]?.clientX || 0);
+      setTouchEnd(e.targetTouches[0].clientX);
     } catch (error) {
       logMessage('error', 'Touch move error', { error: error.message });
     }
@@ -346,70 +330,32 @@ const MobileLayout = ({
     }
   }, [systemHealth]);
 
-  // FIXED: Wallet connection handlers with comprehensive error handling and validation
-  const handleWalletConnect = useCallback((walletData) => {
+  // Wallet connection handlers with comprehensive error handling
+  const handleWalletConnect = useCallback((address, type) => {
     try {
-      // CRITICAL FIX: Proper validation and address extraction
-      let walletAddress = null;
-      let walletType = null;
-
-      // Handle different wallet data formats
-      if (typeof walletData === 'string') {
-        if (walletData === 'provided' || walletData.length < 20) {
-          throw new Error('Invalid wallet address format received');
-        }
-        walletAddress = walletData;
-      } else if (walletData && typeof walletData === 'object') {
-        walletAddress = walletData.walletAddress || walletData.address;
-        walletType = walletData.walletType || walletData.type;
-      }
-
-      // Validate address format
-      if (!walletAddress || typeof walletAddress !== 'string') {
-        throw new Error('Invalid wallet address: not a string');
-      }
-
-      if (walletAddress.length < 20) {
-        throw new Error('Invalid wallet address: too short');
-      }
-
-      // Address validation - basic format check
-      const isEthAddress = /^0x[a-fA-F0-9]{40}$/.test(walletAddress);
-      const isSolanaAddress = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(walletAddress);
-      
-      if (!isEthAddress && !isSolanaAddress) {
-        logMessage('warn', 'Wallet address format validation failed', {
-          address_length: walletAddress.length,
-          address_prefix: walletAddress.substring(0, 6),
-          is_eth_format: isEthAddress,
-          is_solana_format: isSolanaAddress
-        });
-      }
-
       const trace_id = logMessage('info', 'Wallet connected via navbar', {
-        wallet_address: `${walletAddress.substring(0, 6)}...${walletAddress.substring(walletAddress.length - 4)}`,
-        wallet_type: walletType || 'unknown',
-        connection_attempt: connectionAttempts + 1,
-        address_length: walletAddress.length
+        wallet_address: `${address.substring(0, 6)}...${address.substring(address.length - 4)}`,
+        wallet_type: type,
+        connection_attempt: connectionAttempts + 1
       });
       
       setConnectionAttempts(0);
       
-      // Success callback - could add toast notification here
+      // Show success notification or handle connection success
+      // You could add a toast notification here
       
     } catch (error) {
-      const newAttempts = connectionAttempts + 1;
-      setConnectionAttempts(newAttempts);
-      
       logMessage('error', 'Wallet connect handler error', {
         error: error.message,
-        wallet_data_type: typeof walletData,
-        wallet_data: walletData === 'provided' ? 'provided_string' : 'other',
-        connection_attempt: newAttempts
+        address: address ? 'provided' : 'missing',
+        type
       });
     }
   }, [connectionAttempts]);
 
+
+
+  
   const handleWalletDisconnect = useCallback(() => {
     try {
       logMessage('info', 'Wallet disconnected via navbar');
@@ -426,30 +372,11 @@ const MobileLayout = ({
     setConnectionAttempts(newAttempts);
     
     logMessage('error', 'Wallet connection error in navbar', {
-      error: error?.message || 'Unknown wallet error',
+      error: error.message,
       connection_attempt: newAttempts,
       max_attempts: 5
     });
   }, [connectionAttempts]);
-
-  // Handle chain changes from WalletConnect component
-  const handleChainChange = useCallback((chainName) => {
-    try {
-      logMessage('info', 'Chain change requested from navbar', {
-        new_chain: chainName,
-        wallet_connected: wallet?.isConnected || false
-      });
-      
-      if (wallet?.switchChain) {
-        wallet.switchChain(chainName);
-      }
-    } catch (error) {
-      logMessage('error', 'Chain change handler error', {
-        error: error.message,
-        requested_chain: chainName
-      });
-    }
-  }, [wallet]);
 
   // Mobile bottom navigation with error handling
   const renderMobileNavigation = () => {
@@ -533,12 +460,12 @@ const MobileLayout = ({
               ))}
             </Nav>
 
-            {/* FIXED: Integrated Wallet Connection with proper error handling */}
+            {/* Integrated Wallet Connection */}
             <Nav className="d-flex align-items-center">
               <div className="me-3">
                 <WalletConnect 
-                  selectedChain={wallet?.selectedChain || 'ethereum'}
-                  onChainChange={handleChainChange}
+                  selectedChain={wallet.selectedChain || 'ethereum'}
+                  onChainChange={wallet.switchChain}
                   onWalletConnect={handleWalletConnect}
                   onWalletDisconnect={handleWalletDisconnect}
                   onError={handleWalletError}
@@ -618,24 +545,24 @@ const MobileLayout = ({
                 <h6 className="text-muted">Wallet Status</h6>
                 <div className="d-flex align-items-center mb-2">
                   <Badge 
-                    bg={wallet?.isConnected ? 'success' : 'secondary'} 
+                    bg={wallet.isConnected ? 'success' : 'secondary'} 
                     className="me-2"
                   >
                     <Wallet size={12} />
                   </Badge>
                   <span className="small">
-                    {wallet?.isConnected ? 
+                    {wallet.isConnected ? 
                       `Connected: ${wallet.walletType}` : 
                       'No wallet connected'
                     }
                   </span>
                 </div>
                 
-                {wallet?.isConnected && wallet.walletAddress && (
+                {wallet.isConnected && wallet.walletAddress && (
                   <div className="small text-muted">
                     <div>Address: {`${wallet.walletAddress.substring(0, 6)}...${wallet.walletAddress.substring(wallet.walletAddress.length - 4)}`}</div>
                     <div>Chain: {wallet.selectedChain}</div>
-                    {wallet.balances?.native && (
+                    {wallet.balances && wallet.balances.native && (
                       <div>Balance: {wallet.balances.native}</div>
                     )}
                   </div>
@@ -687,7 +614,7 @@ const MobileLayout = ({
                   )}
                 </div>
                 <div className="small text-muted">
-                  Viewport: {screenDimensions.width}x{screenDimensions.height}
+                  Viewport: {window.innerWidth}x{window.innerHeight}
                 </div>
               </div>
             </Nav>
@@ -824,14 +751,14 @@ function App() {
   const healthCheckTimeoutRef = useRef(null);
   const sessionId = useRef(null);
 
-  // FIXED: Initialize wallet with comprehensive error handling - Disable auto-connect
+  // Initialize wallet with comprehensive error handling - FIXED: Disable auto-connect
   const wallet = useWallet({ 
     autoConnect: false, // CRITICAL FIX: Disable auto-connect to prevent unwanted connections
     defaultChain: 'ethereum',
     persistConnection: true,
     onError: (error) => {
       logMessage('error', 'Wallet hook error in App', {
-        error: error?.message || 'Unknown wallet error',
+        error: error.message,
         session_id: sessionId.current
       });
     }
@@ -841,7 +768,7 @@ function App() {
   useEffect(() => {
     // Initialize session
     sessionId.current = sessionStorage.getItem('dex_session_id') || 
-      generateTraceId('session');
+      `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     sessionStorage.setItem('dex_session_id', sessionId.current);
     
     isMountedRef.current = true;
@@ -850,7 +777,7 @@ function App() {
       session_id: sessionId.current,
       user_agent: navigator.userAgent,
       viewport: `${window.innerWidth}x${window.innerHeight}`,
-      wallet_auto_connect: false // Updated to reflect actual setting
+      wallet_auto_connect: true
     });
 
     return () => {
@@ -865,7 +792,7 @@ function App() {
   }, []);
 
   /**
-   * FIXED: Enhanced health check with retry logic, proper error handling, and circuit breaker pattern
+   * Enhanced health check with retry logic, proper error handling, and circuit breaker pattern
    */
   const performHealthCheck = useCallback(async (retryCount = 0) => {
     if (!isMountedRef.current) return;
@@ -893,8 +820,7 @@ function App() {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
       
-      // FIXED: Use correct health endpoint and add CORS headers
-      const response = await fetch('http://localhost:3000/api/v1/health', {
+      const response = await fetch('/api/v1/health', {
         method: 'GET',
         headers: {
           'Accept': 'application/json',
@@ -902,8 +828,7 @@ function App() {
           'X-Session-ID': sessionId.current,
           'X-Trace-ID': trace_id
         },
-        signal: controller.signal,
-        mode: 'cors' // FIXED: Explicit CORS mode
+        signal: controller.signal
       });
 
       clearTimeout(timeoutId);
@@ -939,8 +864,7 @@ function App() {
         trace_id,
         session_id: sessionId.current,
         is_abort_error: err.name === 'AbortError',
-        is_network_error: err.message.includes('fetch'),
-        is_cors_error: err.message.includes('CORS')
+        is_network_error: err.message.includes('fetch')
       });
 
       if (errorCount < 5 && isMountedRef.current) {
@@ -1014,14 +938,14 @@ function App() {
                 <div className="d-flex align-items-center mb-3">
                   <Wallet className="me-2" size={20} />
                   <span>
-                    {wallet?.isConnected ? 
+                    {wallet.isConnected ? 
                       `Connected: ${wallet.walletType} (${wallet.selectedChain})` : 
                       'Connect your wallet to start trading'
                     }
                   </span>
                 </div>
                 
-                {wallet?.isConnected ? (
+                {wallet.isConnected ? (
                   <Alert variant="success">
                     <strong>Ready to Trade!</strong> Your wallet is connected and ready for manual trading.
                   </Alert>
@@ -1042,7 +966,7 @@ function App() {
           return <Autotrade wallet={wallet} systemHealth={systemHealth} />;
 
         case 'discovery':
-          return <PairDiscovery selectedChain={wallet?.selectedChain || "ethereum"} />;
+          return <PairDiscovery selectedChain={wallet.selectedChain || "ethereum"} />;
 
         case 'analytics':
           return <Analytics wallet={wallet} />;
@@ -1056,10 +980,10 @@ function App() {
               </Card.Header>
               <Card.Body>
                 <div className="d-flex align-items-center mb-3">
-                  <Badge bg={wallet?.isConnected ? 'success' : 'secondary'} className="me-2">
-                    {wallet?.isConnected ? 'Connected' : 'Disconnected'}
+                  <Badge bg={wallet.isConnected ? 'success' : 'secondary'} className="me-2">
+                    {wallet.isConnected ? 'Connected' : 'Disconnected'}
                   </Badge>
-                  {wallet?.isConnected && (
+                  {wallet.isConnected && (
                     <span className="small text-muted">
                       {wallet.walletType} on {wallet.selectedChain}
                     </span>
@@ -1097,10 +1021,10 @@ function App() {
                   <div className="small">
                     <div className="row">
                       <div className="col-sm-6">
-                        <div>Status: <Badge bg={wallet?.isConnected ? 'success' : 'secondary'}>
-                          {wallet?.isConnected ? 'Connected' : 'Disconnected'}
+                        <div>Status: <Badge bg={wallet.isConnected ? 'success' : 'secondary'}>
+                          {wallet.isConnected ? 'Connected' : 'Disconnected'}
                         </Badge></div>
-                        {wallet?.isConnected && (
+                        {wallet.isConnected && (
                           <>
                             <div>Type: {wallet.walletType}</div>
                             <div>Chain: {wallet.selectedChain}</div>
@@ -1112,9 +1036,9 @@ function App() {
                         )}
                       </div>
                       <div className="col-sm-6">
-                        <div>Auto-connect: {wallet?.autoConnect ? '✓' : '✗'}</div>
-                        <div>Persist: {wallet?.persistConnection ? '✓' : '✗'}</div>
-                        {wallet?.connectionError && (
+                        <div>Auto-connect: {wallet.autoConnect ? '✓' : '✗'}</div>
+                        <div>Persist: {wallet.persistConnection ? '✓' : '✗'}</div>
+                        {wallet.connectionError && (
                           <div className="text-danger small">Error: {wallet.connectionError}</div>
                         )}
                       </div>
@@ -1179,8 +1103,8 @@ function App() {
     } catch (renderError) {
       logMessage('error', 'Content rendering error', {
         activeTab,
-        error: renderError?.message || 'Unknown render error',
-        stack: renderError?.stack || 'No stack trace',
+        error: renderError.message,
+        stack: renderError.stack,
         session_id: sessionId.current
       });
 
@@ -1188,7 +1112,7 @@ function App() {
         <Alert variant="danger">
           <AlertTriangle size={16} className="me-2" />
           <strong>Rendering Error:</strong> Failed to load {activeTab} content.
-          <div className="small mt-1">{renderError?.message || 'Unknown error'}</div>
+          <div className="small mt-1">{renderError.message}</div>
           <div className="mt-2">
             <Button 
               variant="outline-primary" 
@@ -1218,7 +1142,7 @@ function App() {
       return systemHealth.status === 'healthy' ? 'success' : 'danger';
     } catch (error) {
       logMessage('error', 'Health variant calculation error', {
-        error: error?.message || 'Unknown health variant error',
+        error: error.message,
         session_id: sessionId.current
       });
       return 'warning';
@@ -1244,21 +1168,21 @@ function App() {
         from: activeTab, 
         to: newTab,
         session_id: sessionId.current,
-        wallet_connected: wallet?.isConnected || false,
-        wallet_type: wallet?.walletType || 'none',
-        system_health: systemHealth?.status || 'unknown'
+        wallet_connected: wallet.isConnected,
+        wallet_type: wallet.walletType,
+        system_health: systemHealth?.status
       });
       
       setActiveTab(newTab);
     } catch (error) {
       logMessage('error', 'Tab change handler error', {
-        error: error?.message || 'Unknown tab change error',
+        error: error.message,
         from: activeTab,
         to: newTab,
         session_id: sessionId.current
       });
     }
-  }, [activeTab, wallet?.isConnected, wallet?.walletType, systemHealth?.status]);
+  }, [activeTab, wallet.isConnected, wallet.walletType, systemHealth?.status]);
 
   return (
     <AppErrorBoundary>

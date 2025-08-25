@@ -795,7 +795,7 @@ def create_app() -> FastAPI:
     api_router.include_router(analytics_router)
     logging.getLogger("app.bootstrap").info("Analytics API (enhanced) loaded successfully")
 
-    app.include_router(api_router, prefix="/api/v1")
+    app.include_router(api_router)
 
     # Basic root ping
     @app.get("/", tags=["Meta"])

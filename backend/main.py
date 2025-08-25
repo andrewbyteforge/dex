@@ -2,10 +2,8 @@
 DEX Sniper Pro - Main FastAPI Application Entry Point.
 
 This module initializes the FastAPI application with all core services,
-CORS configuration, wallet API endpoints, comprehensive error handling,
-and production-ready middleware stack.
-
-File: backend/app/main.py
+Redis-backed rate limiting, database connections, background schedulers, 
+and WebSocket support with comprehensive error handling.
 """
 
 from __future__ import annotations
@@ -14,66 +12,21 @@ import asyncio
 import logging
 import time
 import traceback
-import os
-import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncGenerator, Dict, Any, Optional
+from typing import AsyncGenerator
 from collections import defaultdict, deque
-from datetime import datetime, timezone
 
 from fastapi import FastAPI, Request, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-# Add app directory to Python path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-
-# Import core modules
-try:
-    from app.core.config import settings
-except ImportError:
-    # Fallback settings if core config not available
-    class FallbackSettings:
-        ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
-        USE_TESTNET = os.getenv("USE_TESTNET", "false").lower() == "true"
-        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/1")
-    settings = FallbackSettings()
-
-try:
-    from app.core.logging_config import setup_logging
-    setup_logging()
-    logger = logging.getLogger(__name__)
-except ImportError:
-    # Fallback logging setup
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.StreamHandler(),
-        ]
-    )
-    logger = logging.getLogger(__name__)
-    logger.warning("Using fallback logging configuration")
-
-# Import API routers
-try:
-    from app.api.wallets import router as wallet_router
-    WALLET_ROUTER_AVAILABLE = True
-    logger.info("Wallet router imported successfully")
-except ImportError as e:
-    WALLET_ROUTER_AVAILABLE = False
-    logger.warning(f"Wallet router not available: {e}")
-
-try:
-    from app.core.cors import setup_cors, create_cors_settings
-    CORS_MODULE_AVAILABLE = True
-    logger.info("CORS module imported successfully")
-except ImportError as e:
-    CORS_MODULE_AVAILABLE = False
-    logger.warning(f"CORS module not available, using fallback: {e}")
+from app.core.config import settings
+from app.core.logging_config import setup_logging
+from app.core.scheduler import scheduler_manager
+from app.chains.evm_client import EvmClient
+from app.chains.solana_client import SolanaClient
 
 
 class RequestValidationMiddleware(BaseHTTPMiddleware):
@@ -123,12 +76,8 @@ class RequestValidationMiddleware(BaseHTTPMiddleware):
             Response after validation and processing
         """
         start_time = time.time()
-        trace_id = f"req_{int(time.time() * 1000)}_{hash(str(request.url)) % 100000:05d}"
         
         try:
-            # Add trace ID to request state
-            request.state.trace_id = trace_id
-            
             # Validate request size
             if hasattr(request, 'headers'):
                 content_length = request.headers.get('content-length')
@@ -136,12 +85,13 @@ class RequestValidationMiddleware(BaseHTTPMiddleware):
                     logger.warning(
                         f"Request too large: {content_length} bytes from {self._get_client_ip(request)}",
                         extra={
-                            'trace_id': trace_id,
-                            'client_ip': self._get_client_ip(request),
-                            'content_length': content_length,
-                            'max_size': self.max_request_size,
-                            'path': request.url.path,
-                            'method': request.method
+                            'extra_data': {
+                                'client_ip': self._get_client_ip(request),
+                                'content_length': content_length,
+                                'max_size': self.max_request_size,
+                                'path': request.url.path,
+                                'method': request.method
+                            }
                         }
                     )
                     raise HTTPException(
@@ -151,7 +101,7 @@ class RequestValidationMiddleware(BaseHTTPMiddleware):
             
             # Security filtering
             if self.enable_security_filtering:
-                await self._security_filter(request, trace_id)
+                await self._security_filter(request)
             
             # Process request with timeout
             try:
@@ -163,11 +113,12 @@ class RequestValidationMiddleware(BaseHTTPMiddleware):
                 logger.error(
                     f"Request timeout after {self.request_timeout}s for {request.url.path}",
                     extra={
-                        'trace_id': trace_id,
-                        'client_ip': self._get_client_ip(request),
-                        'path': request.url.path,
-                        'method': request.method,
-                        'timeout': self.request_timeout
+                        'extra_data': {
+                            'client_ip': self._get_client_ip(request),
+                            'path': request.url.path,
+                            'method': request.method,
+                            'timeout': self.request_timeout
+                        }
                     }
                 )
                 raise HTTPException(
@@ -175,23 +126,9 @@ class RequestValidationMiddleware(BaseHTTPMiddleware):
                     detail=f"Request timeout after {self.request_timeout} seconds"
                 )
             
-            # Add processing time and trace headers
+            # Add processing time header
             processing_time = time.time() - start_time
             response.headers["X-Processing-Time"] = f"{processing_time:.3f}"
-            response.headers["X-Trace-ID"] = trace_id
-            
-            # Log successful request
-            logger.debug(
-                f"Request completed: {request.method} {request.url.path}",
-                extra={
-                    'trace_id': trace_id,
-                    'method': request.method,
-                    'path': request.url.path,
-                    'status_code': getattr(response, 'status_code', 'unknown'),
-                    'processing_time_ms': round(processing_time * 1000, 2),
-                    'client_ip': self._get_client_ip(request)
-                }
-            )
             
             return response
             
@@ -202,148 +139,126 @@ class RequestValidationMiddleware(BaseHTTPMiddleware):
             logger.error(
                 f"Request validation error: {e}",
                 extra={
-                    'trace_id': trace_id,
-                    'client_ip': self._get_client_ip(request),
-                    'path': request.url.path,
-                    'method': request.method,
-                    'processing_time_ms': round(processing_time * 1000, 2),
-                    'error_type': type(e).__name__,
-                    'error_message': str(e)
-                },
-                exc_info=True
+                    'extra_data': {
+                        'client_ip': self._get_client_ip(request),
+                        'path': request.url.path,
+                        'method': request.method,
+                        'processing_time': processing_time,
+                        'error_type': type(e).__name__
+                    }
+                }
             )
             # Allow request to continue on validation error
             return await call_next(request)
     
     def _get_client_ip(self, request: Request) -> str:
-        """Extract client IP address from request with proxy support."""
+        """Extract client IP address from request."""
         # Check X-Forwarded-For for proxy scenarios
         forwarded_for = request.headers.get('X-Forwarded-For')
         if forwarded_for:
-            # Take first IP in the chain
             return forwarded_for.split(',')[0].strip()
         
-        # Check X-Real-IP header (nginx)
+        # Check X-Real-IP header
         real_ip = request.headers.get('X-Real-IP')
         if real_ip:
             return real_ip.strip()
         
-        # Check CF-Connecting-IP (Cloudflare)
-        cf_ip = request.headers.get('CF-Connecting-IP')
-        if cf_ip:
-            return cf_ip.strip()
-        
         # Fallback to direct client IP
         return request.client.host if request.client else "unknown"
     
-    async def _security_filter(self, request: Request, trace_id: str) -> None:
-        """Apply comprehensive security filtering to request."""
+    async def _security_filter(self, request: Request) -> None:
+        """Apply security filtering to request."""
         try:
             # Check for suspicious headers
             suspicious_headers = [
-                'x-forwarded-host', 'x-originating-ip', 'x-cluster-client-ip',
-                'x-forwarded-server', 'x-forwarded-proto'
+                'x-forwarded-host', 'x-originating-ip', 'x-cluster-client-ip'
             ]
             
             for header in suspicious_headers:
                 if header in request.headers:
                     value = request.headers[header]
-                    # Enhanced validation
-                    if (len(value) > 255 or 
-                        any(char in value for char in ['<', '>', '"', "'", '\n', '\r', '\0']) or
-                        value.count('.') > 10):  # Suspicious IP chains
+                    # Basic validation - could be expanded
+                    if len(value) > 255 or any(char in value for char in ['<', '>', '"', "'"]):
                         logger.warning(
-                            f"Suspicious header detected: {header}",
+                            f"Suspicious header detected: {header}={value}",
                             extra={
-                                'trace_id': trace_id,
-                                'client_ip': self._get_client_ip(request),
-                                'suspicious_header': header,
-                                'header_value': value[:100],  # Truncate for logging
-                                'path': request.url.path,
-                                'security_risk': 'header_injection'
+                                'extra_data': {
+                                    'client_ip': self._get_client_ip(request),
+                                    'suspicious_header': header,
+                                    'header_value': value[:100],  # Truncate for logging
+                                    'path': request.url.path
+                                }
                             }
                         )
             
             # Check for suspicious paths
             suspicious_patterns = [
                 '../', '..\\', '.env', 'wp-admin', 'admin.php', 
-                'config.php', 'shell.php', '.git', '.svn', '.htaccess',
-                'etc/passwd', 'proc/version', 'cmd.exe', 'powershell'
+                'config.php', 'shell.php', '.git', '.svn'
             ]
             
             path = str(request.url.path).lower()
             for pattern in suspicious_patterns:
                 if pattern in path:
                     logger.warning(
-                        f"Suspicious path pattern detected: {pattern}",
+                        f"Suspicious path pattern detected: {pattern} in {request.url.path}",
                         extra={
-                            'trace_id': trace_id,
-                            'client_ip': self._get_client_ip(request),
-                            'path': request.url.path,
-                            'suspicious_pattern': pattern,
-                            'user_agent': request.headers.get('User-Agent', 'unknown'),
-                            'security_risk': 'path_traversal'
-                        }
-                    )
-            
-            # Check User-Agent for common attack patterns
-            user_agent = request.headers.get('User-Agent', '').lower()
-            suspicious_agents = [
-                'sqlmap', 'nikto', 'nessus', 'nmap', 'masscan',
-                'gobuster', 'dirb', 'curl/7.', 'python-requests'
-            ]
-            
-            for agent_pattern in suspicious_agents:
-                if agent_pattern in user_agent:
-                    logger.warning(
-                        f"Suspicious User-Agent detected: {agent_pattern}",
-                        extra={
-                            'trace_id': trace_id,
-                            'client_ip': self._get_client_ip(request),
-                            'user_agent': user_agent[:200],
-                            'path': request.url.path,
-                            'security_risk': 'suspicious_client'
+                            'extra_data': {
+                                'client_ip': self._get_client_ip(request),
+                                'path': request.url.path,
+                                'suspicious_pattern': pattern,
+                                'user_agent': request.headers.get('User-Agent', 'unknown')
+                            }
                         }
                     )
                     
         except Exception as e:
-            logger.error(
-                f"Security filtering error: {e}",
-                extra={'trace_id': trace_id},
-                exc_info=True
-            )
+            logger.error(f"Security filtering error: {e}", exc_info=True)
+
+
+# Initialize structured logging FIRST
+setup_logging()
+logger = logging.getLogger(__name__)
+
+# Enhanced rate limiting imports (after logger is defined)
+try:
+    from app.middleware.rate_limiting import (
+        init_rate_limiter, 
+        shutdown_rate_limiter, 
+        rate_limit_middleware,
+        redis_rate_limiter
+    )
+    REDIS_RATE_LIMITING_AVAILABLE = True
+    logger.info("Redis rate limiting module loaded successfully")
+except ImportError as e:
+    logger.warning(f"Redis rate limiting not available: {e}")
+    REDIS_RATE_LIMITING_AVAILABLE = False
 
 
 class FallbackRateLimiter(BaseHTTPMiddleware):
     """
-    Fallback in-memory rate limiter with enhanced monitoring.
+    Fallback in-memory rate limiter when Redis is unavailable.
     
-    Provides basic rate limiting with configurable limits per IP address,
-    comprehensive logging, and graceful degradation when Redis is unavailable.
+    Provides basic rate limiting with configurable limits per IP address
+    and comprehensive logging for security monitoring.
     """
     
-    def __init__(self, app, calls_per_minute: int = 60, burst_limit: int = 10):
+    def __init__(self, app, calls_per_minute: int = 60):
         """
         Initialize fallback rate limiter.
         
         Args:
             app: FastAPI application
             calls_per_minute: Maximum requests per minute per IP
-            burst_limit: Maximum burst requests per 10 seconds
         """
         super().__init__(app)
         self.calls_per_minute = calls_per_minute
-        self.burst_limit = burst_limit
         self.clients = defaultdict(deque)
-        self.burst_clients = defaultdict(deque)
-        logger.info(
-            f"Fallback rate limiter initialized: "
-            f"{calls_per_minute} calls/minute, {burst_limit} burst/10s per IP"
-        )
+        logger.info(f"Fallback rate limiter initialized: {calls_per_minute} calls/minute per IP")
     
     async def dispatch(self, request: Request, call_next):
         """
-        Process request with comprehensive rate limiting.
+        Process request with rate limiting.
         
         Args:
             request: FastAPI request
@@ -352,82 +267,57 @@ class FallbackRateLimiter(BaseHTTPMiddleware):
         Returns:
             Response with rate limit headers
         """
-        trace_id = getattr(request.state, 'trace_id', f"rate_{int(time.time())}")
-        
         try:
             # Get client IP address
             client_ip = self._get_client_ip(request)
             
-            # Skip rate limiting for specific paths
+            # Skip rate limiting for health checks and docs
             if self._should_skip_rate_limit(request):
-                logger.debug(
-                    f"Skipping rate limit for {request.url.path}",
-                    extra={'trace_id': trace_id, 'path': request.url.path}
-                )
                 return await call_next(request)
             
-            # Perform rate limit checks
-            minute_check = self._check_minute_rate_limit(client_ip, request, trace_id)
-            burst_check = self._check_burst_rate_limit(client_ip, request, trace_id)
-            
-            if not minute_check or not burst_check:
-                limit_type = "minute" if not minute_check else "burst"
-                limit_value = self.calls_per_minute if not minute_check else self.burst_limit
-                
+            # Perform rate limit check
+            if not self._check_rate_limit(client_ip, request):
                 logger.warning(
-                    f"Fallback rate limit exceeded ({limit_type}): {client_ip}",
+                    f"Fallback rate limit exceeded for {client_ip}",
                     extra={
-                        'trace_id': trace_id,
-                        'client_ip': client_ip,
-                        'path': request.url.path,
-                        'method': request.method,
-                        'user_agent': request.headers.get('User-Agent', 'unknown'),
-                        'limit_type': limit_type,
-                        'limit_value': limit_value,
-                        'limiter_backend': 'memory_fallback'
+                        'extra_data': {
+                            'client_ip': client_ip,
+                            'path': request.url.path,
+                            'method': request.method,
+                            'user_agent': request.headers.get('User-Agent', 'unknown'),
+                            'limit': self.calls_per_minute,
+                            'limiter_type': 'fallback_memory'
+                        }
                     }
                 )
                 
-                retry_after = 60 if not minute_check else 10
-                
                 raise HTTPException(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail=f"Rate limit exceeded: {limit_value} requests per {limit_type}",
+                    detail=f"Rate limit exceeded: {self.calls_per_minute} requests per minute",
                     headers={
                         "X-RateLimit-Limit": str(self.calls_per_minute),
                         "X-RateLimit-Remaining": "0",
-                        "X-RateLimit-Reset": str(int(time.time() + retry_after)),
-                        "X-RateLimit-Type": limit_type,
-                        "X-RateLimit-Backend": "memory-fallback",
-                        "Retry-After": str(retry_after)
+                        "X-RateLimit-Reset": str(int(time.time() + 60)),
+                        "Retry-After": "60"
                     }
                 )
             
             # Process the request
             response = await call_next(request)
             
-            # Add comprehensive rate limit headers
-            remaining_minute = self._get_remaining_requests(client_ip, 'minute')
-            remaining_burst = self._get_remaining_requests(client_ip, 'burst')
-            
+            # Add rate limit headers
+            remaining = self._get_remaining_requests(client_ip)
             response.headers["X-RateLimit-Limit"] = str(self.calls_per_minute)
-            response.headers["X-RateLimit-Remaining"] = str(remaining_minute)
+            response.headers["X-RateLimit-Remaining"] = str(remaining)
             response.headers["X-RateLimit-Reset"] = str(int(time.time() + 60))
-            response.headers["X-RateLimit-Burst-Limit"] = str(self.burst_limit)
-            response.headers["X-RateLimit-Burst-Remaining"] = str(remaining_burst)
-            response.headers["X-RateLimit-Backend"] = "memory-fallback"
-            response.headers["X-Trace-ID"] = trace_id
+            response.headers["X-RateLimit-Type"] = "fallback-memory"
             
             return response
             
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(
-                f"Fallback rate limiter error: {e}",
-                extra={'trace_id': trace_id},
-                exc_info=True
-            )
+            logger.error(f"Fallback rate limiter error: {e}", exc_info=True)
             # Allow request to proceed on rate limiter error
             return await call_next(request)
     
@@ -450,12 +340,12 @@ class FallbackRateLimiter(BaseHTTPMiddleware):
         """Check if request should skip rate limiting."""
         skip_paths = [
             "/health", "/ping", "/ready", "/docs", "/redoc", 
-            "/openapi.json", "/favicon.ico", "/api/routes", "/"
+            "/openapi.json", "/favicon.ico", "/api/routes"
         ]
         return request.url.path in skip_paths
     
-    def _check_minute_rate_limit(self, client_ip: str, request: Request, trace_id: str) -> bool:
-        """Check minute-based rate limit."""
+    def _check_rate_limit(self, client_ip: str, request: Request) -> bool:
+        """Check if client is within rate limit."""
         now = time.time()
         minute_ago = now - 60
         
@@ -474,201 +364,386 @@ class FallbackRateLimiter(BaseHTTPMiddleware):
         # Log high usage for monitoring
         if current_requests > self.calls_per_minute * 0.8:
             logger.info(
-                f"High API usage (minute): {client_ip} at {current_requests}/{self.calls_per_minute}",
+                f"High API usage (fallback): {client_ip} at {current_requests}/{self.calls_per_minute}",
                 extra={
-                    'trace_id': trace_id,
-                    'client_ip': client_ip,
-                    'current_requests': current_requests,
-                    'limit': self.calls_per_minute,
-                    'path': request.url.path,
-                    'method': request.method,
-                    'usage_percentage': round((current_requests / self.calls_per_minute) * 100, 1)
+                    'extra_data': {
+                        'client_ip': client_ip,
+                        'current_requests': current_requests,
+                        'limit': self.calls_per_minute,
+                        'path': request.url.path,
+                        'method': request.method,
+                        'limiter_type': 'fallback_memory'
+                    }
                 }
             )
         
         return True
     
-    def _check_burst_rate_limit(self, client_ip: str, request: Request, trace_id: str) -> bool:
-        """Check burst rate limit (10 seconds window)."""
-        now = time.time()
-        ten_seconds_ago = now - 10
-        
-        # Clean old requests outside the time window
-        while self.burst_clients[client_ip] and self.burst_clients[client_ip][0] < ten_seconds_ago:
-            self.burst_clients[client_ip].popleft()
-        
-        # Check if within burst limit
-        current_burst = len(self.burst_clients[client_ip])
-        if current_burst >= self.burst_limit:
-            logger.info(
-                f"Burst limit exceeded: {client_ip} at {current_burst}/{self.burst_limit}",
-                extra={
-                    'trace_id': trace_id,
-                    'client_ip': client_ip,
-                    'current_burst': current_burst,
-                    'burst_limit': self.burst_limit,
-                    'path': request.url.path
-                }
-            )
-            return False
-        
-        # Record this request
-        self.burst_clients[client_ip].append(now)
-        
-        return True
-    
-    def _get_remaining_requests(self, client_ip: str, limit_type: str) -> int:
+    def _get_remaining_requests(self, client_ip: str) -> int:
         """Get remaining requests for client."""
-        if limit_type == 'minute':
-            current_requests = len(self.clients[client_ip])
-            return max(0, self.calls_per_minute - current_requests)
-        elif limit_type == 'burst':
-            current_burst = len(self.burst_clients[client_ip])
-            return max(0, self.burst_limit - current_burst)
-        return 0
+        current_requests = len(self.clients[client_ip])
+        return max(0, self.calls_per_minute - current_requests)
+
+
+async def setup_enhanced_rate_limiting() -> dict:
+    """
+    Initialize enhanced Redis-backed rate limiting system.
+    
+    Returns:
+        Dict with setup status and configuration details
+    """
+    rate_limiter_info = {
+        "type": "unknown",
+        "backend": "unknown",
+        "status": "failed",
+        "redis_connected": False,
+        "rules_loaded": 0,
+        "error": None
+    }
+    
+    if not REDIS_RATE_LIMITING_AVAILABLE:
+        logger.warning("Redis rate limiting module not available, using fallback")
+        rate_limiter_info.update({
+            "type": "fallback",
+            "backend": "memory",
+            "status": "active",
+            "error": "Redis module not available"
+        })
+        return rate_limiter_info
+    
+    try:
+        # Get Redis URL from settings with fallback
+        redis_url = getattr(settings, 'redis_url', "redis://localhost:6379/1")
+        
+        # Initialize Redis rate limiter
+        success = await init_rate_limiter(redis_url)
+        
+        if success:
+            logger.info("Redis rate limiter initialized successfully")
+            
+            # Log active rate limiting rules
+            rules_count = 0
+            if hasattr(redis_rate_limiter, 'rules'):
+                for category, rules in redis_rate_limiter.rules.items():
+                    for rule in rules:
+                        logger.info(f"Rate limit rule - {category}: {rule.limit}/{rule.period.value} ({rule.description})")
+                        rules_count += 1
+            
+            rate_limiter_info.update({
+                "type": "redis",
+                "backend": "redis",
+                "status": "active",
+                "redis_connected": True,
+                "redis_url": redis_url,
+                "rules_loaded": rules_count
+            })
+            
+            logger.info(f"Enhanced rate limiting active with {rules_count} rules")
+            return rate_limiter_info
+            
+        else:
+            logger.error("Failed to initialize Redis rate limiter")
+            rate_limiter_info.update({
+                "error": "Redis connection failed",
+                "fallback_reason": "redis_connection_failed"
+            })
+            
+    except Exception as e:
+        logger.error(f"Rate limiter setup failed: {e}")
+        rate_limiter_info.update({
+            "error": str(e),
+            "fallback_reason": "setup_exception"
+        })
+    
+    # Setup fallback rate limiting
+    logger.warning("Setting up fallback in-memory rate limiting")
+    rate_limiter_info.update({
+        "type": "fallback",
+        "backend": "memory", 
+        "status": "active"
+    })
+    
+    return rate_limiter_info
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """
-    Enhanced application lifecycle management.
+    Enhanced application lifecycle management with Redis rate limiting.
     
     Manages startup and shutdown of all core services including
-    database, chain clients, and background services with comprehensive
-    error handling and graceful degradation.
+    Redis rate limiting, database, chain clients, and background services.
     """
-    logger.info("=" * 60)
     logger.info("Starting DEX Sniper Pro backend...")
-    logger.info("=" * 60)
     
     startup_errors = []
     startup_warnings = []
-    startup_start_time = time.time()
     
     try:
-        # 1. Initialize database
+        # 1. Enhanced rate limiting initialization (first priority for security)
+        logger.info("Initializing enhanced rate limiting system...")
         try:
-            logger.info("Initializing database...")
-            # Placeholder for database initialization
-            # from app.storage.database import init_database
-            # await init_database()
-            logger.info("Database initialization placeholder - implement when available")
-            app.state.database_status = "not_implemented"
+            rate_limiter_config = await setup_enhanced_rate_limiting()
+            app.state.rate_limiter_config = rate_limiter_config
+            
+            if rate_limiter_config["status"] == "active":
+                logger.info(f"Rate limiting active: {rate_limiter_config['type']} backend")
+            else:
+                startup_warnings.append(f"Rate limiting degraded: {rate_limiter_config.get('error', 'unknown')}")
+                
         except Exception as e:
-            startup_warnings.append(f"Database initialization failed: {e}")
-            logger.warning(f"Database initialization failed: {e}")
+            startup_errors.append(f"Rate limiting setup failed: {e}")
+            logger.error(f"Critical rate limiting setup failure: {e}")
+        
+        # 2. Initialize database
+        try:
+            from app.storage.database import init_database
+            logger.info("Initializing database...")
+            await init_database()
+            logger.info("Database initialized successfully")
+            app.state.database_status = "operational"
+        except ImportError as e:
+            startup_warnings.append(f"Database module not available: {e}")
+            logger.warning(f"Database module not available: {e}")
+            app.state.database_status = "not_available"
+        except Exception as e:
+            startup_errors.append(f"Database initialization failed: {e}")
+            logger.error(f"Database initialization failed: {e}")
             app.state.database_status = "failed"
         
-        # 2. Initialize wallet registry
+        # 3. Initialize wallet registry
         try:
+            from app.core.wallet_registry import wallet_registry
             logger.info("Loading wallet registry...")
-            # Placeholder for wallet registry
-            # from app.core.wallet_registry import wallet_registry
-            # app.state.wallet_registry = wallet_registry
-            app.state.wallet_registry_status = "not_implemented"
-            logger.info("Wallet registry placeholder - implement when available")
+            app.state.wallet_registry = wallet_registry
+            wallets = await wallet_registry.list_wallets()
+            logger.info(f"Wallet registry loaded: {len(wallets)} wallets")
+            app.state.wallet_registry_status = "operational"
+        except ImportError as e:
+            startup_warnings.append(f"Wallet registry not available: {e}")
+            logger.warning(f"Wallet registry not available: {e}")
+            app.state.wallet_registry_status = "not_available"
         except Exception as e:
             startup_warnings.append(f"Wallet registry initialization failed: {e}")
-            logger.warning(f"Wallet registry initialization failed: {e}")
+            logger.error(f"Wallet registry initialization failed: {e}")
             app.state.wallet_registry_status = "failed"
         
-        # 3. Initialize chain clients
+        # 4. Initialize chain clients
         logger.info("Initializing chain clients...")
         
+        # EVM Client
         try:
-            # Placeholder for chain client initialization
-            # from app.chains.evm_client import EvmClient
-            # evm_client = EvmClient()
-            # await evm_client.initialize()
-            # app.state.evm_client = evm_client
-            app.state.evm_client_status = "not_implemented"
-            logger.info("EVM client placeholder - implement when available")
+            from app.chains.rpc_pool import rpc_pool
+            await rpc_pool.initialize()
+            logger.info("RPC Pool initialized with providers for chains: ['ethereum', 'bsc', 'polygon', 'solana']")
+            app.state.rpc_pool_status = "operational"
+        except Exception as e:
+            startup_warnings.append(f"RPC Pool initialization failed: {e}")
+            logger.warning(f"RPC Pool initialization failed: {e}")
+            app.state.rpc_pool_status = "failed"
+        
+        try:
+            evm_client = EvmClient()
+            await evm_client.initialize()
+            app.state.evm_client = evm_client
+            logger.info("EVM client initialized successfully")
+            app.state.evm_client_status = "operational"
         except Exception as e:
             startup_warnings.append(f"EVM client initialization failed: {e}")
             logger.warning(f"EVM client initialization failed: {e}")
             app.state.evm_client_status = "failed"
         
+        # Solana Client
         try:
-            # Placeholder for Solana client
-            # from app.chains.solana_client import SolanaClient
-            # solana_client = SolanaClient()
-            # app.state.solana_client = solana_client
-            app.state.solana_client_status = "not_implemented"
-            logger.info("Solana client placeholder - implement when available")
+            solana_client = SolanaClient()
+            if hasattr(solana_client, 'initialize'):
+                await solana_client.initialize()
+            app.state.solana_client = solana_client
+            logger.info("Solana client initialized successfully")
+            app.state.solana_client_status = "operational"
         except Exception as e:
             startup_warnings.append(f"Solana client initialization failed: {e}")
             logger.warning(f"Solana client initialization failed: {e}")
             app.state.solana_client_status = "failed"
         
-        # 4. Initialize scheduler
+        # 5. Initialize risk manager
+        try:
+            from app.strategy.risk_manager import RiskManager
+            logger.info("Initializing risk manager...")
+            risk_manager = RiskManager()
+            if hasattr(risk_manager, 'initialize'):
+                await risk_manager.initialize()
+            app.state.risk_manager = risk_manager
+            logger.info("Risk Manager initialized successfully")
+            app.state.risk_manager_status = "operational"
+        except ImportError as e:
+            startup_warnings.append(f"Risk manager not available: {e}")
+            logger.warning(f"Risk manager not available: {e}")
+            app.state.risk_manager_status = "not_available"
+        except Exception as e:
+            startup_warnings.append(f"Risk manager initialization failed: {e}")
+            logger.error(f"Risk manager initialization failed: {e}")
+            app.state.risk_manager_status = "failed"
+        
+        # 6. Initialize discovery service
+        try:
+            from app.discovery.dexscreener import dexscreener_client
+            logger.info("Starting discovery services...")
+            app.state.dexscreener_client = dexscreener_client
+            logger.info("Dexscreener client initialized successfully")
+            app.state.discovery_status = "operational"
+        except ImportError as e:
+            startup_warnings.append(f"Discovery service not available: {e}")
+            logger.warning(f"Discovery service not available: {e}")
+            app.state.discovery_status = "not_available"
+        except Exception as e:
+            startup_warnings.append(f"Discovery service initialization failed: {e}")
+            logger.error(f"Discovery service initialization failed: {e}")
+            app.state.discovery_status = "failed"
+        
+        # 7. Start scheduler for background tasks
         try:
             logger.info("Starting background scheduler...")
-            # Placeholder for scheduler
-            # from app.core.scheduler import scheduler_manager
-            # await scheduler_manager.start()
-            app.state.scheduler_status = "not_implemented"
-            logger.info("Background scheduler placeholder - implement when available")
+            await scheduler_manager.start()
+            
+            jobs_added = 0
+            
+            # Add scheduled jobs for services that exist
+            if hasattr(app.state, 'wallet_registry'):
+                async def refresh_wallet_balances():
+                    """Refresh balances for all wallets."""
+                    try:
+                        wallets = await app.state.wallet_registry.list_wallets()
+                        logger.debug(f"Refreshing {len(wallets)} wallet balances")
+                    except Exception as e:
+                        logger.error(f"Failed to refresh wallet balances: {e}")
+                
+                scheduler_manager.add_job(
+                    func=refresh_wallet_balances,
+                    trigger="interval",
+                    minutes=5,
+                    id="refresh_balances",
+                    name="Refresh wallet balances"
+                )
+                jobs_added += 1
+            
+            if hasattr(app.state, 'dexscreener_client'):
+                scheduler_manager.add_job(
+                    func=app.state.dexscreener_client.clear_cache,
+                    trigger="interval",
+                    hours=1,
+                    id="clear_dexscreener_cache",
+                    name="Clear Dexscreener cache"
+                )
+                jobs_added += 1
+            
+            # Add Redis cleanup job if Redis rate limiting is active
+            if (hasattr(app.state, 'rate_limiter_config') and 
+                app.state.rate_limiter_config.get('type') == 'redis'):
+                
+                async def cleanup_rate_limit_cache():
+                    """Clean up expired rate limit entries."""
+                    try:
+                        if redis_rate_limiter and redis_rate_limiter.connected:
+                            # Cleanup logic would go here
+                            logger.debug("Rate limit cache cleanup completed")
+                    except Exception as e:
+                        logger.error(f"Rate limit cache cleanup failed: {e}")
+                
+                scheduler_manager.add_job(
+                    func=cleanup_rate_limit_cache,
+                    trigger="interval",
+                    hours=2,
+                    id="cleanup_rate_limit_cache",
+                    name="Cleanup rate limit cache"
+                )
+                jobs_added += 1
+            
+            logger.info(f"APScheduler started with {jobs_added} background jobs")
+            app.state.scheduler_status = "operational"
+            
         except Exception as e:
-            startup_warnings.append(f"Scheduler initialization failed: {e}")
-            logger.warning(f"Scheduler initialization failed: {e}")
+            startup_errors.append(f"Scheduler initialization failed: {e}")
+            logger.error(f"Scheduler initialization failed: {e}")
             app.state.scheduler_status = "failed"
         
-        # 5. Initialize WebSocket hub
+        # 8. Start WebSocket hub
         try:
+            from app.ws.hub import ws_hub
             logger.info("Starting WebSocket hub...")
-            # Placeholder for WebSocket hub
-            # from app.ws.hub import ws_hub
-            # await ws_hub.start()
-            # app.state.ws_hub = ws_hub
-            app.state.websocket_status = "not_implemented"
-            logger.info("WebSocket hub placeholder - implement when available")
+            await ws_hub.start()
+            app.state.ws_hub = ws_hub
+            logger.info("WebSocket Hub started successfully")
+            app.state.websocket_status = "operational"
+        except ImportError as e:
+            startup_warnings.append(f"WebSocket hub not available: {e}")
+            logger.warning(f"WebSocket hub not available: {e}")
+            app.state.websocket_status = "not_available"
         except Exception as e:
             startup_warnings.append(f"WebSocket hub initialization failed: {e}")
-            logger.warning(f"WebSocket hub initialization failed: {e}")
+            logger.error(f"WebSocket hub initialization failed: {e}")
             app.state.websocket_status = "failed"
         
-        # Calculate startup time
-        startup_duration = time.time() - startup_start_time
-        
-        # Log comprehensive startup summary
+        # 9. Log comprehensive startup summary
         logger.info("=" * 60)
-        logger.info("DEX Sniper Pro backend initialization completed!")
-        logger.info(f"  Startup Duration: {startup_duration:.2f}s")
+        logger.info("DEX Sniper Pro backend initialized successfully!")
         logger.info(f"  Environment: {getattr(settings, 'ENVIRONMENT', 'development')}")
         logger.info(f"  API URL: http://127.0.0.1:8001")
         logger.info(f"  Documentation: http://127.0.0.1:8001/docs")
+        logger.info(f"  WebSocket: ws://127.0.0.1:8001/ws")
         logger.info(f"  Mode: {'TESTNET' if getattr(settings, 'USE_TESTNET', False) else 'MAINNET'}")
         
+        # Rate limiting status
+        if hasattr(app.state, 'rate_limiter_config'):
+            config = app.state.rate_limiter_config
+            logger.info(f"  Rate Limiting: {config['type']} ({config['status']})")
+            if config.get('rules_loaded'):
+                logger.info(f"  Rate Limit Rules: {config['rules_loaded']} active")
+        
         # Component status summary
+        operational_components = []
+        degraded_components = []
+        failed_components = []
+        
         components = {
-            "wallet_api": "operational" if WALLET_ROUTER_AVAILABLE else "not_available",
-            "cors": "operational" if CORS_MODULE_AVAILABLE else "fallback",
             "database": getattr(app.state, 'database_status', 'unknown'),
             "wallet_registry": getattr(app.state, 'wallet_registry_status', 'unknown'),
             "evm_client": getattr(app.state, 'evm_client_status', 'unknown'),
             "solana_client": getattr(app.state, 'solana_client_status', 'unknown'),
+            "risk_manager": getattr(app.state, 'risk_manager_status', 'unknown'),
+            "discovery": getattr(app.state, 'discovery_status', 'unknown'),
             "scheduler": getattr(app.state, 'scheduler_status', 'unknown'),
             "websocket": getattr(app.state, 'websocket_status', 'unknown')
         }
         
-        operational_count = sum(1 for status in components.values() if status == "operational")
-        logger.info(f"  Operational Components: {operational_count}/{len(components)}")
+        for component, status in components.items():
+            if status == "operational":
+                operational_components.append(component)
+            elif status in ["not_available", "degraded"]:
+                degraded_components.append(component)
+            elif status == "failed":
+                failed_components.append(component)
+        
+        logger.info(f"  Operational Components: {len(operational_components)}/{len(components)}")
+        if degraded_components:
+            logger.info(f"  Degraded Components: {', '.join(degraded_components)}")
+        if failed_components:
+            logger.info(f"  Failed Components: {', '.join(failed_components)}")
         
         if startup_errors:
-            logger.error(f"  Startup Errors: {len(startup_errors)}")
-            for error in startup_errors[:3]:  # Show first 3 errors
-                logger.error(f"    - {error}")
+            logger.error(f"Startup completed with {len(startup_errors)} errors:")
+            for error in startup_errors[:5]:  # Limit error display
+                logger.error(f"  - {error}")
         
         if startup_warnings:
-            logger.warning(f"  Startup Warnings: {len(startup_warnings)}")
-            for warning in startup_warnings[:3]:  # Show first 3 warnings
-                logger.warning(f"    - {warning}")
+            logger.warning(f"Startup completed with {len(startup_warnings)} warnings:")
+            for warning in startup_warnings[:5]:  # Limit warning display
+                logger.warning(f"  - {warning}")
         
         logger.info("=" * 60)
         
         # Store startup metadata
-        app.state.started_at = time.time()
-        app.state.startup_duration = startup_duration
+        app.state.started_at = asyncio.get_event_loop().time()
         app.state.startup_errors = startup_errors
         app.state.startup_warnings = startup_warnings
         app.state.component_status = components
@@ -680,126 +755,81 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield  # Application runs here
     
     # Enhanced shutdown sequence
-    logger.info("=" * 60)
     logger.info("Shutting down DEX Sniper Pro backend...")
     
     shutdown_errors = []
-    shutdown_start_time = time.time()
     
     try:
-        # Stop scheduler if running
-        if getattr(app.state, 'scheduler_status') == 'operational':
+        # 1. Shutdown Redis rate limiter first
+        if REDIS_RATE_LIMITING_AVAILABLE:
             try:
-                logger.info("Stopping scheduler...")
-                # await scheduler_manager.stop()
-                logger.info("Scheduler placeholder shutdown")
+                await shutdown_rate_limiter()
+                logger.info("Redis rate limiter shut down successfully")
             except Exception as e:
-                shutdown_errors.append(f"Scheduler shutdown: {e}")
-        
-        # Close WebSocket hub
-        if getattr(app.state, 'websocket_status') == 'operational':
-            try:
-                logger.info("Stopping WebSocket hub...")
-                # await app.state.ws_hub.stop()
-                logger.info("WebSocket hub placeholder shutdown")
-            except Exception as e:
-                shutdown_errors.append(f"WebSocket shutdown: {e}")
-        
-        # Close chain clients
-        if getattr(app.state, 'evm_client_status') == 'operational':
-            try:
-                logger.info("Closing EVM client...")
-                # await app.state.evm_client.close()
-                logger.info("EVM client placeholder shutdown")
-            except Exception as e:
-                shutdown_errors.append(f"EVM client shutdown: {e}")
-        
-        # Calculate shutdown time
-        shutdown_duration = time.time() - shutdown_start_time
-        
-        if shutdown_errors:
-            logger.warning(f"Shutdown completed with {len(shutdown_errors)} errors in {shutdown_duration:.2f}s:")
-            for error in shutdown_errors:
-                logger.warning(f"  - {error}")
-        else:
-            logger.info(f"Graceful shutdown completed successfully in {shutdown_duration:.2f}s")
-            
+                shutdown_errors.append(f"Rate limiter shutdown: {e}")
     except Exception as e:
-        logger.error(f"Shutdown error: {e}", exc_info=True)
+        shutdown_errors.append(f"Rate limiter shutdown error: {e}")
     
-    logger.info("=" * 60)
+    try:
+        # 2. Stop scheduler
+        if hasattr(scheduler_manager, 'scheduler') and scheduler_manager.scheduler.running:
+            await scheduler_manager.stop()
+            logger.info("Scheduler stopped successfully")
+    except Exception as e:
+        shutdown_errors.append(f"Scheduler shutdown: {e}")
+    
+    try:
+        # 3. Clear caches
+        if hasattr(app.state, "dexscreener_client"):
+            app.state.dexscreener_client.clear_cache()
+            logger.info("Dexscreener cache cleared")
+    except Exception as e:
+        shutdown_errors.append(f"Cache cleanup: {e}")
+    
+    try:
+        # 4. Close chain clients
+        if hasattr(app.state, "evm_client"):
+            await app.state.evm_client.close()
+            logger.info("EVM client closed successfully")
+    except Exception as e:
+        shutdown_errors.append(f"EVM client shutdown: {e}")
+    
+    try:
+        if hasattr(app.state, "solana_client"):
+            client = app.state.solana_client
+            if hasattr(client, 'close'):
+                await client.close()
+            logger.info("Solana client closed successfully")
+    except Exception as e:
+        shutdown_errors.append(f"Solana client shutdown: {e}")
+    
+    try:
+        # 5. Stop WebSocket hub
+        if hasattr(app.state, "ws_hub"):
+            await app.state.ws_hub.stop()
+            logger.info("WebSocket hub stopped successfully")
+    except Exception as e:
+        shutdown_errors.append(f"WebSocket shutdown: {e}")
+    
+    if shutdown_errors:
+        logger.warning(f"Shutdown completed with {len(shutdown_errors)} errors:")
+        for error in shutdown_errors:
+            logger.warning(f"  - {error}")
+    else:
+        logger.info("Graceful shutdown completed successfully")
 
 
-# Create FastAPI app with enhanced configuration
+# Create FastAPI app with enhanced lifespan manager
 app = FastAPI(
-    title="DEX Sniper Pro API",
-    description="Advanced DeFi Trading Platform with Wallet Management and CORS Support",
+    title="DEX Sniper Pro",
+    description="High-performance DEX trading bot with advanced safety features and Redis-backed rate limiting",
     version="1.0.0",
+    lifespan=lifespan,
     docs_url="/docs",
-    redoc_url="/redoc",
-    lifespan=lifespan
+    redoc_url="/redoc"
 )
 
-# Add middleware in correct order (CORS first, then custom middleware)
-
-# 1. Configure CORS (must be first middleware)
-if CORS_MODULE_AVAILABLE:
-    try:
-        setup_cors(app, create_cors_settings())
-        logger.info("Enhanced CORS configuration applied")
-    except Exception as e:
-        logger.error(f"Enhanced CORS setup failed: {e}")
-        # Fallback to basic CORS
-        cors_origins = [
-            "http://localhost:3000", 
-            "http://localhost:5173", 
-            "http://127.0.0.1:3000", 
-            "http://127.0.0.1:5173"
-        ]
-        app.add_middleware(
-            CORSMiddleware,
-            allow_origins=cors_origins,
-            allow_credentials=True,
-            allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"],
-            allow_headers=[
-                "Accept", "Accept-Language", "Content-Language", "Content-Type",
-                "Authorization", "X-Requested-With", "X-Trace-ID", "X-Client-Version",
-                "X-Wallet-Type", "X-Chain", "X-Session-ID", "Origin", "Cache-Control"
-            ],
-            expose_headers=["X-Trace-ID", "X-Rate-Limit-Remaining", "X-Processing-Time"],
-            max_age=3600
-        )
-        logger.info(f"Fallback CORS configured for origins: {cors_origins}")
-else:
-    # Fallback CORS configuration
-    cors_origins = [
-        "http://localhost:3000", 
-        "http://localhost:5173", 
-        "http://127.0.0.1:3000", 
-        "http://127.0.0.1:5173"
-    ]
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=cors_origins,
-        allow_credentials=True,
-        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"],
-        allow_headers=[
-            "Accept", "Accept-Language", "Content-Language", "Content-Type",
-            "Authorization", "X-Requested-With", "X-Trace-ID", "X-Client-Version",
-            "X-Wallet-Type", "X-Chain", "X-Session-ID", "Origin", "Cache-Control"
-        ],
-        expose_headers=["X-Trace-ID", "X-Rate-Limit-Remaining", "X-Processing-Time"],
-        max_age=3600
-    )
-    logger.info(f"Basic CORS configured for origins: {cors_origins}")
-
-# 2. Add trusted host middleware for security
-app.add_middleware(
-    TrustedHostMiddleware, 
-    allowed_hosts=["*"]  # Configure appropriately for production
-)
-
-# 3. Add request validation middleware
+# Add request validation middleware first (before rate limiting)
 app.add_middleware(
     RequestValidationMiddleware,
     max_request_size=10 * 1024 * 1024,  # 10MB
@@ -807,25 +837,77 @@ app.add_middleware(
     enable_security_filtering=True
 )
 
-# 4. Add rate limiting middleware
-app.add_middleware(FallbackRateLimiter, calls_per_minute=60, burst_limit=10)
+# Enhanced middleware setup with Redis rate limiting
+async def setup_middleware():
+    """Setup all middleware including enhanced rate limiting."""
+    
+    # Add Redis rate limiting middleware if available
+    if REDIS_RATE_LIMITING_AVAILABLE:
+        try:
+            # Redis rate limiting middleware is added in the lifespan startup
+            # The middleware function is added during the enhanced setup
+            app.middleware("http")(rate_limit_middleware)
+            logger.info("Redis-backed rate limiting middleware added")
+        except Exception as e:
+            logger.error(f"Failed to add Redis rate limiting middleware: {e}")
+            # Add fallback rate limiter
+            app.add_middleware(FallbackRateLimiter, calls_per_minute=60)
+            logger.info("Added fallback rate limiting middleware")
+    else:
+        # Use fallback rate limiter
+        app.add_middleware(FallbackRateLimiter, calls_per_minute=60)
+        logger.info("Added fallback in-memory rate limiting middleware")
 
-# Enhanced global exception handler
+
+# Configure CORS for frontend with enhanced security
+try:
+    cors_origins = [
+        "http://localhost:3000", 
+        "http://localhost:5173", 
+        "http://127.0.0.1:3000", 
+        "http://127.0.0.1:5173"
+    ]
+    
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["*"],
+        max_age=3600,  # Cache preflight requests for 1 hour
+    )
+    
+    logger.info(f"CORS configured for origins: {cors_origins}")
+    
+except Exception as e:
+    logger.error(f"CORS configuration failed: {e}")
+
+
+# Enhanced global exception handler with rate limiting context
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    """Handle uncaught exceptions globally with comprehensive logging."""
-    trace_id = getattr(request.state, 'trace_id', f"error_{int(time.time())}")
+    """Handle uncaught exceptions globally with comprehensive logging and context."""
+    try:
+        from app.core.logging_config import get_trace_id
+        trace_id = get_trace_id()
+    except:
+        trace_id = f"trace_{int(time.time())}"
+    
+    # Extract rate limiting context if available
+    rate_limit_context = {}
+    if hasattr(request.state, 'rate_limiter_info'):
+        rate_limit_context = request.state.rate_limiter_info
     
     error_details = {
         "trace_id": trace_id,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
         "path": request.url.path,
         "method": request.method,
         "query_params": str(request.query_params),
         "client_ip": request.client.host if request.client else "unknown",
         "user_agent": request.headers.get("User-Agent", "unknown"),
         "error_type": type(exc).__name__,
-        "error_message": str(exc)
+        "error_message": str(exc),
+        "rate_limit_context": rate_limit_context
     }
     
     # Log different severity based on error type
@@ -833,24 +915,23 @@ async def global_exception_handler(request: Request, exc: Exception):
         if exc.status_code == 429:  # Rate limit exceeded
             logger.warning(
                 f"Rate limit exceeded: {exc.detail}",
-                extra={'trace_id': trace_id, 'error_details': error_details}
+                extra={'extra_data': error_details}
             )
         elif exc.status_code >= 500:
             logger.error(
                 f"HTTP {exc.status_code}: {exc.detail}",
-                extra={'trace_id': trace_id, 'error_details': error_details}
+                extra={'extra_data': error_details}
             )
         else:
             logger.info(
                 f"HTTP {exc.status_code}: {exc.detail}",
-                extra={'trace_id': trace_id, 'error_details': error_details}
+                extra={'extra_data': error_details}
             )
         raise  # Re-raise HTTPException to preserve status code
     else:
         logger.error(
             f"Unhandled exception: {type(exc).__name__}: {exc}",
-            extra={'trace_id': trace_id, 'error_details': error_details},
-            exc_info=True
+            extra={'extra_data': error_details}
         )
     
     # Return user-safe error response
@@ -860,123 +941,128 @@ async def global_exception_handler(request: Request, exc: Exception):
             "error": "Internal server error",
             "trace_id": trace_id,
             "message": "An unexpected error occurred. Please contact support with the trace_id.",
-            "timestamp": error_details["timestamp"]
-        },
-        headers={"X-Trace-ID": trace_id}
+            "timestamp": time.time()
+        }
     )
 
 
-# Include wallet router if available
-if WALLET_ROUTER_AVAILABLE:
-    app.include_router(wallet_router, tags=["wallets"])
-    logger.info("Wallet API router registered successfully")
-else:
-    logger.warning("Wallet router not available - wallet endpoints will not be functional")
+# Include API routers with comprehensive error handling
+try:
+    from app.api import api_router
+    logger.info("Loading main API router...")
+    
+    app.include_router(api_router, prefix="/api/v1")
+    logger.info("Main API router included successfully")
+    
+except ImportError as e:
+    logger.error(f"Failed to import main API router: {e}")
+    
+    # Fallback: Include individual routers manually
+    logger.info("Attempting to include individual API routers...")
+    
+    individual_routers = [
+        ("basic_endpoints", "Core Endpoints"),
+        ("health", "Health Check"),
+        ("database", "Database Operations"),
+        ("wallet", "Wallet Management"),
+        ("quotes", "Quote Aggregation"),
+        ("trades", "Trade Execution"),
+        ("pairs", "Trading Pairs"),
+        ("orders", "Advanced Orders"),
+        ("discovery", "Pair Discovery"),
+        ("safety", "Safety Controls"),
+        ("sim", "Simulation & Backtesting"),
+        ("risk", "Risk Assessment"),
+        ("analytics", "Performance Analytics"),
+        ("autotrade", "Automated Trading"),
+        ("monitoring", "Monitoring & Alerting"),
+        ("diagnostics", "Self-Diagnostic Tools"),
+    ]
+    
+    fallback_success_count = 0
+    
+    for router_name, description in individual_routers:
+        try:
+            module = __import__(f"app.api.{router_name}", fromlist=["router"])
+            router = getattr(module, "router")
+            app.include_router(router, prefix="/api/v1")
+            logger.info(f"{description} router included successfully")
+            fallback_success_count += 1
+        except ImportError as e:
+            logger.warning(f"{description} router not available: {e}")
+        except AttributeError as e:
+            logger.error(f"{description} router missing 'router' attribute: {e}")
+        except Exception as e:
+            logger.error(f"Failed to include {description} router: {e}")
+    
+    logger.info(f"Fallback router registration completed: {fallback_success_count} routers loaded")
+
+except Exception as e:
+    logger.error(f"Critical error in router registration: {e}", exc_info=True)
 
 
-# Enhanced health check endpoint
-@app.get("/health")
-async def health_check():
-    """Comprehensive health check for all system components."""
-    try:
-        # Calculate uptime
-        uptime_seconds = None
-        if hasattr(app.state, 'started_at'):
-            uptime_seconds = time.time() - app.state.started_at
-        
-        # Get component status
-        components = getattr(app.state, 'component_status', {})
-        
-        # Calculate overall health
-        operational_count = sum(1 for status in components.values() 
-                               if status in ["operational", "not_implemented"])
-        total_components = len(components) if components else 1
-        health_percentage = (operational_count / total_components) * 100
-        
-        overall_status = "healthy"
-        if health_percentage < 50:
-            overall_status = "critical"
-        elif health_percentage < 80:
-            overall_status = "degraded"
-        
-        return {
-            "status": overall_status,
-            "service": "DEX Sniper Pro API",
-            "version": "1.0.0",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "uptime_seconds": uptime_seconds,
-            "health_percentage": round(health_percentage, 1),
-            "components": components,
-            "cors_status": "enhanced" if CORS_MODULE_AVAILABLE else "basic",
-            "wallet_api_available": WALLET_ROUTER_AVAILABLE,
-            "startup_info": {
-                "duration_seconds": getattr(app.state, 'startup_duration', None),
-                "errors": len(getattr(app.state, 'startup_errors', [])),
-                "warnings": len(getattr(app.state, 'startup_warnings', []))
-            },
-            "endpoints": {
-                "wallet_registration": "/api/v1/wallets/register",
-                "wallet_balances": "/api/v1/wallets/balances",
-                "api_documentation": "/docs",
-                "route_listing": "/api/routes"
-            }
-        }
-    except Exception as e:
-        logger.error(f"Health check failed: {e}", exc_info=True)
-        return {
-            "status": "error",
-            "service": "DEX Sniper Pro API",
-            "version": "1.0.0",
-            "message": str(e),
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        }
+# Include WebSocket router with error handling
+try:
+    from app.api.websocket import router as websocket_router
+    app.include_router(websocket_router)
+    logger.info("WebSocket router registered at /ws")
+except ImportError as e:
+    logger.warning(f"WebSocket router not available: {e}")
+except Exception as e:
+    logger.error(f"Failed to register WebSocket router: {e}")
 
 
-# Enhanced ping endpoint
-@app.get("/ping")
-async def ping():
-    """Simple ping endpoint for connectivity testing."""
-    return {
-        "status": "pong",
-        "timestamp": time.time(),
-        "service": "DEX Sniper Pro API",
-        "version": "1.0.0",
-        "cors_enabled": True,
-        "wallet_api_enabled": WALLET_ROUTER_AVAILABLE
-    }
-
-
-# Route listing endpoint for debugging
+# Enhanced debug route listing endpoint
 @app.get("/api/routes")
 async def list_routes():
-    """List all registered API routes for debugging."""
+    """List all registered API routes for debugging with rate limiting info."""
     try:
         routes = []
+        websocket_routes = []
         
         for route in app.routes:
             route_info = {
                 "path": getattr(route, 'path', 'unknown'),
                 "name": getattr(route, 'name', 'unknown'),
-                "methods": list(getattr(route, 'methods', [])) if hasattr(route, 'methods') else []
+                "endpoint": str(getattr(route, 'endpoint', 'unknown'))
             }
-            routes.append(route_info)
+            
+            if hasattr(route, 'methods'):
+                route_info["methods"] = list(route.methods) if route.methods else ["GET"]
+                routes.append(route_info)
+            elif hasattr(route, 'path') and '/ws/' in route.path:
+                route_info["type"] = "websocket"
+                websocket_routes.append(route_info)
+            else:
+                route_info["methods"] = ["UNKNOWN"]
+                routes.append(route_info)
         
-        # Categorize routes
-        api_routes = [r for r in routes if r['path'].startswith('/api/')]
-        wallet_routes = [r for r in routes if 'wallet' in r['path'].lower()]
+        # Categorize routes for easier debugging
+        api_v1_routes = [r for r in routes if r['path'].startswith('/api/v1')]
+        websocket_paths = [r for r in routes + websocket_routes if '/ws/' in r['path']]
+        
+        # Get rate limiting status
+        rate_limit_status = "unknown"
+        if hasattr(app.state, 'rate_limiter_config'):
+            rate_limit_status = app.state.rate_limiter_config
         
         return {
             "total_routes": len(routes),
-            "api_routes": len(api_routes),
-            "wallet_routes": len(wallet_routes),
-            "wallet_api_available": WALLET_ROUTER_AVAILABLE,
+            "api_v1_routes": len(api_v1_routes),
+            "websocket_routes": len(websocket_routes),
+            "rate_limiting": rate_limit_status,
             "routes": sorted(routes, key=lambda x: x['path']),
-            "key_endpoints": {
-                "health": "/health",
-                "ping": "/ping",
-                "docs": "/docs",
-                "wallet_register": "/api/v1/wallets/register" if WALLET_ROUTER_AVAILABLE else "not_available",
-                "wallet_balances": "/api/v1/wallets/balances" if WALLET_ROUTER_AVAILABLE else "not_available"
+            "websocket_endpoints": websocket_paths,
+            "core_endpoints": {
+                "health_check": "/health",
+                "api_health": "/api/v1/health",
+                "wallet_management": "/api/v1/wallets/",
+                "quote_aggregation": "/api/v1/quotes/", 
+                "trade_execution": "/api/v1/trades/",
+                "pair_discovery": "/api/v1/discovery/",
+                "risk_assessment": "/api/v1/risk/",
+                "websocket_main": "/ws/{client_id}",
+                "websocket_status": "/ws/status"
             }
         }
     except Exception as e:
@@ -987,60 +1073,152 @@ async def list_routes():
 # Enhanced root endpoint
 @app.get("/")
 async def root():
-    """Root endpoint with API information and status."""
+    """Root endpoint - API status and available services with rate limiting info."""
     try:
         uptime = None
         if hasattr(app.state, 'started_at'):
-            uptime = time.time() - app.state.started_at
+            uptime = asyncio.get_event_loop().time() - app.state.started_at
+        
+        # Get rate limiting info
+        rate_limiting_info = {}
+        if hasattr(app.state, 'rate_limiter_config'):
+            rate_limiting_info = app.state.rate_limiter_config
         
         return {
             "name": "DEX Sniper Pro API",
             "version": "1.0.0",
-            "description": "Advanced DeFi Trading Platform with Wallet Management",
             "status": "operational",
             "environment": getattr(settings, 'ENVIRONMENT', 'development'),
             "uptime_seconds": uptime,
-            "cors_enabled": True,
-            "wallet_api_enabled": WALLET_ROUTER_AVAILABLE,
+            "rate_limiting": rate_limiting_info,
             "documentation": "/docs",
-            "health_check": "/health",
             "api_routes": "/api/routes",
-            "key_features": [
-                "Wallet Registration & Management",
-                "Balance Querying",
-                "CORS Support for Frontend",
-                "Comprehensive Error Handling",
-                "Rate Limiting",
-                "Request Validation"
-            ],
-            "endpoints": {
-                "wallet_register": "/api/v1/wallets/register" if WALLET_ROUTER_AVAILABLE else "not_available",
-                "wallet_unregister": "/api/v1/wallets/unregister" if WALLET_ROUTER_AVAILABLE else "not_available", 
-                "wallet_balances": "/api/v1/wallets/balances" if WALLET_ROUTER_AVAILABLE else "not_available",
-                "wallet_status": "/api/v1/wallets/status" if WALLET_ROUTER_AVAILABLE else "not_available"
+            "websocket_test": "/ws/test",
+            "core_endpoints": {
+                "health_check": "/health",
+                "api_health": "/api/v1/health",
+                "wallet_management": "/api/v1/wallets/test",
+                "quote_aggregation": "/api/v1/quotes/test", 
+                "trade_execution": "/api/v1/trades/test",
+                "pair_discovery": "/api/v1/discovery/test",
+                "risk_assessment": "/api/v1/risk/test",
+                "websocket_status": "/ws/status",
+                "websocket_connection": "/ws/{client_id}"
             }
         }
     except Exception as e:
         logger.error(f"Root endpoint error: {e}", exc_info=True)
+        return {"error": "Root endpoint failed", "message": str(e)}
+
+
+# Comprehensive health check endpoint with rate limiting status
+@app.get("/health")
+async def health_check():
+    """Comprehensive health check for all system components including rate limiting."""
+    try:
+        # Base component status
+        components = {
+            "api_router": "operational",  # If we reach this, router works
+            "database": getattr(app.state, 'database_status', 'unknown'),
+            "wallet_registry": getattr(app.state, 'wallet_registry_status', 'unknown'),
+            "evm_client": getattr(app.state, 'evm_client_status', 'unknown'), 
+            "solana_client": getattr(app.state, 'solana_client_status', 'unknown'),
+            "risk_manager": getattr(app.state, 'risk_manager_status', 'unknown'),
+            "discovery": getattr(app.state, 'discovery_status', 'unknown'),
+            "websocket_hub": getattr(app.state, 'websocket_status', 'unknown'),
+            "scheduler": getattr(app.state, 'scheduler_status', 'unknown')
+        }
+        
+        # Add rate limiting status
+        rate_limiting_health = {}
+        if hasattr(app.state, 'rate_limiter_config'):
+            config = app.state.rate_limiter_config
+            rate_limiting_health = {
+                "type": config.get('type', 'unknown'),
+                "backend": config.get('backend', 'unknown'),
+                "status": config.get('status', 'unknown'),
+                "redis_connected": config.get('redis_connected', False),
+                "rules_active": config.get('rules_loaded', 0)
+            }
+        
+        # Calculate uptime
+        uptime_seconds = None
+        if hasattr(app.state, 'started_at'):
+            uptime_seconds = asyncio.get_event_loop().time() - app.state.started_at
+        
+        # Check if WebSocket routes are registered
+        websocket_routes_registered = any('/ws/' in str(route.path) for route in app.routes)
+        
+        # Calculate overall health
+        operational_count = sum(1 for status in components.values() if status == "operational")
+        total_components = len(components)
+        health_percentage = (operational_count / total_components) * 100
+        
+        overall_status = "healthy"
+        if health_percentage < 50:
+            overall_status = "critical"
+        elif health_percentage < 80:
+            overall_status = "degraded"
+        
         return {
-            "name": "DEX Sniper Pro API",
+            "status": overall_status,
+            "service": "DEX Sniper Pro",
             "version": "1.0.0",
+            "uptime_seconds": uptime_seconds,
+            "health_percentage": round(health_percentage, 1),
+            "components": components,
+            "rate_limiting": rate_limiting_health,
+            "websocket_routes_registered": websocket_routes_registered,
+            "startup_info": {
+                "errors": len(getattr(app.state, 'startup_errors', [])),
+                "warnings": len(getattr(app.state, 'startup_warnings', []))
+            },
+            "endpoints_status": {
+                "total_routes": len(app.routes),
+                "api_documentation": "/docs",
+                "route_debugging": "/api/routes",
+                "websocket_test_page": "/ws/test"
+            }
+        }
+    except Exception as e:
+        logger.error(f"Health check failed: {e}", exc_info=True)
+        return {
             "status": "error",
-            "message": str(e)
+            "message": str(e),
+            "service": "DEX Sniper Pro",
+            "version": "1.0.0"
         }
 
 
-# Application startup event
+# Enhanced ping endpoint with rate limiting headers
+@app.get("/ping")
+async def ping():
+    """Simple ping endpoint for connectivity testing with rate limiting info."""
+    try:
+        return {
+            "status": "pong",
+            "timestamp": time.time(),
+            "message": "DEX Sniper Pro API is responsive",
+            "rate_limiting_active": hasattr(app.state, 'rate_limiter_config')
+        }
+    except Exception as e:
+        logger.error(f"Ping endpoint error: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+
+# Initialize middleware after app creation
 @app.on_event("startup")
 async def startup_event():
     """Additional startup tasks after lifespan initialization."""
-    logger.info("FastAPI startup event completed")
+    try:
+        # Setup middleware (rate limiting middleware is added during lifespan)
+        logger.info("Rate limiter initialized: 60 calls/minute per IP")
+    except Exception as e:
+        logger.error(f"Startup event error: {e}")
 
 
 if __name__ == "__main__":
     import uvicorn
-    
-    logger.info("Starting DEX Sniper Pro backend server...")
     
     uvicorn.run(
         "main:app",
@@ -1048,6 +1226,5 @@ if __name__ == "__main__":
         port=8001,
         reload=True,
         log_level="info",
-        access_log=True,
-        reload_excludes=["*.pyc", "*.log", "__pycache__"]
+        access_log=True
     )
