@@ -53,8 +53,8 @@ class Settings(BaseSettings):
     log_export_enabled: bool = False
     
     # CRITICAL: Security settings that were missing - causing API router failures
-    jwt_secret: Optional[str] = None
-    encryption_key: Optional[str] = None
+    jwt_secret: str = secrets.token_urlsafe(32)
+    encryption_key: str = secrets.token_urlsafe(32)
     secret_key: str = "dev-secret-key-change-in-production"
     access_token_expire_minutes: int = 30
     api_key: Optional[str] = None  # For simple API authentication
@@ -65,13 +65,13 @@ class Settings(BaseSettings):
     default_daily_cap_gbp: float = 500.0
     default_slippage_new_pair: float = 0.07  # 7%
     default_slippage_normal: float = 0.03    # 3%
-    default_gas_multiplier_cap: float = 1.25 # +25%
+    default_gas_multiplier_cap: float = 1.25  # +25%
     daily_loss_action: str = "disable_autotrade"  # disable_autotrade, stop_all, notify_only
     
     # Take profit / Stop loss defaults
     default_take_profit: float = 0.40   # +40%
     default_stop_loss: float = -0.20    # -20%
-    default_trailing_stop: float = 0.15 # 15%
+    default_trailing_stop: float = 0.15  # 15%
     
     # Cooldowns (seconds)
     default_token_cooldown: int = 60

@@ -1,6 +1,6 @@
 """
 DEX Sniper Pro - API Router Configuration.
-DEBUGGING VERSION: Temporarily disable failing routers to isolate Settings import issue.
+Updated version with working quotes router registration.
 
 File: backend/app/api/__init__.py
 """
@@ -38,11 +38,11 @@ def _register_router(module_name: str, router_name: str = "router", description:
         router = getattr(module, router_name)
         api_router.include_router(router)
         
-        logger.info(f"✅ {desc} API router registered")
+        logger.info(f"✅ {desc} API router registered successfully")
         return True
         
     except ImportError as e:
-        logger.warning(f"⚠️  {desc} API not available: {e}")
+        logger.warning(f"⚠️ {desc} API not available: {e}")
         return False
     except AttributeError as e:
         logger.error(f"❌ {desc} API missing router attribute: {e}")
@@ -52,57 +52,85 @@ def _register_router(module_name: str, router_name: str = "router", description:
         return False
 
 # Register core working modules first
+logger.info("Registering core API endpoints...")
+
 _register_router("basic_endpoints", description="Core Endpoints")
 _register_router("health", description="Health Check")
-
-# Register other modules with safe error handling
 _register_router("database", description="Database Operations")
 
-# CRITICAL: Debug wallet router registration
-logger.info("🔍 Attempting to register wallet router...")
+# Register wallet router with debugging
+logger.info("Attempting to register wallet router...")
 wallet_success = _register_router("wallet", description="Wallet Management")
-logger.info(f"🔍 Wallet router registration result: {wallet_success}")
+logger.info(f"Wallet router registration result: {wallet_success}")
 
-# GRADUALLY RE-ENABLE ROUTERS FOR TESTING
-logger.info("🔧 TESTING MODE: Re-enabling quotes router with minimal stub")
+# Register quotes router with token resolution - CRITICAL FOR TRADING
+logger.info("Attempting to register quotes router with token resolution...")
+quotes_success = _register_router("quotes", description="Price Quotes with Token Resolution")
+if quotes_success:
+    logger.info("🎯 Quotes router registered successfully - real trading data now available")
+else:
+    logger.error("🚨 Quotes router registration failed - trading will use mock data")
 
-# GRADUALLY RE-ENABLE ROUTERS WITH MINIMAL STUBS
-logger.info("🔧 RE-ENABLING MODE: Adding all fixed minimal stub routers")
-
-# Re-enable all routers with minimal stub implementations
-_register_router("quotes", description="Price Quotes")
+# Register other core trading functionality
+logger.info("Registering additional trading functionality...")
 _register_router("trades", description="Trade Execution")
 _register_router("pairs", description="Trading Pairs")
+_register_router("risk", description="Risk Assessment")
+
+# Register advanced features
+logger.info("Registering advanced features...")
 _register_router("orders", description="Advanced Orders")
 _register_router("discovery", description="Pair Discovery")
 _register_router("safety", description="Safety Controls")
 _register_router("sim", description="Simulation & Backtesting")
-
-# All routers should now work without Settings import issues
-# _register_router("pairs", description="Trading Pairs")
-# _register_router("orders", description="Advanced Orders")
-# _register_router("discovery", description="Pair Discovery")
-# _register_router("safety", description="Safety Controls")
-# _register_router("sim", description="Simulation & Backtesting")
-
-# These routers are working successfully
-_register_router("risk", description="Risk Assessment")
 _register_router("analytics", description="Performance Analytics")
 _register_router("autotrade", description="Automated Trading")
 _register_router("monitoring", description="Monitoring & Alerting")
 _register_router("diagnostics", description="Self-Diagnostic Tools")
 
-# Working preset system
+# Register preset system with explicit error handling
+logger.info("Attempting to register presets system...")
 try:
     from .presets import router as presets_router
     api_router.include_router(presets_router)
-    logger.info("✅ Presets API (working version) router registered")
+    logger.info("✅ Presets API router registered successfully")
 except ImportError as e:
     logger.warning(f"⚠️ Presets API not available: {e}")
 except Exception as e:
     logger.error(f"❌ Presets API registration failed: {e}")
 
-# Log successful startup
-logger.info("🔧 API router registration completed (debugging mode)")
-logger.info("🔧 Disabled routers: quotes, trades, pairs, orders, discovery, safety, sim")
-logger.info("🔧 This should resolve Settings import errors temporarily")
+# Count registered routes for summary
+total_routes = len(api_router.routes)
+route_paths = [route.path for route in api_router.routes if hasattr(route, 'path')]
+
+# Log final registration summary
+logger.info("=" * 60)
+logger.info("🚀 API Router Registration Summary")
+logger.info("=" * 60)
+logger.info(f"📊 Total registered routes: {total_routes}")
+logger.info(f"🎯 Quotes router enabled: {quotes_success}")
+logger.info(f"💰 Wallet router enabled: {wallet_success}")
+logger.info("📋 Key endpoints available:")
+
+# Log key endpoints
+key_endpoints = [
+    "/quotes/aggregate",
+    "/quotes/health", 
+    "/wallets/register",
+    "/health",
+    "/risk/assess"
+]
+
+for endpoint in key_endpoints:
+    # Check if any route contains this endpoint path
+    endpoint_available = any(endpoint in path for path in route_paths)
+    status = "✅" if endpoint_available else "❌"
+    logger.info(f"   {status} {endpoint}")
+
+if quotes_success:
+    logger.info("🎉 TRADING READY: Real quotes with token resolution enabled")
+    logger.info("🔧 Features: ETH/BTC symbol resolution, DEX integration, live data")
+else:
+    logger.error("🚨 TRADING LIMITED: Quotes router failed - check logs above")
+    
+logger.info("=" * 60)
