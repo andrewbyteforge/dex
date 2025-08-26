@@ -280,10 +280,10 @@ All 13 API modules operational:
 The DEX Sniper Pro backend is architecturally complete and production-ready:
 
 ### Available Services
-- **API Documentation**: http://127.0.0.1:8001/docs (Fully operational OpenAPI)
+- **API Documentation**: localhost:8001/docs (Fully operational OpenAPI)
 - **WebSocket Endpoint**: ws://127.0.0.1:8001/ws (Real-time hub active)  
-- **Health Monitoring**: http://127.0.0.1:8001/health (100% healthy status)
-- **Route Debug**: http://127.0.0.1:8001/api/routes (169 endpoints registered)
+- **Health Monitoring**: localhost:8001/health (100% healthy status)
+- **Route Debug**: localhost:8001/api/routes (169 endpoints registered)
 
 ### Architecture Achievements
 - **Security**: Enterprise-grade authentication, rate limiting, input validation

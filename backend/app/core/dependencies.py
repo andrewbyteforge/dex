@@ -13,6 +13,7 @@ import hashlib
 import logging
 import secrets
 import time
+import uuid  # Add this missing import
 from datetime import datetime, timedelta, timezone
 from typing import Optional, AsyncGenerator, Dict, Any, List
 
@@ -169,10 +170,10 @@ async def get_current_user(
     and detailed audit logging for all authentication attempts.
     
     Args:
-        request: FastAPI request object for logging context
-        credentials: Bearer token credentials if provided
+        request: FastAPI request object
+        credentials: Optional HTTP bearer token
         db: Database session
-        x_api_key: API key if provided
+        x_api_key: Optional API key header
         
     Returns:
         Current authenticated user
@@ -180,37 +181,34 @@ async def get_current_user(
     Raises:
         HTTPException: If authentication fails
     """
-    session_id = getattr(request.state, 'session_id', None) or str(secrets.token_urlsafe(16))
-    client_ip = getattr(request, 'client', {}).get('host', 'unknown')
-    user_agent = request.headers.get('user-agent', 'unknown')
-    
+    session_id = str(uuid.uuid4())
     auth_context = {
         'session_id': session_id,
-        'client_ip': client_ip,
-        'user_agent': user_agent,
+        'client_ip': request.client.host if request.client else 'unknown',
+        'user_agent': request.headers.get('user-agent', 'unknown'),
+        'request_id': getattr(request.state, 'request_id', 'unknown'),
         'timestamp': datetime.now(timezone.utc).isoformat()
     }
     
     try:
-        # JWT Bearer token authentication (primary method)
-        if credentials:
+        settings = get_settings()
+        
+        # JWT Token authentication (primary method)
+        if credentials and credentials.credentials:
             logger.debug(
                 "Attempting JWT authentication",
                 extra={'extra_data': auth_context}
             )
             
-            token = credentials.credentials
-            
             try:
-                # Validate JWT token
-                jwt_manager = get_jwt_manager()
-                token_data = jwt_manager.validate_token(token, TokenType.ACCESS)
+                token_data = verify_jwt_token(credentials.credentials)
                 
-                # Create authenticated user from token data
+                # In production, retrieve user from database
+                # For now, create user from token claims
                 current_user = CurrentUser(
                     user_id=token_data.user_id,
                     username=token_data.username,
-                    email=f"{token_data.username}@dexsniper.local",
+                    email=token_data.email,
                     wallet_address=None,
                     is_active=True,
                     auth_method="jwt",
@@ -219,7 +217,7 @@ async def get_current_user(
                 )
                 
                 logger.info(
-                    f"JWT authentication successful for user: {current_user.username}",
+                    "JWT authentication successful",
                     extra={
                         'extra_data': {
                             **auth_context,
@@ -320,8 +318,6 @@ async def get_current_user(
         
         # Development/single-user mode (no authentication)
         else:
-            settings = get_settings()
-            
             if settings.environment == "development":
                 logger.debug(
                     "Using development mode authentication",
@@ -329,7 +325,7 @@ async def get_current_user(
                 )
                 
                 default_user = CurrentUser(
-                    user_id=1,
+                    user_id=1,  # Fix: Use integer instead of 'dev_user' string
                     username="dex_trader",
                     email="trader@dexsniper.local",
                     wallet_address=None,
@@ -368,7 +364,7 @@ async def get_current_user(
         raise
     except Exception as e:
         logger.error(
-            f"Unexpected authentication error: {e}",
+            f"Authentication system error: {e}",
             exc_info=True,
             extra={'extra_data': auth_context}
         )
@@ -376,6 +372,35 @@ async def get_current_user(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Authentication system error"
         )
+
+def _get_client_ip(request: Request) -> str:
+    """
+    Extract client IP address from request properly handling Address objects.
+    
+    Args:
+        request: FastAPI/Starlette request object
+        
+    Returns:
+        Client IP address as string
+    """
+    # Check X-Forwarded-For for proxy scenarios
+    forwarded_for = request.headers.get('X-Forwarded-For')
+    if forwarded_for:
+        return forwarded_for.split(',')[0].strip()
+    
+    # Check X-Real-IP header
+    real_ip = request.headers.get('X-Real-IP')
+    if real_ip:
+        return real_ip.strip()
+    
+    # Fallback to direct client IP from Address object
+    if request.client:
+        return request.client.host
+    
+    return "unknown"
+
+
+
 
 
 async def get_current_active_user(

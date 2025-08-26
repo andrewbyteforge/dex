@@ -959,7 +959,7 @@ try:
     app.include_router(api_router, prefix="/api/v1")
     logger.info("Main API router included successfully")
 
-    app.include_router(ledger_router)
+    
     
 except ImportError as e:
     logger.error(f"Failed to import main API router: {e}")
