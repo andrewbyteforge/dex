@@ -20,8 +20,25 @@ logger = get_logger(__name__)
 # Module-level constants
 DEFAULT_SLIPPAGE_TOLERANCE = Decimal("0.005")  # 0.5%
 UNISWAP_V2_FEE = Decimal("0.003")  # 0.3%
-GAS_ESTIMATE_SWAP = 150000  # Standard Uniswap V2 swap gas
+GAS_ESTIMATE_SWAP = 150000  # Standard Uniswap V2 swap gas units
 DEFAULT_TOKEN_DECIMALS = 18
+
+# Native token placeholder address used in quotes.py
+NATIVE_ETH_PLACEHOLDER = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"
+
+# Gas price defaults (in gwei) for different chains
+DEFAULT_GAS_PRICES = {
+    "ethereum": 30,  # 30 gwei typical for mainnet
+    "bsc": 5,        # 5 gwei typical for BSC
+    "polygon": 35,   # 35 gwei typical for Polygon
+}
+
+# Approximate ETH prices for cost estimation (fallback values)
+ETH_PRICES_USD = {
+    "ethereum": 2500,  # $2500 per ETH
+    "bsc": 300,        # $300 per BNB
+    "polygon": 0.70,   # $0.70 per MATIC
+}
 
 
 class UniswapV2Adapter:
@@ -168,6 +185,105 @@ class UniswapV2Adapter:
             "polygon": "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",  # WMATIC
         }
     
+    def _is_native_token(self, token_address: str) -> bool:
+        """
+        Check if token address is the native token placeholder.
+        
+        Args:
+            token_address: Token address to check
+            
+        Returns:
+            True if native token placeholder
+        """
+        return token_address.lower() == NATIVE_ETH_PLACEHOLDER.lower()
+    
+    def _convert_native_to_wrapped(self, token_address: str, chain: str) -> str:
+        """
+        Convert native token placeholder to wrapped token address.
+        
+        Args:
+            token_address: Token address (may be native placeholder)
+            chain: Blockchain network
+            
+        Returns:
+            Wrapped token address if native, original address otherwise
+        """
+        if self._is_native_token(token_address):
+            weth_address = self.weth_addresses.get(chain)
+            if weth_address:
+                logger.debug(
+                    f"Converting native token to wrapped: {token_address} -> {weth_address}",
+                    extra={
+                        'extra_data': {
+                            'chain': chain,
+                            'native_placeholder': token_address,
+                            'wrapped_address': weth_address
+                        }
+                    }
+                )
+                return weth_address
+            else:
+                raise ValueError(f"No wrapped native token address for chain {chain}")
+        return token_address
+    
+    async def _get_current_gas_price(self, w3: Web3, chain: str, trace_id: str) -> Dict[str, Any]:
+        """
+        Get current gas price and calculate costs.
+        
+        Args:
+            w3: Web3 instance
+            chain: Blockchain network
+            trace_id: Trace ID for logging
+            
+        Returns:
+            Dictionary with gas price info and cost calculations
+        """
+        try:
+            # Try to get current gas price from the network
+            gas_price_wei = await asyncio.to_thread(w3.eth.gas_price)
+            gas_price_gwei = Decimal(gas_price_wei) / Decimal(10**9)
+            
+            logger.debug(
+                f"Current gas price fetched: {gas_price_gwei} gwei",
+                extra={
+                    'extra_data': {
+                        'trace_id': trace_id,
+                        'chain': chain,
+                        'gas_price_gwei': float(gas_price_gwei)
+                    }
+                }
+            )
+        except Exception as e:
+            # Fallback to default gas prices
+            gas_price_gwei = Decimal(DEFAULT_GAS_PRICES.get(chain, 30))
+            logger.warning(
+                f"Failed to fetch gas price, using default: {gas_price_gwei} gwei - {e}",
+                extra={
+                    'extra_data': {
+                        'trace_id': trace_id,
+                        'chain': chain,
+                        'default_gas_price': float(gas_price_gwei)
+                    }
+                }
+            )
+        
+        # Calculate gas cost in ETH/BNB/MATIC
+        gas_units = GAS_ESTIMATE_SWAP
+        gas_cost_wei = Decimal(gas_units) * Decimal(gas_price_gwei) * Decimal(10**9)
+        gas_cost_eth = gas_cost_wei / Decimal(10**18)
+        
+        # Estimate USD cost
+        native_price_usd = Decimal(ETH_PRICES_USD.get(chain, 2500))
+        gas_cost_usd = gas_cost_eth * native_price_usd
+        
+        return {
+            "gas_units": gas_units,
+            "gas_price_gwei": float(gas_price_gwei),
+            "gas_cost_eth": float(gas_cost_eth),
+            "gas_cost_usd": float(gas_cost_usd),
+            "native_token_price_usd": float(native_price_usd)
+        }
+    
     async def get_quote(
         self,
         chain: str,
@@ -222,8 +338,38 @@ class UniswapV2Adapter:
             if chain not in self.router_addresses:
                 raise ValueError(f"Chain {chain} not supported by {self.dex_name}")
             
+            # Store original addresses for response
+            original_token_in = token_in
+            original_token_out = token_out
+            
+            # Convert native tokens to wrapped versions for Uniswap routing
+            token_in_routing = self._convert_native_to_wrapped(token_in, chain)
+            token_out_routing = self._convert_native_to_wrapped(token_out, chain)
+            
+            # Check if tokens are native for decimal handling
+            is_token_in_native = self._is_native_token(original_token_in)
+            is_token_out_native = self._is_native_token(original_token_out)
+            
+            logger.debug(
+                f"Token routing conversion",
+                extra={
+                    'extra_data': {
+                        'trace_id': trace_id,
+                        'original_in': original_token_in,
+                        'original_out': original_token_out,
+                        'routing_in': token_in_routing,
+                        'routing_out': token_out_routing,
+                        'is_in_native': is_token_in_native,
+                        'is_out_native': is_token_out_native
+                    }
+                }
+            )
+            
             # Get Web3 instance from chain clients
             w3 = await self._get_web3_instance(chain, chain_clients, trace_id)
+            
+            # Get current gas prices early
+            gas_info = await self._get_current_gas_price(w3, chain, trace_id)
             
             # Get router and factory contracts
             router_address = self.router_addresses[chain]
@@ -236,7 +382,8 @@ class UniswapV2Adapter:
                         'trace_id': trace_id,
                         'router_address': router_address,
                         'factory_address': factory_address,
-                        'chain': chain
+                        'chain': chain,
+                        'gas_price_gwei': gas_info['gas_price_gwei']
                     }
                 }
             )
@@ -252,16 +399,32 @@ class UniswapV2Adapter:
             )
             
             # Convert addresses to checksum format
-            token_in_addr = w3.to_checksum_address(token_in)
-            token_out_addr = w3.to_checksum_address(token_out)
+            token_in_addr = w3.to_checksum_address(token_in_routing)
+            token_out_addr = w3.to_checksum_address(token_out_routing)
             
             # Get token decimals dynamically
-            token_in_decimals = await self._get_token_decimals(
-                w3, token_in_addr, trace_id
-            )
-            token_out_decimals = await self._get_token_decimals(
-                w3, token_out_addr, trace_id
-            )
+            # Native tokens always use 18 decimals
+            if is_token_in_native:
+                token_in_decimals = 18
+                logger.debug(
+                    f"Using native token decimals for input: 18",
+                    extra={'extra_data': {'trace_id': trace_id, 'token': original_token_in}}
+                )
+            else:
+                token_in_decimals = await self._get_token_decimals(
+                    w3, token_in_addr, trace_id
+                )
+            
+            if is_token_out_native:
+                token_out_decimals = 18
+                logger.debug(
+                    f"Using native token decimals for output: 18",
+                    extra={'extra_data': {'trace_id': trace_id, 'token': original_token_out}}
+                )
+            else:
+                token_out_decimals = await self._get_token_decimals(
+                    w3, token_out_addr, trace_id
+                )
             
             # Convert amount to wei units using actual decimals
             amount_in_wei = int(amount_in * Decimal(10**token_in_decimals))
@@ -305,8 +468,8 @@ class UniswapV2Adapter:
                         'extra_data': {
                             'trace_id': trace_id,
                             'chain': chain,
-                            'token_in': token_in,
-                            'token_out': token_out,
+                            'token_in': original_token_in,
+                            'token_out': original_token_out,
                             'path_tried': path
                         }
                     }
@@ -338,24 +501,41 @@ class UniswapV2Adapter:
             
             execution_time_ms = (time.time() - start_time) * 1000
             
+            # Build route for response (use original addresses for display)
+            display_route = []
+            for addr in path:
+                # Check if this address is WETH and original was native
+                if addr.lower() == token_in_addr.lower() and is_token_in_native:
+                    display_route.append(original_token_in.lower())
+                elif addr.lower() == token_out_addr.lower() and is_token_out_native:
+                    display_route.append(original_token_out.lower())
+                else:
+                    display_route.append(addr.lower())
+            
             result = {
                 "success": True,
                 "dex": self.dex_name,
                 "chain": chain,
-                "input_token": token_in,
-                "output_token": token_out,
+                "input_token": original_token_in,
+                "output_token": original_token_out,
                 "input_amount": str(amount_in),
                 "output_amount": str(amount_out),
                 "min_output_amount": str(min_amount_out),
                 "price": str(price),
                 "price_impact": str(price_impact),
-                "route": [addr.lower() for addr in path],
-                "gas_estimate": GAS_ESTIMATE_SWAP,
+                "route": display_route,
+                "gas_estimate": gas_info["gas_units"],  # Keep for backward compatibility
+                "gas_info": gas_info,  # New detailed gas information
                 "slippage_tolerance": str(slippage_tolerance),
                 "trace_id": trace_id,
                 "execution_time_ms": execution_time_ms,
                 "token_in_decimals": token_in_decimals,
                 "token_out_decimals": token_out_decimals,
+                "native_token_handling": {
+                    "input_is_native": is_token_in_native,
+                    "output_is_native": is_token_out_native,
+                    "routing_path": [addr.lower() for addr in path]
+                }
             }
             
             logger.info(
@@ -365,7 +545,10 @@ class UniswapV2Adapter:
                         'trace_id': trace_id,
                         'output_amount': str(amount_out),
                         'price_impact': str(price_impact),
-                        'execution_time_ms': execution_time_ms
+                        'gas_cost_usd': gas_info['gas_cost_usd'],
+                        'gas_price_gwei': gas_info['gas_price_gwei'],
+                        'execution_time_ms': execution_time_ms,
+                        'native_conversion_applied': is_token_in_native or is_token_out_native
                     }
                 }
             )
