@@ -88,6 +88,10 @@ _register_router("autotrade", description="Automated Trading")
 _register_router("monitoring", description="Monitoring & Alerting")
 _register_router("diagnostics", description="Self-Diagnostic Tools")
 
+# Register ledger and portfolio tracking - NEW ADDITION
+logger.info("Registering portfolio tracking functionality...")
+ledger_success = _register_router("ledger", description="Ledger & Portfolio Tracking")
+
 # Register preset system with explicit error handling
 logger.info("Attempting to register presets system...")
 try:
@@ -110,15 +114,19 @@ logger.info("=" * 60)
 logger.info(f"📊 Total registered routes: {total_routes}")
 logger.info(f"🎯 Quotes router enabled: {quotes_success}")
 logger.info(f"💰 Wallet router enabled: {wallet_success}")
+logger.info(f"📋 Ledger router enabled: {ledger_success}")
 logger.info("📋 Key endpoints available:")
 
-# Log key endpoints
+# Log key endpoints including new ledger endpoints
 key_endpoints = [
     "/quotes/aggregate",
     "/quotes/health", 
     "/wallets/register",
     "/health",
-    "/risk/assess"
+    "/risk/assess",
+    "/ledger/positions",
+    "/ledger/transactions", 
+    "/ledger/portfolio-summary"
 ]
 
 for endpoint in key_endpoints:
@@ -132,5 +140,11 @@ if quotes_success:
     logger.info("🔧 Features: ETH/BTC symbol resolution, DEX integration, live data")
 else:
     logger.error("🚨 TRADING LIMITED: Quotes router failed - check logs above")
+
+if ledger_success:
+    logger.info("📊 PORTFOLIO TRACKING: Ledger endpoints enabled for real portfolio data")
+    logger.info("🔧 Features: Position tracking, transaction history, portfolio summary")
+else:
+    logger.error("🚨 PORTFOLIO LIMITED: Ledger router failed - portfolio will use demo data")
     
 logger.info("=" * 60)

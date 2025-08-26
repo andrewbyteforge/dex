@@ -350,8 +350,10 @@ class LedgerEntry(Base):
     __tablename__ = "ledger_entries"
     
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey('users.user_id'), nullable=False, index=True)
     trace_id = Column(String(64), unique=True, index=True, nullable=False)
     timestamp = Column(DateTime(timezone=True), default=func.now(), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=func.now(), nullable=False)
     
     # Trade Information
     chain = Column(String(32), nullable=False, index=True)
@@ -403,6 +405,12 @@ class LedgerEntry(Base):
     archived = Column(Boolean, default=False)
     archived_at = Column(DateTime(timezone=True))
     
+    # Relationships
+    user = relationship("User", back_populates="ledger_entries")
+    orders = relationship("AdvancedOrder", back_populates="user")
+    positions = relationship("Position", back_populates="user")
+    ledger_entries = relationship("LedgerEntry", back_populates="user")
+    
     def to_dict(self) -> Dict[str, Any]:
         """
         Convert ledger entry to dictionary.
@@ -412,6 +420,7 @@ class LedgerEntry(Base):
         """
         return {
             'id': self.id,
+            'user_id': self.user_id,
             'trace_id': self.trace_id,
             'timestamp': self.timestamp.isoformat() if self.timestamp else None,
             'chain': self.chain,

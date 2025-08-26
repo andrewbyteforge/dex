@@ -7,8 +7,7 @@ and WebSocket support with comprehensive error handling.
 """
 
 from __future__ import annotations
-# Add this import to your existing backend/app/main.py imports section
-from app.api.ledger import router as ledger_router
+
 import asyncio
 import logging
 import time
@@ -967,6 +966,16 @@ except ImportError as e:
     # Fallback: Include individual routers manually
     logger.info("Attempting to include individual API routers...")
     
+    # Add the ledger router first
+    try:
+        from app.api.ledger import router as ledger_router
+        app.include_router(ledger_router, prefix="/api/v1")
+        logger.info("Ledger API router included successfully")
+    except ImportError as e:
+        logger.warning(f"Ledger API router not available: {e}")
+    except Exception as e:
+        logger.error(f"Failed to include Ledger API router: {e}")
+    
     individual_routers = [
         ("basic_endpoints", "Core Endpoints"),
         ("health", "Health Check"),
@@ -985,8 +994,8 @@ except ImportError as e:
         ("monitoring", "Monitoring & Alerting"),
         ("diagnostics", "Self-Diagnostic Tools"),
     ]
-    
-    fallback_success_count = 0
+
+    fallback_success_count = 1  # Start with 1 since ledger router was added
     
     for router_name, description in individual_routers:
         try:
@@ -1047,6 +1056,7 @@ async def list_routes():
         # Categorize routes for easier debugging
         api_v1_routes = [r for r in routes if r['path'].startswith('/api/v1')]
         websocket_paths = [r for r in routes + websocket_routes if '/ws/' in r['path']]
+        ledger_routes = [r for r in routes if 'ledger' in r['path']]
         
         # Get rate limiting status
         rate_limit_status = "unknown"
@@ -1057,6 +1067,7 @@ async def list_routes():
             "total_routes": len(routes),
             "api_v1_routes": len(api_v1_routes),
             "websocket_routes": len(websocket_routes),
+            "ledger_routes": len(ledger_routes),
             "rate_limiting": rate_limit_status,
             "routes": sorted(routes, key=lambda x: x['path']),
             "websocket_endpoints": websocket_paths,
@@ -1068,6 +1079,9 @@ async def list_routes():
                 "trade_execution": "/api/v1/trades/",
                 "pair_discovery": "/api/v1/discovery/",
                 "risk_assessment": "/api/v1/risk/",
+                "ledger_positions": "/api/v1/ledger/positions",
+                "ledger_transactions": "/api/v1/ledger/transactions",
+                "portfolio_summary": "/api/v1/ledger/portfolio-summary",
                 "websocket_main": "/ws/{client_id}",
                 "websocket_status": "/ws/status"
             }
@@ -1109,6 +1123,9 @@ async def root():
                 "trade_execution": "/api/v1/trades/test",
                 "pair_discovery": "/api/v1/discovery/test",
                 "risk_assessment": "/api/v1/risk/test",
+                "ledger_positions": "/api/v1/ledger/positions",
+                "ledger_transactions": "/api/v1/ledger/transactions",
+                "portfolio_summary": "/api/v1/ledger/portfolio-summary",
                 "websocket_status": "/ws/status",
                 "websocket_connection": "/ws/{client_id}"
             }
@@ -1155,6 +1172,7 @@ async def health_check():
         
         # Check if WebSocket routes are registered
         websocket_routes_registered = any('/ws/' in str(route.path) for route in app.routes)
+        ledger_routes_registered = any('/ledger/' in str(route.path) for route in app.routes)
         
         # Calculate overall health
         operational_count = sum(1 for status in components.values() if status == "operational")
@@ -1176,6 +1194,7 @@ async def health_check():
             "components": components,
             "rate_limiting": rate_limiting_health,
             "websocket_routes_registered": websocket_routes_registered,
+            "ledger_routes_registered": ledger_routes_registered,
             "startup_info": {
                 "errors": len(getattr(app.state, 'startup_errors', [])),
                 "warnings": len(getattr(app.state, 'startup_warnings', []))
@@ -1184,7 +1203,12 @@ async def health_check():
                 "total_routes": len(app.routes),
                 "api_documentation": "/docs",
                 "route_debugging": "/api/routes",
-                "websocket_test_page": "/ws/test"
+                "websocket_test_page": "/ws/test",
+                "ledger_endpoints": [
+                    "/api/v1/ledger/positions",
+                    "/api/v1/ledger/transactions", 
+                    "/api/v1/ledger/portfolio-summary"
+                ]
             }
         }
     except Exception as e:
