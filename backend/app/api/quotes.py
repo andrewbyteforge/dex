@@ -32,7 +32,7 @@ TOKEN_ADDRESSES = {
     "ethereum": {
         "ETH": "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",  # Native ETH
         "WETH": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
-        "USDC": "0xA0b86a33E6441c84C0BB2a35B9A4A2E3C9C8e4d4",
+        "USDC": "0xA0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
         "USDT": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
         "WBTC": "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599",
         "BTC": "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599",  # Alias for WBTC
@@ -53,7 +53,7 @@ TOKEN_ADDRESSES = {
     "polygon": {
         "MATIC": "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",  # Native MATIC
         "WMATIC": "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
-        "USDC": "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
+        "USDC": "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359",
         "USDT": "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
         "WETH": "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
         "WBTC": "0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6",
@@ -66,13 +66,14 @@ TOKEN_ADDRESSES = {
         "USDC": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
         "USDbC": "0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA",  # USD Base Coin
         "DAI": "0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb",
-        "WBTC": "0x1C7D4B196Cb0C7B01d743Fbc6116a902379C7238",
-        "BTC": "0x1C7D4B196Cb0C7B01d743Fbc6116a902379C7238"  # Alias for WBTC
+        "WBTC": "0x0555E30da8f98308EdB960aa94C0Db47230d2B9c",
+        "BTC": "0x0555E30da8f98308EdB960aa94C0Db47230d2B9c",
+          # Alias for WBTC
     },
     "arbitrum": {
         "ETH": "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",  # Native ETH on Arbitrum
         "WETH": "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
-        "USDC": "0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8",
+        "USDC": "0xAf88d065E77C8Ccc2239327C5EDb3A432268e5831",
         "USDT": "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9",
         "WBTC": "0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f",
         "BTC": "0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f",  # Alias for WBTC
@@ -187,13 +188,13 @@ class FrontendQuoteResponse(BaseModel):
     """Quote response matching frontend expectations."""
     
     success: bool = Field(default=True, description="Request success status")
-    quotes: List[FrontendQuote] = Field(..., description="Available quotes")
-    best_quote: Optional[FrontendQuote] = Field(None, description="Best quote by output")
+    quotes: List[FrontendQuote] = Field(default_factory=list, description="Available quotes")
+    best_quote: Optional[FrontendQuote] = Field(default=None, description="Best quote by output")
     request_id: str = Field(..., description="Request identifier")
     timestamp: str = Field(..., description="Response timestamp")
     processing_time_ms: int = Field(..., description="Processing time")
     chain: str = Field(..., description="Blockchain network")
-    message: Optional[str] = Field(None, description="Status message")
+    message: Optional[str] = Field(default=None, description="Status message")
 
 
 def _resolve_token_address(token_symbol_or_address: str, chain: str, trace_id: str) -> str:
@@ -419,105 +420,54 @@ async def _get_real_quote_from_adapter(
     amount_in: Decimal,
     slippage_tolerance: Optional[Decimal],
     chain_clients: Optional[Dict],
-    trace_id: str
+    trace_id: str,
 ) -> Optional[DexQuote]:
     """
     Get real quote from DEX adapter with enhanced error handling and logging.
-    
-    Args:
-        adapter: DEX adapter instance
-        dex_name: Name of the DEX for logging
-        chain: Blockchain network
-        token_in_address: Input token contract address (hex string)
-        token_out_address: Output token contract address (hex string)
-        amount_in: Input amount
-        slippage_tolerance: Slippage tolerance
-        chain_clients: Chain client instances
-        trace_id: Trace ID for logging
-        
+
     Returns:
-        DexQuote or None if failed
+        DexQuote or None if failed.
     """
+    import re
+    from decimal import InvalidOperation
+    
     quote_start_time = time.time()
     
     try:
+        # Log attempt
         logger.info(
-            f"Getting real quote from {dex_name} with resolved addresses",
+            "Requesting real quote",
             extra={
                 'extra_data': {
                     'trace_id': trace_id,
                     'dex_name': dex_name,
                     'chain': chain,
-                    'token_in_address': token_in_address,
-                    'token_out_address': token_out_address,
-                    'amount_in': str(amount_in),
-                    'slippage_tolerance': str(slippage_tolerance) if slippage_tolerance else None,
-                    'address_validation': {
-                        'token_in_valid_hex': token_in_address.startswith('0x') and len(token_in_address) == 42,
-                        'token_out_valid_hex': token_out_address.startswith('0x') and len(token_out_address) == 42
-                    }
+                    'token_in': token_in_address,
+                    'token_out': token_out_address,
+                    'amount_in': str(amount_in)
                 }
             }
         )
         
-        # Validate adapter exists
+        # Basic validation
         if adapter is None:
-            logger.error(
-                f"Adapter for {dex_name} is None",
-                extra={'extra_data': {'trace_id': trace_id, 'dex': dex_name}}
-            )
-            return None
-        
-        # Validate hex addresses before calling adapter
-        if not token_in_address.startswith('0x') or len(token_in_address) != 42:
-            error_msg = f"Invalid token_in address format: {token_in_address}"
-            logger.error(
-                error_msg,
-                extra={'extra_data': {'trace_id': trace_id, 'dex': dex_name}}
-            )
+            logger.error(f"Adapter for {dex_name} is None")
             return None
             
-        if not token_out_address.startswith('0x') or len(token_out_address) != 42:
-            error_msg = f"Invalid token_out address format: {token_out_address}"
-            logger.error(
-                error_msg,
-                extra={'extra_data': {'trace_id': trace_id, 'dex': dex_name}}
-            )
+        if not hasattr(adapter, 'get_quote'):
+            logger.error(f"Adapter {dex_name} missing get_quote method")
             return None
         
-        # Prepare adapter method call - handle different adapter interfaces
-        adapter_method = None
-        if hasattr(adapter, 'get_quote'):
-            adapter_method = adapter.get_quote
-        elif hasattr(adapter, 'quote'):
-            adapter_method = adapter.quote
-        else:
-            logger.error(
-                f"Adapter {dex_name} has no quote method",
-                extra={
-                    'extra_data': {
-                        'trace_id': trace_id,
-                        'dex': dex_name,
-                        'adapter_methods': dir(adapter)
-                    }
-                }
-            )
+        # Validate hex addresses
+        hex_pattern = re.compile(r'^0x[a-fA-F0-9]{40}$')
+        if not hex_pattern.match(token_in_address) or not hex_pattern.match(token_out_address):
+            logger.error(f"Invalid token address format for {dex_name}")
             return None
         
-        # Call the real adapter with validated hex addresses
+        # Call adapter
         try:
-            if asyncio.iscoroutinefunction(adapter_method):
-                result = await adapter_method(
-                    chain=chain,
-                    token_in=token_in_address,  # Now guaranteed to be hex format
-                    token_out=token_out_address,  # Now guaranteed to be hex format
-                    amount_in=amount_in,
-                    slippage_tolerance=slippage_tolerance,
-                    chain_clients=chain_clients
-                )
-            else:
-                # Handle sync adapters
-                result = adapter_method(
+            if asyncio.iscoroutinefunction(adapter.get_quote):
+                result = await adapter.get_quote(
                     chain=chain,
                     token_in=token_in_address,
                     token_out=token_out_address,
@@ -525,170 +475,70 @@ async def _get_real_quote_from_adapter(
                     slippage_tolerance=slippage_tolerance,
                     chain_clients=chain_clients
                 )
-        except TypeError as e:
-            # Try alternative parameter formats
-            logger.warning(
-                f"Primary adapter call failed for {dex_name}, trying alternative format: {e}",
-                extra={'extra_data': {'trace_id': trace_id, 'dex': dex_name, 'error': str(e)}}
-            )
-            try:
-                if asyncio.iscoroutinefunction(adapter_method):
-                    result = await adapter_method(
-                        token_in=token_in_address,
-                        token_out=token_out_address,
-                        amount_in=amount_in,
-                        chain=chain
-                    )
-                else:
-                    result = adapter_method(
-                        token_in=token_in_address,
-                        token_out=token_out_address,
-                        amount_in=amount_in,
-                        chain=chain
-                    )
-            except Exception as e2:
-                logger.error(
-                    f"Alternative adapter call also failed for {dex_name}: {e2}",
-                    extra={'extra_data': {'trace_id': trace_id, 'dex': dex_name, 'error': str(e2)}}
+            else:
+                result = adapter.get_quote(
+                    chain=chain,
+                    token_in=token_in_address,
+                    token_out=token_out_address,
+                    amount_in=amount_in,
+                    slippage_tolerance=slippage_tolerance,
+                    chain_clients=chain_clients
                 )
-                return None
-        except Exception as e:
-            logger.error(
-                f"Adapter call failed for {dex_name}: {e}",
-                extra={
-                    'extra_data': {
-                        'trace_id': trace_id,
-                        'dex': dex_name,
-                        'error': str(e),
-                        'error_type': type(e).__name__
-                    }
-                },
-                exc_info=True
-            )
-            return None
+        except TypeError:
+            # Try without chain parameter
+            logger.debug(f"Retrying {dex_name} without chain parameter")
+            if asyncio.iscoroutinefunction(adapter.get_quote):
+                result = await adapter.get_quote(
+                    token_in=token_in_address,
+                    token_out=token_out_address,
+                    amount_in=amount_in
+                )
+            else:
+                result = adapter.get_quote(
+                    token_in=token_in_address,
+                    token_out=token_out_address,
+                    amount_in=amount_in
+                )
         
         quote_execution_time_ms = int((time.time() - quote_start_time) * 1000)
         
+        # Check result
         if not result:
-            logger.warning(
-                f"DEX adapter {dex_name} returned None/empty result",
-                extra={
-                    'extra_data': {
-                        'trace_id': trace_id,
-                        'dex_name': dex_name,
-                        'result_type': type(result).__name__,
-                        'execution_time_ms': quote_execution_time_ms
-                    }
-                }
-            )
+            logger.warning(f"Adapter {dex_name} returned None")
             return None
             
         if isinstance(result, dict) and not result.get('success', True):
-            error_msg = result.get('error', 'Unknown error') if result else 'No result'
-            logger.warning(
-                f"DEX adapter {dex_name} failed: {error_msg}",
-                extra={
-                    'extra_data': {
-                        'trace_id': trace_id,
-                        'dex_name': dex_name,
-                        'error': error_msg,
-                        'result_success': result.get('success', False) if result else False,
-                        'execution_time_ms': quote_execution_time_ms
-                    }
-                }
-            )
+            logger.warning(f"Adapter indicated failure: {result.get('error', 'Unknown')}")
             return None
         
-        # Convert adapter result to DexQuote with comprehensive validation
+        # Parse result into DexQuote
         try:
-            # Handle different result formats
-            if isinstance(result, dict):
-                quote = DexQuote(
-                    dex_name=result.get('dex', dex_name),
-                    dex_version=result.get('version', 'unknown'),
-                    amount_out=Decimal(str(result.get('output_amount', result.get('amount_out', '0')))),
-                    price_impact=Decimal(str(result.get('price_impact', '0'))),
-                    gas_estimate=int(result.get('gas_estimate', 150000)),  # Default gas estimate
-                    route_path=result.get('route', result.get('path', [token_in_address, token_out_address])),
-                    pool_address=result.get('pool_address'),
-                    fee_tier=result.get('fee_tier'),
-                    confidence_score=Decimal(str(result.get('confidence', '0.95'))),
-                    estimated_gas_cost_usd=Decimal(str(result.get('gas_cost_usd', '10.0')))
-                )
-            else:
-                # Handle non-dict results (legacy format)
-                logger.warning(
-                    f"Unexpected result format from {dex_name}: {type(result)}",
-                    extra={'extra_data': {'trace_id': trace_id, 'dex': dex_name, 'result_type': type(result).__name__}}
-                )
-                return None
+            quote = DexQuote(
+                dex_name=result.get('dex', dex_name),
+                dex_version=result.get('version', 'unknown'),
+                amount_out=Decimal(str(result.get('output_amount', result.get('amount_out', '0')))),
+                price_impact=Decimal(str(result.get('price_impact', '0'))),
+                gas_estimate=int(result.get('gas_estimate', 150000)),
+                route_path=result.get('route', result.get('path', [token_in_address, token_out_address])),
+                pool_address=result.get('pool_address'),
+                fee_tier=result.get('fee_tier'),
+                confidence_score=Decimal(str(result.get('confidence', '0.95'))),
+                estimated_gas_cost_usd=Decimal(str(result.get('gas_cost_usd', '10.0'))) if result.get('gas_cost_usd') else None
+            )
             
-            # Validate quote data
             if quote.amount_out <= 0:
-                logger.error(
-                    f"Invalid quote from {dex_name}: zero or negative output amount",
-                    extra={
-                        'extra_data': {
-                            'trace_id': trace_id,
-                            'dex_name': dex_name,
-                            'amount_out': str(quote.amount_out),
-                            'execution_time_ms': quote_execution_time_ms
-                        }
-                    }
-                )
+                logger.error(f"Invalid quote from {dex_name}: zero output")
                 return None
                 
-        except (ValueError, TypeError, KeyError) as e:
-            logger.error(
-                f"Error parsing quote result from {dex_name}: {e}",
-                extra={
-                    'extra_data': {
-                        'trace_id': trace_id,
-                        'dex_name': dex_name,
-                        'result': str(result)[:500],  # Truncate large results
-                        'error': str(e),
-                        'execution_time_ms': quote_execution_time_ms
-                    }
-                }
-            )
+            logger.info(f"Real quote successful from {dex_name}: {quote.amount_out}")
+            return quote
+            
+        except (ValueError, TypeError, InvalidOperation) as e:
+            logger.error(f"Error parsing quote from {dex_name}: {e}")
             return None
-        
-        logger.info(
-            f"Real quote successful from {dex_name}",
-            extra={
-                'extra_data': {
-                    'trace_id': trace_id,
-                    'dex_name': dex_name,
-                    'amount_out': str(quote.amount_out),
-                    'price_impact': str(quote.price_impact),
-                    'gas_estimate': quote.gas_estimate,
-                    'execution_time_ms': quote_execution_time_ms,
-                    'quote_success': True,
-                    'address_resolution_fixed': True,
-                    'dex_version': quote.dex_version
-                }
-            }
-        )
-        
-        return quote
-        
+            
     except Exception as e:
-        execution_time_ms = int((time.time() - quote_start_time) * 1000)
-        logger.error(
-            f"Critical error getting quote from {dex_name}: {e}",
-            extra={
-                'extra_data': {
-                    'trace_id': trace_id,
-                    'dex_name': dex_name,
-                    'error': str(e),
-                    'error_type': type(e).__name__,
-                    'token_in_address': token_in_address,
-                    'token_out_address': token_out_address,
-                    'execution_time_ms': execution_time_ms
-                }
-            },
-            exc_info=True
-        )
+        logger.error(f"Critical error getting quote from {dex_name}: {e}", exc_info=True)
         return None
 
 
@@ -707,15 +557,7 @@ def _convert_to_frontend_format(quotes: List[DexQuote]) -> List[FrontendQuote]:
             )
             frontend_quotes.append(frontend_quote)
         except (ValueError, TypeError) as e:
-            logger.error(
-                f"Error converting quote to frontend format: {e}",
-                extra={
-                    'extra_data': {
-                        'quote_dex': quote.dex_name,
-                        'error': str(e)
-                    }
-                }
-            )
+            logger.error(f"Error converting quote to frontend format: {e}")
             continue
     return frontend_quotes
 
@@ -725,78 +567,25 @@ async def get_aggregate_quotes(request: Request, quote_request: FrontendQuoteReq
     """
     Get aggregated quotes from multiple DEXs using DEXAdapterRegistry.
     
-    This endpoint matches the exact format expected by the frontend:
-    - Accepts: {chain, from_token, to_token, amount, slippage, wallet_address}
-    - Returns: {success, quotes: [{dex, output_amount, price_impact, gas_estimate, route}]}
-    
-    Uses real blockchain data via DEX adapters with automatic token address resolution
-    and leverages the DEXAdapterRegistry for comprehensive DEX coverage.
+    Uses real blockchain data via DEX adapters with automatic token address resolution.
     """
     start_time = time.time()
     trace_id = str(uuid.uuid4())
     request_id = f"aggregate_{int(start_time)}"
     
-    logger.info(
-        f"Frontend aggregate quote request with DEX registry: {request_id}",
-        extra={
-            'extra_data': {
-                'trace_id': trace_id,
-                'request_id': request_id,
-                'chain': quote_request.chain,
-                'from_token': quote_request.from_token,
-                'to_token': quote_request.to_token,
-                'amount': quote_request.amount,
-                'slippage': quote_request.slippage,
-                'wallet_address': quote_request.wallet_address,
-                'frontend_format': True,
-                'token_resolution_enabled': True,
-                'dex_registry_enabled': True
-            }
-        }
-    )
+    logger.info(f"Frontend aggregate quote request: {request_id}")
     
     try:
-        # CRITICAL: Resolve token addresses first to fix hex string errors
+        # Resolve token addresses
         try:
-            token_in_address = _resolve_token_address(
-                quote_request.from_token, 
-                quote_request.chain, 
-                trace_id
-            )
-            token_out_address = _resolve_token_address(
-                quote_request.to_token, 
-                quote_request.chain, 
-                trace_id
-            )
-            
-            logger.info(
-                f"Token addresses resolved successfully",
-                extra={
-                    'extra_data': {
-                        'trace_id': trace_id,
-                        'from_token_resolution': f"{quote_request.from_token} -> {token_in_address}",
-                        'to_token_resolution': f"{quote_request.to_token} -> {token_out_address}",
-                        'chain': quote_request.chain
-                    }
-                }
-            )
-            
+            token_in_address = _resolve_token_address(quote_request.from_token, quote_request.chain, trace_id)
+            token_out_address = _resolve_token_address(quote_request.to_token, quote_request.chain, trace_id)
+            logger.info(f"Tokens resolved: {quote_request.from_token}->{token_in_address}, {quote_request.to_token}->{token_out_address}")
         except ValueError as e:
-            logger.error(
-                f"Token resolution failed: {e}",
-                extra={
-                    'extra_data': {
-                        'trace_id': trace_id,
-                        'from_token': quote_request.from_token,
-                        'to_token': quote_request.to_token,
-                        'chain': quote_request.chain,
-                        'error': str(e)
-                    }
-                }
-            )
             return FrontendQuoteResponse(
                 success=False,
                 quotes=[],
+                best_quote=None,
                 request_id=request_id,
                 timestamp=datetime.utcnow().isoformat(),
                 processing_time_ms=int((time.time() - start_time) * 1000),
@@ -804,85 +593,50 @@ async def get_aggregate_quotes(request: Request, quote_request: FrontendQuoteReq
                 message=f"Token resolution error: {str(e)}"
             )
         
-        # Convert frontend format to internal format
+        # Convert amounts
         amount_decimal = Decimal(quote_request.amount)
-        slippage_decimal = Decimal(str(quote_request.slippage / 100))  # Convert percentage to decimal
+        slippage_decimal = Decimal(str(quote_request.slippage / 100))
         
-        # Get DEX adapter registry
+        # Get registry
         registry = _get_dex_adapter_registry()
         if not registry:
-            logger.error(
-                f"DEX adapter registry not available",
-                extra={'extra_data': {'trace_id': trace_id, 'chain': quote_request.chain}}
-            )
             return FrontendQuoteResponse(
                 success=False,
                 quotes=[],
+                best_quote=None,
                 request_id=request_id,
                 timestamp=datetime.utcnow().isoformat(),
                 processing_time_ms=int((time.time() - start_time) * 1000),
                 chain=quote_request.chain,
-                message="DEX adapter registry not available - server configuration issue"
+                message="DEX adapter registry not available"
             )
         
-        # Get supported DEXs for the chain from registry
+        # Get supported DEXs
         supported_dexs = _get_supported_dexs_from_registry(quote_request.chain, trace_id)
-        
         if not supported_dexs:
-            logger.warning(
-                f"Chain {quote_request.chain} has no supported DEXs",
-                extra={
-                    'extra_data': {
-                        'trace_id': trace_id,
-                        'chain': quote_request.chain,
-                        'supported_chains': ['ethereum', 'bsc', 'polygon', 'base', 'arbitrum']
-                    }
-                }
-            )
             return FrontendQuoteResponse(
                 success=False,
                 quotes=[],
+                best_quote=None,
                 request_id=request_id,
                 timestamp=datetime.utcnow().isoformat(),
                 processing_time_ms=int((time.time() - start_time) * 1000),
                 chain=quote_request.chain,
-                message=f"Chain {quote_request.chain} not yet supported for real quotes"
+                message=f"Chain {quote_request.chain} not supported"
             )
         
-        # Get chain clients from app state
+        # Get chain clients
         chain_clients = {}
         if hasattr(request.app.state, 'evm_client'):
             chain_clients['evm'] = request.app.state.evm_client
         if hasattr(request.app.state, 'solana_client'):
             chain_clients['solana'] = request.app.state.solana_client
         
-        logger.debug(
-            f"Chain clients retrieved for real quotes",
-            extra={
-                'extra_data': {
-                    'trace_id': trace_id,
-                    'available_clients': list(chain_clients.keys()),
-                    'clients_count': len(chain_clients)
-                }
-            }
-        )
-        
-        # Get real quotes from adapters using registry
+        # Create quote tasks
         quote_tasks = []
-        successful_adapters = []
-        failed_adapters = []
-        
         for dex_name in supported_dexs:
-            try:
-                adapter = registry.get_adapter(dex_name)
-                if adapter is None:
-                    logger.warning(
-                        f"Adapter {dex_name} is None from registry - skipping",
-                        extra={'extra_data': {'trace_id': trace_id, 'dex': dex_name}}
-                    )
-                    failed_adapters.append(f"{dex_name}: adapter_null")
-                    continue
-                
+            adapter = registry.get_adapter(dex_name)
+            if adapter:
                 task = _get_real_quote_from_adapter(
                     adapter=adapter,
                     dex_name=dex_name,
@@ -895,172 +649,72 @@ async def get_aggregate_quotes(request: Request, quote_request: FrontendQuoteReq
                     trace_id=trace_id
                 )
                 quote_tasks.append(task)
-                successful_adapters.append(dex_name)
-                
-            except Exception as e:
-                logger.error(
-                    f"Error setting up quote task for {dex_name}: {e}",
-                    extra={
-                        'extra_data': {
-                            'trace_id': trace_id,
-                            'dex': dex_name,
-                            'error': str(e),
-                            'error_type': type(e).__name__
-                        }
-                    }
-                )
-                failed_adapters.append(f"{dex_name}: {str(e)}")
-        
-        logger.info(
-            f"Executing {len(quote_tasks)} real quote requests from registry",
-            extra={
-                'extra_data': {
-                    'trace_id': trace_id,
-                    'dexs_queried': successful_adapters,
-                    'failed_adapters': failed_adapters,
-                    'chain': quote_request.chain,
-                    'token_in_address': token_in_address,
-                    'token_out_address': token_out_address,
-                    'registry_used': True
-                }
-            }
-        )
         
         if not quote_tasks:
-            logger.error(
-                f"No quote tasks created - all adapters failed setup",
-                extra={
-                    'extra_data': {
-                        'trace_id': trace_id,
-                        'supported_dexs': supported_dexs,
-                        'failed_adapters': failed_adapters
-                    }
-                }
-            )
             return FrontendQuoteResponse(
                 success=False,
                 quotes=[],
+                best_quote=None,
                 request_id=request_id,
                 timestamp=datetime.utcnow().isoformat(),
                 processing_time_ms=int((time.time() - start_time) * 1000),
                 chain=quote_request.chain,
-                message=f"No adapters available - setup failed for all {len(supported_dexs)} DEXs"
+                message="No adapters available"
             )
         
-        # Execute all quote requests concurrently with timeout
+        logger.info(f"Executing {len(quote_tasks)} quote requests")
+        
+        # Execute quotes
         try:
             quote_results = await asyncio.wait_for(
                 asyncio.gather(*quote_tasks, return_exceptions=True), 
-                timeout=20.0  # Increased timeout for multiple adapters
+                timeout=20.0
             )
         except asyncio.TimeoutError:
-            logger.error(
-                f"Quote requests timed out after 20 seconds",
-                extra={'extra_data': {'trace_id': trace_id, 'timeout': '20s', 'tasks_count': len(quote_tasks)}}
-            )
             return FrontendQuoteResponse(
                 success=False,
                 quotes=[],
+                best_quote=None,
                 request_id=request_id,
                 timestamp=datetime.utcnow().isoformat(),
                 processing_time_ms=int((time.time() - start_time) * 1000),
                 chain=quote_request.chain,
-                message="Quote requests timed out - blockchain network may be slow"
+                message="Quote requests timed out"
             )
         
-        # Filter successful quotes with enhanced logging
+        # Process results
         quotes = []
-        errors = []
         for i, result in enumerate(quote_results):
-            dex_name = successful_adapters[i] if i < len(successful_adapters) else f"adapter_{i}"
-            
+            dex_name = supported_dexs[i] if i < len(supported_dexs) else f"dex_{i}"
             if isinstance(result, DexQuote):
                 quotes.append(result)
-                logger.info(
-                    f"Quote {i+1} successful: {result.dex_name} -> {result.amount_out}",
-                    extra={
-                        'extra_data': {
-                            'trace_id': trace_id,
-                            'dex': result.dex_name,
-                            'dex_version': result.dex_version,
-                            'output': str(result.amount_out),
-                            'price_impact': str(result.price_impact),
-                            'gas_estimate': result.gas_estimate
-                        }
-                    }
-                )
-            elif isinstance(result, Exception):
-                error_msg = str(result)
-                errors.append(f"{dex_name}: {error_msg}")
-                logger.warning(
-                    f"Quote {i+1} failed with exception: {error_msg}",
-                    extra={'extra_data': {'trace_id': trace_id, 'dex': dex_name, 'error': error_msg}}
-                )
+                logger.info(f"Quote {i+1} successful: {dex_name} -> {result.amount_out}")
             elif result is None:
-                error_msg = "Adapter returned None"
-                errors.append(f"{dex_name}: {error_msg}")
-                logger.warning(
-                    f"Quote {i+1} failed: {error_msg}",
-                    extra={'extra_data': {'trace_id': trace_id, 'dex': dex_name, 'error': error_msg}}
-                )
+                logger.warning(f"Quote {i+1} failed: {dex_name} returned None")
+            elif isinstance(result, Exception):
+                logger.warning(f"Quote {i+1} exception: {dex_name} - {str(result)}")
         
         if not quotes:
-            logger.error(
-                f"No successful quotes obtained from any DEX via registry",
-                extra={
-                    'extra_data': {
-                        'trace_id': trace_id,
-                        'requested_dexs': supported_dexs,
-                        'errors': errors,
-                        'chain': quote_request.chain,
-                        'token_addresses_resolved': True,
-                        'token_in_address': token_in_address,
-                        'token_out_address': token_out_address,
-                        'registry_used': True
-                    }
-                }
-            )
             return FrontendQuoteResponse(
                 success=False,
                 quotes=[],
+                best_quote=None,
                 request_id=request_id,
                 timestamp=datetime.utcnow().isoformat(),
                 processing_time_ms=int((time.time() - start_time) * 1000),
                 chain=quote_request.chain,
-                message=f"No quotes available - all {len(quote_tasks)} DEX calls failed. Errors: {'; '.join(errors[:3])}"
+                message="No quotes available from any DEX"
             )
         
         # Convert to frontend format
         frontend_quotes = _convert_to_frontend_format(quotes)
-        
-        if not frontend_quotes:
-            logger.error(
-                f"Failed to convert quotes to frontend format",
-                extra={
-                    'extra_data': {
-                        'trace_id': trace_id,
-                        'original_quotes_count': len(quotes),
-                        'conversion_failed': True
-                    }
-                }
-            )
-            return FrontendQuoteResponse(
-                success=False,
-                quotes=[],
-                request_id=request_id,
-                timestamp=datetime.utcnow().isoformat(),
-                processing_time_ms=int((time.time() - start_time) * 1000),
-                chain=quote_request.chain,
-                message="Quote conversion to frontend format failed"
-            )
-        
-        # Find best quote (highest output)
-        best_quote = max(frontend_quotes, key=lambda q: Decimal(q.output_amount))
+        best_quote = max(frontend_quotes, key=lambda q: Decimal(q.output_amount)) if frontend_quotes else None
         
         processing_time_ms = int((time.time() - start_time) * 1000)
         
-        # Build frontend-compatible response
-        response = FrontendQuoteResponse(
+        logger.info(f"Aggregate quote completed: {len(quotes)} quotes in {processing_time_ms}ms")
+        
+        return FrontendQuoteResponse(
             success=True,
             quotes=frontend_quotes,
             best_quote=best_quote,
@@ -1068,68 +722,15 @@ async def get_aggregate_quotes(request: Request, quote_request: FrontendQuoteReq
             timestamp=datetime.utcnow().isoformat(),
             processing_time_ms=processing_time_ms,
             chain=quote_request.chain,
-            message=f"Retrieved {len(quotes)} real quotes from {len(frontend_quotes)} DEXs via adapter registry"
-        )
-        
-        logger.info(
-            f"Frontend aggregate quote request completed successfully via registry: {request_id}",
-            extra={
-                'extra_data': {
-                    'trace_id': trace_id,
-                    'request_id': request_id,
-                    'quotes_count': len(quotes),
-                    'best_output': best_quote.output_amount,
-                    'processing_time_ms': processing_time_ms,
-                    'successful_dexs': [q.dex for q in frontend_quotes],
-                    'real_data': True,
-                    'frontend_compatible': True,
-                    'token_resolution_success': True,
-                    'registry_success': True,
-                    'multiple_dex_versions': True
-                }
-            }
-        )
-        
-        return response
-        
-    except ValueError as e:
-        logger.error(
-            f"Validation error in aggregate quotes: {e}",
-            extra={
-                'extra_data': {
-                    'trace_id': trace_id,
-                    'request_id': request_id,
-                    'error': str(e),
-                    'request_data': quote_request.dict()
-                }
-            }
-        )
-        return FrontendQuoteResponse(
-            success=False,
-            quotes=[],
-            request_id=request_id,
-            timestamp=datetime.utcnow().isoformat(),
-            processing_time_ms=int((time.time() - start_time) * 1000),
-            chain=quote_request.chain,
-            message=f"Validation error: {str(e)}"
+            message=f"Retrieved {len(quotes)} quotes from {len(frontend_quotes)} DEXs"
         )
         
     except Exception as e:
-        logger.error(
-            f"Unexpected error in aggregate quotes: {e}",
-            extra={
-                'extra_data': {
-                    'trace_id': trace_id,
-                    'request_id': request_id,
-                    'error': str(e),
-                    'error_type': type(e).__name__
-                }
-            },
-            exc_info=True
-        )
+        logger.error(f"Unexpected error in aggregate quotes: {e}", exc_info=True)
         return FrontendQuoteResponse(
             success=False,
             quotes=[],
+            best_quote=None,
             request_id=request_id,
             timestamp=datetime.utcnow().isoformat(),
             processing_time_ms=int((time.time() - start_time) * 1000),
@@ -1138,234 +739,12 @@ async def get_aggregate_quotes(request: Request, quote_request: FrontendQuoteReq
         )
 
 
-@router.get("/", response_model=QuoteResponse)
-async def get_quote(
-    request: Request,
-    chain: str = Query(..., description="Blockchain network"),
-    token_in: str = Query(..., description="Input token address or symbol"),
-    token_out: str = Query(..., description="Output token address or symbol"),
-    amount_in: Decimal = Query(..., description="Amount to trade", gt=0),
-    slippage: Optional[Decimal] = Query(None, description="Max slippage tolerance"),
-    dex_preference: Optional[str] = Query(None, description="Comma-separated DEX names")
-) -> QuoteResponse:
-    """
-    Get comprehensive trading quotes from real DEX contracts with token resolution using registry.
-    
-    This version makes actual blockchain calls to get real quotes
-    instead of returning mock data, with automatic token address resolution
-    and leverages the DEXAdapterRegistry for comprehensive coverage.
-    """
-    start_time = time.time()
-    trace_id = str(uuid.uuid4())
-    request_id = f"quote_{int(start_time)}"
-    
-    logger.info(
-        f"Processing real quote request with DEX registry: {request_id}",
-        extra={
-            'extra_data': {
-                'trace_id': trace_id,
-                'request_id': request_id,
-                'chain': chain,
-                'token_in': token_in,
-                'token_out': token_out,
-                'amount_in': str(amount_in),
-                'token_resolution_enabled': True,
-                'dex_registry_enabled': True
-            }
-        }
-    )
-    
-    try:
-        # CRITICAL: Resolve token addresses first
-        try:
-            token_in_address = _resolve_token_address(token_in, chain.lower(), trace_id)
-            token_out_address = _resolve_token_address(token_out, chain.lower(), trace_id)
-        except ValueError as e:
-            logger.error(
-                f"Token resolution failed in GET quote: {e}",
-                extra={
-                    'extra_data': {
-                        'trace_id': trace_id,
-                        'token_in': token_in,
-                        'token_out': token_out,
-                        'chain': chain
-                    }
-                }
-            )
-            raise HTTPException(status_code=400, detail=f"Token resolution error: {str(e)}")
-        
-        # Validate inputs with resolved addresses
-        quote_request = QuoteRequest(
-            chain=chain,
-            token_in=token_in_address,  # Now hex address
-            token_out=token_out_address,  # Now hex address
-            amount_in=amount_in,
-            slippage=slippage,
-            dex_preference=dex_preference.split(',') if dex_preference else None
-        )
-        
-        # Get supported DEXs for the chain using registry
-        supported_dexs = _get_supported_dexs_from_registry(quote_request.chain, trace_id)
-        dex_order = quote_request.dex_preference or supported_dexs
-        
-        if not supported_dexs:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Chain {quote_request.chain} not yet supported for real quotes"
-            )
-        
-        # Get DEX adapter registry
-        registry = _get_dex_adapter_registry()
-        if not registry:
-            raise HTTPException(
-                status_code=500,
-                detail="DEX adapter registry not available"
-            )
-        
-        # Get chain clients from app state
-        chain_clients = {}
-        if hasattr(request.app.state, 'evm_client'):
-            chain_clients['evm'] = request.app.state.evm_client
-        if hasattr(request.app.state, 'solana_client'):
-            chain_clients['solana'] = request.app.state.solana_client
-        
-        # Get real quotes from adapters using registry
-        quote_tasks = []
-        for dex_name in dex_order:
-            if dex_name in supported_dexs:
-                adapter = registry.get_adapter(dex_name)
-                if adapter is None:
-                    continue
-                task = _get_real_quote_from_adapter(
-                    adapter=adapter,
-                    dex_name=dex_name,
-                    chain=quote_request.chain,
-                    token_in_address=quote_request.token_in,
-                    token_out_address=quote_request.token_out,
-                    amount_in=quote_request.amount_in,
-                    slippage_tolerance=quote_request.slippage,
-                    chain_clients=chain_clients,
-                    trace_id=trace_id
-                )
-                quote_tasks.append(task)
-        
-        # Execute all quote requests concurrently
-        quote_results = await asyncio.gather(*quote_tasks, return_exceptions=True)
-        
-        # Filter successful quotes
-        quotes = []
-        for result in quote_results:
-            if isinstance(result, DexQuote):
-                quotes.append(result)
-            elif isinstance(result, Exception):
-                logger.warning(
-                    f"Quote task failed with exception: {result}",
-                    extra={'extra_data': {'trace_id': trace_id, 'error': str(result)}}
-                )
-        
-        if not quotes:
-            logger.warning(
-                f"No successful quotes obtained via registry",
-                extra={
-                    'extra_data': {
-                        'trace_id': trace_id,
-                        'requested_dexs': dex_order,
-                        'supported_dexs': supported_dexs,
-                        'token_addresses_resolved': True
-                    }
-                }
-            )
-            raise HTTPException(
-                status_code=404,
-                detail="No quotes available - all DEX calls failed"
-            )
-        
-        # Find best quote (highest output)
-        best_quote = max(quotes, key=lambda q: q.amount_out)
-        
-        # Calculate aggregate metrics
-        aggregate_liquidity = sum(q.amount_out for q in quotes)
-        processing_time_ms = int((time.time() - start_time) * 1000)
-        
-        # Build response
-        response = QuoteResponse(
-            request_id=request_id,
-            chain=quote_request.chain,
-            token_in=quote_request.token_in,
-            token_out=quote_request.token_out,
-            amount_in=quote_request.amount_in,
-            quotes=quotes,
-            best_quote=best_quote,
-            aggregate_liquidity=aggregate_liquidity,
-            market_price_usd=None,  # Could be enhanced with price feeds
-            risk_score=Decimal('0.2'),  # Conservative estimate
-            risk_flags=[],
-            timestamp=datetime.utcnow(),
-            expires_at=datetime.utcnow() + timedelta(seconds=30),
-            processing_time_ms=processing_time_ms
-        )
-        
-        logger.info(
-            f"Real quote request completed with registry: {request_id}",
-            extra={
-                'extra_data': {
-                    'trace_id': trace_id,
-                    'request_id': request_id,
-                    'quotes_count': len(quotes),
-                    'best_output': str(best_quote.amount_out),
-                    'processing_time_ms': processing_time_ms,
-                    'successful_dexs': [q.dex_name for q in quotes],
-                    'token_resolution_success': True,
-                    'registry_success': True
-                }
-            }
-        )
-        
-        return response
-        
-    except ValueError as e:
-        logger.error(
-            f"Validation error for quote request: {e}",
-            extra={
-                'extra_data': {
-                    'trace_id': trace_id,
-                    'request_id': request_id,
-                    'error': str(e)
-                }
-            }
-        )
-        raise HTTPException(status_code=400, detail=str(e))
-        
-    except HTTPException:
-        # Re-raise HTTP exceptions as-is
-        raise
-        
-    except Exception as e:
-        logger.error(
-            f"Unexpected error in quote request: {e}",
-            extra={
-                'extra_data': {
-                    'trace_id': trace_id,
-                    'request_id': request_id,
-                    'error': str(e),
-                    'error_type': type(e).__name__
-                }
-            },
-            exc_info=True
-        )
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error: {str(e)}"
-        )
-
-
 @router.get("/supported-dexs")
 async def get_supported_dexs_endpoint() -> Dict[str, List[str]]:
-    """Get list of supported DEXs by chain using registry (real implementations only)."""
+    """Get list of supported DEXs by chain."""
     try:
         registry = _get_dex_adapter_registry()
         if registry:
-            # Use registry to get comprehensive list
             dex_chains = {}
             for chain in ['ethereum', 'bsc', 'polygon', 'base', 'arbitrum', 'solana']:
                 supported = _get_supported_dexs_from_registry(chain, 'endpoint_check')
@@ -1373,34 +752,21 @@ async def get_supported_dexs_endpoint() -> Dict[str, List[str]]:
                     dex_chains[chain] = supported
             return dex_chains
         else:
-            # Fallback to static mapping
             return {
-                "ethereum": ["uniswap_v2", "uniswap_v3"],
-                "bsc": ["pancake", "pancake_v2", "pancake_v3"],
-                "polygon": ["quickswap", "uniswap_v3"],
-                "base": ["uniswap_v2", "uniswap_v3"],
-                "arbitrum": ["uniswap_v2", "uniswap_v3"],
-                "solana": ["jupiter"]
+                "ethereum": ["uniswap_v2"],
+                "bsc": ["pancake"],
+                "polygon": ["quickswap"],
+                "base": ["uniswap_v2"],
+                "arbitrum": ["uniswap_v2"]
             }
     except Exception as e:
-        logger.error(
-            f"Error getting supported DEXs: {e}",
-            extra={'extra_data': {'error': str(e)}},
-            exc_info=True
-        )
-        # Return minimal fallback
-        return {
-            "ethereum": ["uniswap_v2"],
-            "bsc": ["pancake"],
-            "polygon": ["quickswap"],
-            "base": ["uniswap_v2"],
-            "arbitrum": ["uniswap_v2"]
-        }
+        logger.error(f"Error getting supported DEXs: {e}")
+        return {"ethereum": ["uniswap_v2"]}
 
 
 @router.get("/chains")
 async def get_supported_chains() -> Dict[str, Any]:
-    """Get list of supported chains with their details and registry info."""
+    """Get list of supported chains with details."""
     try:
         registry = _get_dex_adapter_registry()
         registry_available = registry is not None
@@ -1424,7 +790,6 @@ async def get_supported_chains() -> Dict[str, Any]:
                 "chain_id": chain_id,
                 "block_time": block_time,
                 "real_quotes": len(supported_dexs) > 0,
-                "token_resolution": chain != "solana",
                 "supported_dexs": supported_dexs,
                 "dex_count": len(supported_dexs)
             })
@@ -1434,40 +799,18 @@ async def get_supported_chains() -> Dict[str, Any]:
             "registry_available": registry_available,
             "total_chains": len([c for c in chains_data if c["real_quotes"]])
         }
-        
     except Exception as e:
-        logger.error(
-            f"Error getting supported chains: {e}",
-            extra={'extra_data': {'error': str(e)}},
-            exc_info=True
-        )
-        # Return fallback data
-        return {
-            "chains": [
-                {
-                    "chain": "ethereum",
-                    "name": "Ethereum Mainnet",
-                    "native_token": "ETH",
-                    "chain_id": 1,
-                    "real_quotes": True,
-                    "token_resolution": True
-                }
-            ],
-            "registry_available": False,
-            "error": "Registry unavailable"
-        }
+        logger.error(f"Error getting chains: {e}")
+        return {"chains": [], "registry_available": False}
 
 
 @router.get("/tokens/{chain}")
 async def get_supported_tokens(chain: str) -> Dict[str, Any]:
-    """Get list of supported tokens for a chain with token resolution info."""
+    """Get list of supported tokens for a chain."""
     chain = chain.lower()
     
     if chain not in TOKEN_ADDRESSES:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Chain {chain} not supported. Available: {list(TOKEN_ADDRESSES.keys())}"
-        )
+        raise HTTPException(status_code=404, detail=f"Chain {chain} not supported")
     
     tokens = TOKEN_ADDRESSES[chain]
     
@@ -1477,43 +820,167 @@ async def get_supported_tokens(chain: str) -> Dict[str, Any]:
             {
                 "symbol": symbol,
                 "address": address,
-                "is_native": address == "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
-                "resolution_enabled": True
+                "is_native": address == "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"
             }
             for symbol, address in tokens.items()
         ],
-        "total_count": len(tokens),
-        "token_resolution_enabled": True,
-        "hex_address_validation": True
+        "total_count": len(tokens)
     }
 
 
 @router.get("/health")
 async def get_quotes_health() -> Dict[str, Any]:
-    """Get health status of quote services with registry and token resolution status."""
+    """Get health status of quote services."""
     try:
-        # Test registry
         registry = _get_dex_adapter_registry()
         registry_status = "operational" if registry else "failed"
-        total_adapters = len(registry.list_available_adapters()) if registry else 0
         
-        # Test token resolution
-        test_resolution_success = True
-        try:
-            test_eth_address = _resolve_token_address("ETH", "ethereum", "health_check")
-            test_usdc_address = _resolve_token_address("USDC", "ethereum", "health_check")
-            if not (test_eth_address.startswith('0x') and test_usdc_address.startswith('0x')):
-                test_resolution_success = False
-        except Exception:
-            test_resolution_success = False
-        
-        # Get supported chains count
-        supported_chains_count = 0
-        if registry:
-            for chain in ['ethereum', 'bsc', 'polygon', 'base', 'arbitrum']:
-                if _get_supported_dexs_from_registry(chain, 'health_check'):
-                    supported_chains_count += 1
-            
+        return {
+            "status": registry_status,
+            "registry": registry.get_status() if registry else None,
+            "timestamp": datetime.utcnow().isoformat()
+        }
     except Exception as e:
-        logger.error(f"Health check error: {e}")
-        registry_status = "failed"
+        return {"status": "error", "error": str(e)}
+
+
+@router.get("/debug/registry")
+async def debug_registry() -> Dict[str, Any]:
+    """Debug endpoint to check DEX registry status."""
+    registry = _get_dex_adapter_registry()
+    if not registry:
+        return {"error": "Registry not initialized"}
+    
+    return {
+        "adapters": registry.list_available_adapters(),
+        "chain_mappings": registry.chain_adapters,
+        "status": registry.get_status()
+    }
+
+
+@router.get("/", response_model=QuoteResponse)
+async def get_quote(
+    request: Request,
+    chain: str = Query(..., description="Blockchain network"),
+    token_in: str = Query(..., description="Input token address or symbol"),
+    token_out: str = Query(..., description="Output token address or symbol"),
+    amount_in: Decimal = Query(..., description="Amount to trade", gt=0),
+    slippage: Optional[Decimal] = Query(None, description="Max slippage tolerance"),
+    dex_preference: Optional[str] = Query(None, description="Comma-separated DEX names")
+) -> QuoteResponse:
+    """Get comprehensive trading quotes from real DEX contracts."""
+    
+    start_time = time.time()
+    trace_id = str(uuid.uuid4())
+    request_id = f"quote_{int(start_time)}"
+    
+    logger.info(f"Processing quote request: {request_id}")
+    
+    try:
+        # Resolve token addresses
+        token_in_address = _resolve_token_address(token_in, chain.lower(), trace_id)
+        token_out_address = _resolve_token_address(token_out, chain.lower(), trace_id)
+        
+        # Validate request
+        quote_request = QuoteRequest(
+            chain=chain,
+            token_in=token_in_address,
+            token_out=token_out_address,
+            amount_in=amount_in,
+            slippage=slippage,
+            dex_preference=dex_preference.split(',') if dex_preference else None
+        )
+        
+        # Get supported DEXs
+        supported_dexs = _get_supported_dexs_from_registry(quote_request.chain, trace_id)
+        if not supported_dexs:
+            raise HTTPException(status_code=400, detail=f"Chain {quote_request.chain} not supported")
+        
+        # Get registry
+        registry = _get_dex_adapter_registry()
+        if not registry:
+            raise HTTPException(status_code=500, detail="DEX adapter registry not available")
+        
+        # Get chain clients
+        chain_clients = {}
+        if hasattr(request.app.state, 'evm_client'):
+            chain_clients['evm'] = request.app.state.evm_client
+        
+        # Get quotes
+        quote_tasks = []
+        dex_order = quote_request.dex_preference or supported_dexs
+        
+        for dex_name in dex_order:
+            if dex_name in supported_dexs:
+                adapter = registry.get_adapter(dex_name)
+                if adapter:
+                    task = _get_real_quote_from_adapter(
+                        adapter=adapter,
+                        dex_name=dex_name,
+                        chain=quote_request.chain,
+                        token_in_address=quote_request.token_in,
+                        token_out_address=quote_request.token_out,
+                        amount_in=quote_request.amount_in,
+                        slippage_tolerance=quote_request.slippage,
+                        chain_clients=chain_clients,
+                        trace_id=trace_id
+                    )
+                    quote_tasks.append(task)
+        
+        # Execute quotes
+        quote_results = await asyncio.gather(*quote_tasks, return_exceptions=True)
+        
+        # Filter successful quotes
+        quotes = [r for r in quote_results if isinstance(r, DexQuote)]
+        
+        if not quotes:
+            raise HTTPException(status_code=404, detail="No quotes available")
+        
+        # Add frontend-compatible field names to each quote for compatibility
+        # The frontend expects 'dex' and 'output_amount' fields
+        for quote in quotes:
+            # Add the frontend field names as additional attributes
+            quote.__dict__['dex'] = quote.dex_name
+            quote.__dict__['output_amount'] = str(quote.amount_out)
+            quote.__dict__['route'] = quote.route_path
+        
+        # Find best quote and add frontend fields to it as well
+        best_quote = max(quotes, key=lambda q: q.amount_out)
+        if best_quote:
+            best_quote.__dict__['dex'] = best_quote.dex_name
+            best_quote.__dict__['output_amount'] = str(best_quote.amount_out)
+            best_quote.__dict__['route'] = best_quote.route_path
+        
+        aggregate_liquidity = sum(q.amount_out for q in quotes)
+        processing_time_ms = int((time.time() - start_time) * 1000)
+        
+        return QuoteResponse(
+            request_id=request_id,
+            chain=quote_request.chain,
+            token_in=quote_request.token_in,
+            token_out=quote_request.token_out,
+            amount_in=quote_request.amount_in,
+            quotes=quotes,
+            best_quote=best_quote,
+            aggregate_liquidity=aggregate_liquidity,
+            market_price_usd=None,
+            risk_score=Decimal('0.2'),
+            risk_flags=[],
+            timestamp=datetime.utcnow(),
+            expires_at=datetime.utcnow() + timedelta(seconds=30),
+            processing_time_ms=processing_time_ms
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
+
+
+
+
+

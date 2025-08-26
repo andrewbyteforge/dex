@@ -243,8 +243,9 @@ class DEXAdapterRegistry:
         """
         Build mapping of chains to their available adapters with FIXED logic.
         
-        This method was the source of the bug - it now properly maps all
-        available adapters to their supported chains.
+        This method now properly maps all available adapters to their supported chains.
+        The bug was that it was checking for supports_chain method which doesn't exist,
+        and not properly using the default mappings fallback.
         """
         chain_mapping = {
             "ethereum": [],
@@ -258,36 +259,60 @@ class DEXAdapterRegistry:
         try:
             default_mappings = self._get_default_chain_mappings()
             
+            # Process each registered adapter
             for dex_name, adapter in self.adapters.items():
                 try:
-                    # First try to use the adapter's supports_chain method if it exists
-                    if hasattr(adapter, 'supports_chain'):
+                    # Check if adapter has explicit chain support method (rare)
+                    if hasattr(adapter, 'supports_chain') and callable(adapter.supports_chain):
+                        logger.debug(f"Checking chain support for {dex_name} using supports_chain method")
                         for chain in chain_mapping.keys():
                             try:
                                 if adapter.supports_chain(chain):
                                     chain_mapping[chain].append(dex_name)
+                                    logger.info(f"Mapped {dex_name} to {chain} via supports_chain method")
                             except Exception as e:
                                 logger.warning(f"Error checking chain support for {dex_name} on {chain}: {e}")
-                    else:
-                        # Use default mappings (FIXED: This is the critical path)
-                        if dex_name in default_mappings:
-                            for chain in default_mappings[dex_name]:
-                                if chain in chain_mapping:
+                                # Fall through to default mappings
+                    
+                    # Always also check default mappings (FIXED: This is now the primary path)
+                    if dex_name in default_mappings:
+                        for chain in default_mappings[dex_name]:
+                            if chain in chain_mapping:
+                                # Avoid duplicates
+                                if dex_name not in chain_mapping[chain]:
                                     chain_mapping[chain].append(dex_name)
-                                    logger.debug(f"Mapped {dex_name} to {chain}")
-                        else:
-                            logger.warning(f"No default mapping found for adapter {dex_name}")
-                            
+                                    logger.info(f"Mapped {dex_name} to {chain} via default mapping")
+                    else:
+                        logger.warning(f"No default mapping found for adapter {dex_name}")
+                        
                 except Exception as e:
-                    logger.error(f"Error processing adapter {dex_name} for chain mapping: {e}")
+                    logger.error(f"Error processing adapter {dex_name} for chain mapping: {e}", exc_info=True)
+            
+            # Log comprehensive mapping results
+            total_mappings = sum(len(adapters) for adapters in chain_mapping.values())
+            logger.info(
+                f"Chain mapping completed: {total_mappings} total mappings across {len(chain_mapping)} chains",
+                extra={
+                    'extra_data': {
+                        'chain_mapping_details': {
+                            chain: adapters for chain, adapters in chain_mapping.items() if adapters
+                        },
+                        'empty_chains': [chain for chain, adapters in chain_mapping.items() if not adapters],
+                        'total_adapters_registered': len(self.adapters),
+                        'total_mappings_created': total_mappings
+                    }
+                }
+            )
+            
+            # Detailed logging for each chain
+            for chain, adapters in chain_mapping.items():
+                if adapters:
+                    logger.info(f"Chain {chain} has {len(adapters)} adapters: {adapters}")
+                else:
+                    logger.debug(f"Chain {chain} has no adapters mapped")
                     
         except Exception as e:
             logger.error(f"Critical error building chain mapping: {e}", exc_info=True)
-        
-        # Log final mapping for debugging
-        for chain, adapters in chain_mapping.items():
-            if adapters:
-                logger.debug(f"Chain {chain} has adapters: {adapters}")
         
         return chain_mapping
     
@@ -308,12 +333,14 @@ class DEXAdapterRegistry:
                 
             adapter = self.adapters.get(dex_name)
             if adapter is None:
-                logger.debug(f"Adapter {dex_name} not found in registry")
+                logger.debug(f"Adapter {dex_name} not found in registry. Available: {list(self.adapters.keys())}")
+            else:
+                logger.debug(f"Retrieved adapter {dex_name} from registry")
                 
             return adapter
             
         except Exception as e:
-            logger.error(f"Error getting adapter {dex_name}: {e}")
+            logger.error(f"Error getting adapter {dex_name}: {e}", exc_info=True)
             return None
     
     def get_adapters_for_chain(self, chain: str) -> List[str]:
@@ -332,11 +359,21 @@ class DEXAdapterRegistry:
                 return []
                 
             adapters = self.chain_adapters.get(chain, [])
-            logger.debug(f"Found {len(adapters)} adapters for chain {chain}: {adapters}")
+            logger.info(
+                f"Retrieved {len(adapters)} adapters for chain {chain}: {adapters}",
+                extra={
+                    'extra_data': {
+                        'chain': chain,
+                        'adapters': adapters,
+                        'adapter_count': len(adapters),
+                        'all_registered_adapters': list(self.adapters.keys())
+                    }
+                }
+            )
             return adapters
             
         except Exception as e:
-            logger.error(f"Error getting adapters for chain {chain}: {e}")
+            logger.error(f"Error getting adapters for chain {chain}: {e}", exc_info=True)
             return []
     
     def list_available_adapters(self) -> List[str]:
@@ -799,7 +836,12 @@ class DEXAdapterRegistry:
             return {
                 "total_adapters": len(self.adapters),
                 "available_adapters": list(self.adapters.keys()),
-                "chain_support": self.chain_adapters,
+                "chain_support": {
+                    chain: adapters for chain, adapters in self.chain_adapters.items()
+                },
+                "chain_adapter_counts": {
+                    chain: len(adapters) for chain, adapters in self.chain_adapters.items()
+                },
                 "adapter_availability": {
                     "uniswap_v3": UNISWAP_V3_AVAILABLE,
                     "pancake_v3": PANCAKE_V3_AVAILABLE,

@@ -175,8 +175,8 @@ class UniswapV3Adapter:
         
         Args:
             chain: Blockchain network
-            token_in: Input token address
-            token_out: Output token address
+            token_in: Input token address or symbol
+            token_out: Output token address or symbol
             amount_in: Input amount in token units
             slippage_tolerance: Slippage tolerance (default: 0.5%)
             chain_clients: Chain client instances
@@ -203,10 +203,23 @@ class UniswapV3Adapter:
             # Get Web3 instance
             w3 = await self._get_web3_instance(chain, chain_clients)
             
-            # Convert addresses and amount
-            token_in_addr = w3.to_checksum_address(token_in)
-            token_out_addr = w3.to_checksum_address(token_out)
-            amount_in_wei = int(amount_in * Decimal(10**18))
+            # CRITICAL FIX: Resolve token symbols to addresses
+            token_in_addr = await self._resolve_token_address(token_in, chain, w3)
+            token_out_addr = await self._resolve_token_address(token_out, chain, w3)
+            
+            if not token_in_addr or not token_out_addr:
+                raise ValueError(f"Failed to resolve token addresses for {token_in} -> {token_out}")
+            
+            # Convert native ETH to WETH for Uniswap V3 compatibility
+            token_in_addr = self._convert_native_to_wrapped(token_in_addr, chain)
+            token_out_addr = self._convert_native_to_wrapped(token_out_addr, chain)
+            
+            # Get token decimals for proper amount conversion
+            token_in_decimals = await self._get_token_decimals(token_in_addr, w3)
+            token_out_decimals = await self._get_token_decimals(token_out_addr, w3)
+            
+            # Convert amount to wei using actual token decimals
+            amount_in_wei = int(amount_in * Decimal(10**token_in_decimals))
             
             # Phase 1: Try quoter contracts first
             best_quote = None
@@ -277,7 +290,7 @@ class UniswapV3Adapter:
                         
                         if direct_result:
                             amount_out, price_impact_calc, gas_estimate = direct_result
-                            amount_out_wei = int(amount_out * Decimal(10**18))
+                            amount_out_wei = int(amount_out * Decimal(10**token_out_decimals))
                             
                             if best_quote is None or amount_out_wei > best_quote:
                                 best_quote = amount_out_wei
@@ -314,8 +327,8 @@ class UniswapV3Adapter:
                     "execution_time_ms": (time.time() - start_time) * 1000,
                 }
             
-            # Convert output amount
-            amount_out = Decimal(best_quote) / Decimal(10**18)
+            # Convert output amount using proper decimals
+            amount_out = Decimal(best_quote) / Decimal(10**token_out_decimals)
             
             # Calculate price and price impact
             price = amount_out / amount_in if amount_in > 0 else Decimal("0")
@@ -363,7 +376,7 @@ class UniswapV3Adapter:
                 "slippage_tolerance": str(slippage_tolerance),
                 "quotes_by_tier": {
                     str(tier): {
-                        "amount_out": str(Decimal(data["amount_out"]) / Decimal(10**18)),
+                        "amount_out": str(Decimal(data["amount_out"]) / Decimal(10**token_out_decimals)),
                         "gas_estimate": int(data["gas_estimate"]),
                     }
                     for tier, data in quotes_by_tier.items()
@@ -393,7 +406,162 @@ class UniswapV3Adapter:
                 "chain": chain,
                 "execution_time_ms": (time.time() - start_time) * 1000,
             }
-    
+
+    async def _resolve_token_address(self, token: str, chain: str, w3: Web3) -> Optional[str]:
+        """
+        Resolve token symbol to contract address.
+        
+        Args:
+            token: Token symbol or address
+            chain: Blockchain network
+            w3: Web3 instance
+            
+        Returns:
+            Checksum address or None if not found
+        """
+        # If already a valid address, return it
+        if token.startswith("0x") and len(token) == 42:
+            try:
+                return w3.to_checksum_address(token)
+            except ValueError:
+                pass
+        
+        # Token address mappings
+        TOKEN_ADDRESSES = {
+            "ethereum": {
+                "ETH": "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
+                "WETH": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+                "USDC": "0xA0b86991508667cdbA7958014F7dfDce2a790A7",
+                "USDT": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+                "WBTC": "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599",
+                "BTC": "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599",
+                "UNI": "0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984",
+                "LINK": "0x514910771AF9Ca656af840dff83E8264EcF986CA",
+                "DAI": "0x6B175474E89094C44Da98b954EedeAC495271d0F"
+            },
+            "bsc": {
+                "BNB": "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
+                "WBNB": "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c",
+                "USDC": "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d",
+                "USDT": "0x55d398326f99059fF775485246999027B3197955",
+                "BTCB": "0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c",
+                "BTC": "0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c",
+                "CAKE": "0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82"
+            },
+            "polygon": {
+                "MATIC": "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
+                "WMATIC": "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
+                "USDC": "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
+                "USDT": "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
+                "WETH": "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
+                "WBTC": "0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6"
+            },
+            "base": {
+                "ETH": "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
+                "WETH": "0x4200000000000000000000000000000000000006",
+                "USDC": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+                "USDbC": "0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA"
+            }
+        }
+        
+        # Look up token address by symbol
+        if chain in TOKEN_ADDRESSES and token.upper() in TOKEN_ADDRESSES[chain]:
+            address = TOKEN_ADDRESSES[chain][token.upper()]
+            return w3.to_checksum_address(address)
+        
+        return None
+
+    async def _get_token_decimals(self, token_address: str, w3: Web3) -> int:
+        """
+        Get token decimals from contract.
+        
+        Args:
+            token_address: Token contract address
+            w3: Web3 instance
+            
+        Returns:
+            Token decimals (default 18 if not found)
+        """
+        try:
+            # Native tokens use 18 decimals
+            if token_address == "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE":
+                return 18
+            
+            # ERC20 decimals ABI
+            decimals_abi = [{
+                "constant": True,
+                "inputs": [],
+                "name": "decimals",
+                "outputs": [{"name": "", "type": "uint8"}],
+                "payable": False,
+                "stateMutability": "view",
+                "type": "function"
+            }]
+            
+            contract = w3.eth.contract(
+                address=w3.to_checksum_address(token_address),
+                abi=decimals_abi
+            )
+            
+            decimals = await asyncio.to_thread(contract.functions.decimals().call)
+            return int(decimals)
+            
+        except Exception as e:
+            logger.debug(f"Failed to get decimals for {token_address}: {e}")
+            return 18  # Default to 18 decimals
+
+    def _convert_native_to_wrapped(self, token_address: str, chain: str) -> str:
+        """
+        Convert native token addresses to wrapped token addresses for Uniswap V3.
+        
+        Uniswap V3 requires wrapped tokens (WETH, WBNB, WMATIC) instead of native tokens.
+        
+        Args:
+            token_address: Token address (may be native token placeholder)
+            chain: Blockchain network
+            
+        Returns:
+            Wrapped token address if native, otherwise original address
+        """
+        NATIVE_TO_WRAPPED = {
+            "ethereum": {
+                "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"  # ETH -> WETH
+            },
+            "bsc": {
+                "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE": "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c"  # BNB -> WBNB
+            },
+            "polygon": {
+                "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE": "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"  # MATIC -> WMATIC
+            },
+            "base": {
+                "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE": "0x4200000000000000000000000000000000000006"  # ETH -> WETH
+            },
+            "arbitrum": {
+                "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE": "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"  # ETH -> WETH
+            }
+        }
+        
+        if chain in NATIVE_TO_WRAPPED and token_address in NATIVE_TO_WRAPPED[chain]:
+            wrapped_address = NATIVE_TO_WRAPPED[chain][token_address]
+            logger.debug(
+                f"Converting native token to wrapped: {token_address} -> {wrapped_address}",
+                extra={'extra_data': {
+                    'chain': chain,
+                    'native_address': token_address,
+                    'wrapped_address': wrapped_address
+                }}
+            )
+            return wrapped_address
+        
+        return token_address
+
+
+
+
+
+
+
+
     async def _get_quote_from_pool_direct(
         self,
         w3: Web3,
@@ -422,10 +590,40 @@ class UniswapV3Adapter:
         """
         try:
             # Get pool address
-            factory_address = self.factory_addresses[chain]
+            factory_address = self.factory_addresses.get(chain)
+            if not factory_address:
+                logger.error(
+                    f"No factory address for chain {chain} in {self.dex_name}",
+                    extra={'extra_data': {
+                        'chain': chain,
+                        'dex_name': self.dex_name,
+                        'available_chains': list(self.factory_addresses.keys())
+                    }}
+                )
+                return None
+                
+            logger.info(
+                f"Using factory address {factory_address} for {self.dex_name} on {chain}",
+                extra={'extra_data': {
+                    'factory_address': factory_address,
+                    'dex_name': self.dex_name,
+                    'chain': chain
+                }}
+            )
+            
             factory_contract = w3.eth.contract(
                 address=w3.to_checksum_address(factory_address),
                 abi=self.factory_abi
+            )
+            
+            logger.info(
+                f"Getting pool for {token_in_addr}/{token_out_addr} fee {fee_tier}",
+                extra={'extra_data': {
+                    'token_in': token_in_addr,
+                    'token_out': token_out_addr,
+                    'fee_tier': fee_tier,
+                    'dex_name': self.dex_name
+                }}
             )
             
             pool_address = await asyncio.to_thread(
@@ -434,7 +632,25 @@ class UniswapV3Adapter:
                 ).call
             )
             
+            logger.info(
+                f"Pool address for fee tier {fee_tier}: {pool_address}",
+                extra={'extra_data': {
+                    'pool_address': pool_address,
+                    'fee_tier': fee_tier,
+                    'dex_name': self.dex_name,
+                    'is_zero': pool_address == "0x0000000000000000000000000000000000000000"
+                }}
+            )
+            
             if pool_address == "0x0000000000000000000000000000000000000000":
+                logger.info(
+                    f"No pool exists for fee tier {fee_tier} on {self.dex_name}",
+                    extra={'extra_data': {
+                        'fee_tier': fee_tier,
+                        'dex_name': self.dex_name,
+                        'token_pair': f"{token_in_addr}/{token_out_addr}"
+                    }}
+                )
                 return None
                 
             # Get pool contract and state
@@ -443,39 +659,186 @@ class UniswapV3Adapter:
                 abi=self.pool_abi
             )
             
-            # Fetch pool state in parallel
-            slot0_task = asyncio.to_thread(pool_contract.functions.slot0().call)
-            token0_task = asyncio.to_thread(pool_contract.functions.token0().call)
-            liquidity_task = asyncio.to_thread(pool_contract.functions.liquidity().call)
-            
-            slot0, token0, liquidity = await asyncio.gather(
-                slot0_task, token0_task, liquidity_task
+            logger.info(
+                f"Fetching pool state for {pool_address}",
+                extra={'extra_data': {
+                    'pool_address': pool_address,
+                    'dex_name': self.dex_name
+                }}
             )
+            
+            # Fetch pool state in parallel
+            try:
+                slot0_task = asyncio.to_thread(pool_contract.functions.slot0().call)
+                token0_task = asyncio.to_thread(pool_contract.functions.token0().call)
+                liquidity_task = asyncio.to_thread(pool_contract.functions.liquidity().call)
+                
+                slot0, token0, liquidity = await asyncio.gather(
+                    slot0_task, token0_task, liquidity_task
+                )
+                
+                logger.info(
+                    f"Pool state fetched - liquidity: {liquidity}, sqrtPriceX96: {slot0[0]}",
+                    extra={'extra_data': {
+                        'liquidity': liquidity,
+                        'sqrt_price_x96': slot0[0],
+                        'tick': slot0[1],
+                        'token0': token0,
+                        'pool_address': pool_address,
+                        'dex_name': self.dex_name
+                    }}
+                )
+            except Exception as e:
+                logger.error(
+                    f"Failed to fetch pool state for {pool_address}: {e}",
+                    extra={'extra_data': {
+                        'pool_address': pool_address,
+                        'error': str(e),
+                        'error_type': type(e).__name__,
+                        'dex_name': self.dex_name
+                    }}
+                )
+                return None
             
             sqrt_price_x96 = slot0[0]
             
             if liquidity == 0:
+                logger.warning(
+                    f"Pool has zero liquidity: {pool_address}",
+                    extra={'extra_data': {
+                        'pool_address': pool_address,
+                        'fee_tier': fee_tier,
+                        'dex_name': self.dex_name
+                    }}
+                )
                 return None
+            
+            # Get token decimals
+            decimals_in = 18  # Default for ETH/WETH
+            decimals_out = 18  # Default
+            
+            try:
+                # Simple decimals ABI
+                decimals_abi = [{"constant":True,"inputs":[],"name":"decimals","outputs":[{"name":"","type":"uint8"}],"type":"function"}]
+                
+                # Try to get decimals for input token (skip for WETH as it might not have decimals function)
+                if token_in_addr.lower() != "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2":  # Not WETH
+                    try:
+                        token_in_contract = w3.eth.contract(address=w3.to_checksum_address(token_in_addr), abi=decimals_abi)
+                        decimals_in = await asyncio.to_thread(token_in_contract.functions.decimals().call)
+                        logger.info(f"Token in decimals: {decimals_in}")
+                    except Exception as e:
+                        logger.debug(f"Could not fetch decimals for token_in (using 18): {e}")
+                        decimals_in = 18
+                
+                # Try to get decimals for output token
+                try:
+                    token_out_contract = w3.eth.contract(address=w3.to_checksum_address(token_out_addr), abi=decimals_abi)
+                    decimals_out = await asyncio.to_thread(token_out_contract.functions.decimals().call)
+                    logger.info(f"Token out decimals: {decimals_out}")
+                except Exception as e:
+                    logger.debug(f"Could not fetch decimals for token_out (using 18): {e}")
+                    decimals_out = 18
+                    
+            except Exception as e:
+                logger.warning(
+                    f"Error fetching token decimals, using defaults: {e}",
+                    extra={'extra_data': {
+                        'error': str(e),
+                        'dex_name': self.dex_name,
+                        'defaults': {'decimals_in': decimals_in, 'decimals_out': decimals_out}
+                    }}
+                )
                 
             # Calculate price direction based on token ordering
             token_in_is_token0 = token_in_addr.lower() == token0.lower()
             
+            logger.info(
+                f"Token ordering - token0: {token0}, token_in_is_token0: {token_in_is_token0}",
+                extra={'extra_data': {
+                    'token0': token0,
+                    'token_in': token_in_addr,
+                    'token_in_is_token0': token_in_is_token0,
+                    'decimals_in': decimals_in,
+                    'decimals_out': decimals_out,
+                    'dex_name': self.dex_name
+                }}
+            )
+            
             # Calculate raw price (token1/token0 ratio)
+            # sqrtPriceX96 = sqrt(token1/token0) * 2^96
             price_raw = (sqrt_price_x96 / (2**96)) ** 2
             
-            # Get correct exchange rate for this trade direction
+            # The price_raw is the actual ratio of token1/token0 amounts (without decimal adjustment)
+            # We need the price in terms of how many output tokens per input token
+            
             if token_in_is_token0:
-                # Swapping token0 for token1
-                exchange_rate = price_raw
+                # Swapping token0 for token1 (e.g., USDC for WETH)
+                # price_raw = token1_amount / token0_amount
+                # We want output/input = token1/token0 = price_raw
+                # But need to adjust for decimal difference
+                exchange_rate = Decimal(str(price_raw)) * (Decimal(10) ** (decimals_in - decimals_out))
             else:
-                # Swapping token1 for token0
-                exchange_rate = 1 / price_raw if price_raw > 0 else 0
+                # Swapping token1 for token0 (e.g., WETH for USDC)
+                # price_raw = token1_amount / token0_amount
+                # We want output/input = token0/token1 = 1/price_raw
+                # But need to adjust for decimal difference
+                if price_raw > 0:
+                    exchange_rate = (Decimal(1) / Decimal(str(price_raw))) * (Decimal(10) ** (decimals_in - decimals_out))
+                else:
+                    exchange_rate = Decimal(0)
+            
+            logger.info(
+                f"Price calculation - raw: {price_raw}, exchange_rate: {exchange_rate}",
+                extra={'extra_data': {
+                    'price_raw': float(price_raw),
+                    'exchange_rate': float(exchange_rate),
+                    'decimals_in': decimals_in,
+                    'decimals_out': decimals_out,
+                    'token_in_is_token0': token_in_is_token0,
+                    'dex_name': self.dex_name
+                }}
+            )
             
             if exchange_rate <= 0:
+                logger.error(
+                    f"Invalid exchange rate: {exchange_rate}",
+                    extra={'extra_data': {
+                        'exchange_rate': float(exchange_rate),
+                        'price_raw': float(price_raw),
+                        'dex_name': self.dex_name
+                    }}
+                )
                 return None
             
-            # Calculate output amount (simple approximation for small trades)
-            amount_out = amount_in * Decimal(str(exchange_rate))
+            # Apply fee to get actual output
+            fee_multiplier = Decimal(1) - (Decimal(fee_tier) / Decimal(1000000))
+            amount_out = amount_in * exchange_rate * fee_multiplier
+            
+            # Sanity check for the output amount (for debugging)
+            if amount_out > Decimal("1e15") or amount_out < Decimal("0.000001"):
+                logger.warning(
+                    f"Output amount may be incorrect: {amount_out}",
+                    extra={'extra_data': {
+                        'amount_out': str(amount_out),
+                        'amount_in': str(amount_in),
+                        'exchange_rate': float(exchange_rate),
+                        'decimals_in': decimals_in,
+                        'decimals_out': decimals_out,
+                        'dex_name': self.dex_name
+                    }}
+                )
+            
+            logger.info(
+                f"Output calculation - amount_in: {amount_in}, amount_out: {amount_out}, fee: {fee_tier}",
+                extra={'extra_data': {
+                    'amount_in': str(amount_in),
+                    'amount_out': str(amount_out),
+                    'fee_tier': fee_tier,
+                    'fee_multiplier': str(fee_multiplier),
+                    'dex_name': self.dex_name
+                }}
+            )
             
             # Estimate price impact based on trade size vs liquidity
             liquidity_decimal = Decimal(liquidity) / Decimal(10**18)
@@ -488,19 +851,39 @@ class UniswapV3Adapter:
             # Standard V3 gas estimate
             gas_estimate = 180000
             
+            logger.info(
+                f"Direct pool quote successful for {self.dex_name}",
+                extra={'extra_data': {
+                    'dex_name': self.dex_name,
+                    'fee_tier': fee_tier,
+                    'amount_in': str(amount_in),
+                    'amount_out': str(amount_out),
+                    'price_impact': str(price_impact),
+                    'pool_address': pool_address,
+                    'liquidity': liquidity
+                }}
+            )
+            
             return amount_out, price_impact, gas_estimate
             
         except Exception as e:
-            logger.debug(
+            logger.error(
                 f"Direct pool calculation failed: {e}",
                 extra={'extra_data': {
                     'chain': chain,
                     'fee_tier': fee_tier,
-                    'error_type': type(e).__name__
-                }}
+                    'error_type': type(e).__name__,
+                    'error': str(e),
+                    'dex_name': self.dex_name,
+                    'token_in': token_in_addr,
+                    'token_out': token_out_addr
+                }},
+                exc_info=True
             )
             return None
-    
+
+
+
     async def _get_web3_instance(
         self, 
         chain: str, 
