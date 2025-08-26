@@ -7,7 +7,8 @@ and WebSocket support with comprehensive error handling.
 """
 
 from __future__ import annotations
-
+# Add this import to your existing backend/app/main.py imports section
+from app.api.ledger import router as ledger_router
 import asyncio
 import logging
 import time
@@ -892,6 +893,8 @@ async def global_exception_handler(request: Request, exc: Exception):
         trace_id = get_trace_id()
     except:
         trace_id = f"trace_{int(time.time())}"
+
+        
     
     # Extract rate limiting context if available
     rate_limit_context = {}
@@ -909,6 +912,8 @@ async def global_exception_handler(request: Request, exc: Exception):
         "error_message": str(exc),
         "rate_limit_context": rate_limit_context
     }
+
+    
     
     # Log different severity based on error type
     if isinstance(exc, HTTPException):
@@ -953,6 +958,8 @@ try:
     
     app.include_router(api_router, prefix="/api/v1")
     logger.info("Main API router included successfully")
+
+    app.include_router(ledger_router)
     
 except ImportError as e:
     logger.error(f"Failed to import main API router: {e}")

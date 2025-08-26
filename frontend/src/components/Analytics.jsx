@@ -474,10 +474,28 @@ function Analytics() {
 
   // Fetch portfolio data when wallet connects or tab changes
   useEffect(() => {
+    console.log('[Analytics] useEffect triggered for portfolio data fetch', {
+      activeTab,
+      isConnected,
+      walletAddress,
+      shouldFetch: activeTab === 'portfolio' && isConnected
+    });
+    
     if (activeTab === 'portfolio' && isConnected) {
+      console.log('[Analytics] Conditions met, calling fetchPortfolioData');
       fetchPortfolioData();
     }
-  }, [activeTab, isConnected, fetchPortfolioData]);
+  }, [activeTab, isConnected, walletAddress, fetchPortfolioData]);
+
+  // Debug effect to log portfolio data changes
+  useEffect(() => {
+    console.log('[Analytics] Portfolio data updated', {
+      positionsCount: portfolioData.positions.length,
+      transactionsCount: portfolioData.transactions.length,
+      totalValue: portfolioData.totalValue,
+      totalPnl: portfolioData.totalPnl
+    });
+  }, [portfolioData]);
 
   // Auto-refresh effect
   useEffect(() => {
@@ -892,6 +910,13 @@ function Analytics() {
    * Render Portfolio Tab Content
    */
   const renderPortfolio = () => {
+    console.log('[Analytics] renderPortfolio called', {
+      isConnected,
+      walletAddress,
+      positionsCount: portfolioData.positions.length,
+      transactionsCount: portfolioData.transactions.length
+    });
+
     if (!isConnected) {
       return (
         <Row>
@@ -902,6 +927,32 @@ function Analytics() {
                 Please connect your wallet to view your portfolio, positions, and transaction history.
               </p>
             </Alert>
+          </Col>
+        </Row>
+      );
+    }
+
+    // If connected but no data, trigger fetch and show loading
+    if (portfolioData.positions.length === 0 && portfolioData.transactions.length === 0) {
+      console.log('[Analytics] No portfolio data, triggering fetch');
+      // Trigger fetch in next tick to avoid infinite render loop
+      setTimeout(() => fetchPortfolioData(), 100);
+      
+      return (
+        <Row>
+          <Col lg={12}>
+            <Card>
+              <Card.Body className="text-center py-5">
+                <Spinner animation="border" className="mb-3" />
+                <p>Loading portfolio data...</p>
+                <Button
+                  variant="outline-primary"
+                  onClick={() => fetchPortfolioData()}
+                >
+                  Manual Refresh
+                </Button>
+              </Card.Body>
+            </Card>
           </Col>
         </Row>
       );

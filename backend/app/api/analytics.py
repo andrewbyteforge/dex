@@ -671,7 +671,7 @@ def _decimalize(mapping: Any) -> Any:
 # Router
 # -----------------------------------------------------------------------------
 router = APIRouter(
-    prefix="/api/analytics",
+    prefix="/analytics",
     tags=["analytics"],
     responses={404: {"description": "Not found"}},
 )
