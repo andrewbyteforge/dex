@@ -1,8 +1,12 @@
 /**
- * Analytics Dashboard Component for DEX Sniper Pro
+ * Enhanced Analytics Dashboard Component for DEX Sniper Pro
  * 
+ * UPDATED: Added dedicated Portfolio tab with position tracking, 
+ * transaction history, and portfolio management features.
  * Comprehensive analytics interface displaying performance metrics,
  * real-time trading data, KPIs, and comparison charts.
+ * 
+ * File: frontend/src/components/Analytics.jsx
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
@@ -18,9 +22,21 @@ import {
   Alert,
   Spinner,
   Table,
-  ProgressBar
+  ProgressBar,
+  Modal,
+  InputGroup,
+  Dropdown
 } from 'react-bootstrap';
-import { LineChart, Line, AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { 
+  LineChart, Line, AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, 
+  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer 
+} from 'recharts';
+import { 
+  TrendingUp, TrendingDown, DollarSign, Activity, 
+  Eye, ExternalLink, Filter, Calendar, Download 
+} from 'lucide-react';
+import { useWallet } from '../hooks/useWallet';
+import { apiClient } from '../config/api.js';
 
 const PERFORMANCE_PERIODS = [
   { value: '1h', label: '1 Hour' },
@@ -51,11 +67,36 @@ const CHART_COLORS = {
 };
 
 function Analytics() {
+  // Wallet integration
+  const { isConnected, walletAddress, selectedChain } = useWallet();
+
   // State management
   const [activeTab, setActiveTab] = useState('overview');
   const [selectedPeriod, setSelectedPeriod] = useState('30d');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  
+  // Portfolio specific state
+  const [portfolioData, setPortfolioData] = useState({
+    positions: [],
+    transactions: [],
+    allocation: {},
+    totalValue: 0,
+    totalPnl: 0,
+    dayChange: 0
+  });
+
+  // Transaction history filters
+  const [transactionFilters, setTransactionFilters] = useState({
+    chain: 'all',
+    status: 'all',
+    timeframe: '30d',
+    search: ''
+  });
+
+  // Position detail modal
+  const [selectedPosition, setSelectedPosition] = useState(null);
+  const [showPositionModal, setShowPositionModal] = useState(false);
   
   // Data state
   const [analyticsData, setAnalyticsData] = useState({
@@ -75,101 +116,238 @@ function Analytics() {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [refreshInterval, setRefreshInterval] = useState(30000); // 30 seconds
 
+  /**
+   * Generate trace ID for logging
+   */
+  const generateTraceId = useCallback(() => {
+    return `analytics_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  }, []);
+
+  /**
+   * Fetch portfolio data from backend APIs
+   */
+  const fetchPortfolioData = useCallback(async () => {
+    if (!isConnected || !walletAddress) {
+      console.log('[Analytics] Wallet not connected, skipping portfolio fetch');
+      return;
+    }
+
+    const traceId = generateTraceId();
+    console.log('[Analytics] Fetching portfolio data', {
+      timestamp: new Date().toISOString(),
+      level: 'info',
+      component: 'Analytics',
+      trace_id: traceId,
+      wallet_address: walletAddress,
+      chain: selectedChain
+    });
+
+    try {
+      // Build query parameters for API calls
+      const positionsParams = new URLSearchParams({ 
+        wallet_address: walletAddress, 
+        chain: selectedChain 
+      });
+      const transactionsParams = new URLSearchParams({ 
+        wallet_address: walletAddress, 
+        limit: '100',
+        ...transactionFilters
+      });
+      const summaryParams = new URLSearchParams({ 
+        wallet_address: walletAddress 
+      });
+
+      // Fetch current positions
+      const positionsResponse = await apiClient(`/api/v1/ledger/positions?${positionsParams}`);
+      
+      // Fetch transaction history  
+      const transactionsResponse = await apiClient(`/api/v1/ledger/transactions?${transactionsParams}`);
+      
+      // Fetch portfolio summary
+      const summaryResponse = await apiClient(`/api/v1/ledger/portfolio-summary?${summaryParams}`);
+
+      const positions = positionsResponse.ok ? (await positionsResponse.json())?.positions || [] : [];
+      const transactions = transactionsResponse.ok ? (await transactionsResponse.json())?.transactions || [] : [];
+      const summary = summaryResponse.ok ? (await summaryResponse.json()) || {} : {};
+
+      // Calculate portfolio metrics
+      const totalValue = positions.reduce((sum, pos) => sum + parseFloat(pos.current_value_usd || 0), 0);
+      const totalPnl = positions.reduce((sum, pos) => sum + parseFloat(pos.unrealized_pnl_usd || 0), 0);
+      const dayChange = summary.daily_change_usd || 0;
+
+      // Calculate asset allocation
+      const allocation = positions.reduce((acc, pos) => {
+        const symbol = pos.token_symbol || 'Unknown';
+        const value = parseFloat(pos.current_value_usd || 0);
+        acc[symbol] = (acc[symbol] || 0) + value;
+        return acc;
+      }, {});
+
+      setPortfolioData({
+        positions,
+        transactions,
+        allocation,
+        totalValue,
+        totalPnl,
+        dayChange
+      });
+
+      console.log('[Analytics] Portfolio data fetched successfully', {
+        timestamp: new Date().toISOString(),
+        level: 'info',
+        component: 'Analytics',
+        trace_id: traceId,
+        positions_count: positions.length,
+        transactions_count: transactions.length,
+        total_value: totalValue
+      });
+
+    } catch (err) {
+      console.error('[Analytics] Failed to fetch portfolio data', {
+        timestamp: new Date().toISOString(),
+        level: 'error',
+        component: 'Analytics',
+        trace_id: traceId,
+        error: err.message,
+        wallet_address: walletAddress
+      });
+      
+      setError('Failed to load portfolio data. Please ensure your wallet is connected and try again.');
+    }
+  }, [isConnected, walletAddress, selectedChain, transactionFilters, apiClient, generateTraceId]);
+
   // Fetch analytics data
   const fetchAnalyticsData = useCallback(async (dataType = 'all') => {
     setLoading(true);
     setError(null);
     
+    const traceId = generateTraceId();
+    
     try {
-      const baseUrl = 'http://127.0.0.1:8001/api/v1/analytics';
+      const baseUrl = '/api/v1/analytics';
       
       // Fetch summary data
       if (dataType === 'all' || dataType === 'summary') {
         try {
-          const response = await fetch(`${baseUrl}/summary`);
+          const response = await apiClient(`${baseUrl}/summary`);
           if (response.ok) {
             const data = await response.json();
             setAnalyticsData(prev => ({ ...prev, summary: data }));
-          } else {
-            console.error('Summary API failed:', response.status, response.statusText);
           }
         } catch (err) {
-          console.error('Summary API error:', err);
+          console.error('[Analytics] Summary API error', {
+            timestamp: new Date().toISOString(),
+            level: 'error',
+            component: 'Analytics',
+            trace_id: traceId,
+            error: err.message
+          });
         }
       }
 
       // Fetch performance data
       if (dataType === 'all' || dataType === 'performance') {
         try {
-          const response = await fetch(`${baseUrl}/performance?period=${selectedPeriod}`);
+          const performanceParams = new URLSearchParams({ period: selectedPeriod });
+          const response = await apiClient(`${baseUrl}/performance?${performanceParams}`);
           if (response.ok) {
             const result = await response.json();
             setAnalyticsData(prev => ({ ...prev, performance: result.data || result }));
-          } else {
-            console.error('Performance API failed:', response.status, response.statusText);
           }
         } catch (err) {
-          console.error('Performance API error:', err);
+          console.error('[Analytics] Performance API error', {
+            timestamp: new Date().toISOString(),
+            level: 'error',
+            component: 'Analytics',
+            trace_id: traceId,
+            error: err.message
+          });
         }
       }
 
       // Fetch real-time data
       if (dataType === 'all' || dataType === 'realtime') {
         try {
-          const response = await fetch(`${baseUrl}/realtime`);
+          const response = await apiClient(`${baseUrl}/realtime`);
           if (response.ok) {
             const result = await response.json();
             setAnalyticsData(prev => ({ ...prev, realtime: result.data || result }));
-          } else {
-            console.error('Realtime API failed:', response.status, response.statusText);
           }
         } catch (err) {
-          console.error('Realtime API error:', err);
+          console.error('[Analytics] Realtime API error', {
+            timestamp: new Date().toISOString(),
+            level: 'error',
+            component: 'Analytics',
+            trace_id: traceId,
+            error: err.message
+          });
         }
       }
 
       // Fetch KPI data
       if (dataType === 'all' || dataType === 'kpi') {
         try {
-          const response = await fetch(`${baseUrl}/kpi?period=${selectedPeriod}`);
+          const kpiParams = new URLSearchParams({ period: selectedPeriod });
+          const response = await apiClient(`${baseUrl}/kpi?${kpiParams}`);
           if (response.ok) {
             const result = await response.json();
             setAnalyticsData(prev => ({ ...prev, kpi: result.data || result }));
-          } else {
-            console.error('KPI API failed:', response.status, response.statusText);
           }
         } catch (err) {
-          console.error('KPI API error:', err);
+          console.error('[Analytics] KPI API error', {
+            timestamp: new Date().toISOString(),
+            level: 'error',
+            component: 'Analytics',
+            trace_id: traceId,
+            error: err.message
+          });
         }
       }
 
       // Fetch alerts data
       if (dataType === 'all' || dataType === 'alerts') {
         try {
-          const response = await fetch(`${baseUrl}/alerts`);
+          const response = await apiClient(`${baseUrl}/alerts`);
           if (response.ok) {
             const result = await response.json();
             setAnalyticsData(prev => ({ ...prev, alerts: result.data || [] }));
-          } else {
-            console.error('Alerts API failed:', response.status, response.statusText);
           }
         } catch (err) {
-          console.error('Alerts API error:', err);
+          console.error('[Analytics] Alerts API error', {
+            timestamp: new Date().toISOString(),
+            level: 'error',
+            component: 'Analytics',
+            trace_id: traceId,
+            error: err.message
+          });
         }
       }
 
     } catch (err) {
-      console.error('Failed to fetch analytics data:', err);
-      setError('Failed to load analytics data. Please ensure the backend server is running on port 8001.');
+      console.error('[Analytics] Failed to fetch analytics data', {
+        timestamp: new Date().toISOString(),
+        level: 'error',
+        component: 'Analytics',
+        trace_id: traceId,
+        error: err.message
+      });
+      setError('Failed to load analytics data. Please ensure the backend server is running.');
     } finally {
       setLoading(false);
     }
-  }, [selectedPeriod]);
+  }, [selectedPeriod, apiClient, generateTraceId]);
 
   // Initial data load
   useEffect(() => {
     fetchAnalyticsData();
   }, [fetchAnalyticsData]);
+
+  // Fetch portfolio data when wallet connects or tab changes
+  useEffect(() => {
+    if (activeTab === 'portfolio' && isConnected) {
+      fetchPortfolioData();
+    }
+  }, [activeTab, isConnected, fetchPortfolioData]);
 
   // Auto-refresh effect
   useEffect(() => {
@@ -177,10 +355,13 @@ function Analytics() {
 
     const interval = setInterval(() => {
       fetchAnalyticsData('realtime');
+      if (activeTab === 'portfolio' && isConnected) {
+        fetchPortfolioData();
+      }
     }, refreshInterval);
 
     return () => clearInterval(interval);
-  }, [autoRefresh, refreshInterval, fetchAnalyticsData]);
+  }, [autoRefresh, refreshInterval, activeTab, isConnected, fetchAnalyticsData, fetchPortfolioData]);
 
   // Period change handler
   const handlePeriodChange = (newPeriod) => {
@@ -204,6 +385,443 @@ function Analytics() {
     if (value === null || value === undefined) return '0.00%';
     const num = typeof value === 'string' ? parseFloat(value) : value;
     return `${num.toFixed(decimals)}%`;
+  };
+
+  // Format token amount
+  const formatTokenAmount = (amount, decimals = 6) => {
+    if (!amount) return '0';
+    const num = typeof amount === 'string' ? parseFloat(amount) : amount;
+    return num.toFixed(decimals);
+  };
+
+  /**
+   * Render Portfolio Overview Cards
+   */
+  const renderPortfolioOverview = () => {
+    const { totalValue, totalPnl, dayChange } = portfolioData;
+
+    return (
+      <Row className="mb-4">
+        <Col lg={3} md={6} className="mb-3">
+          <Card className="h-100">
+            <Card.Body>
+              <div className="d-flex justify-content-between align-items-center">
+                <div>
+                  <h6 className="text-muted mb-1">Portfolio Value</h6>
+                  <h4 className="mb-0">{formatCurrency(totalValue)}</h4>
+                </div>
+                <div className="text-primary">
+                  <DollarSign size={24} />
+                </div>
+              </div>
+            </Card.Body>
+          </Card>
+        </Col>
+
+        <Col lg={3} md={6} className="mb-3">
+          <Card className="h-100">
+            <Card.Body>
+              <div className="d-flex justify-content-between align-items-center">
+                <div>
+                  <h6 className="text-muted mb-1">Total P&L</h6>
+                  <h4 className={`mb-0 ${totalPnl >= 0 ? 'text-success' : 'text-danger'}`}>
+                    {formatCurrency(totalPnl)}
+                  </h4>
+                </div>
+                <div className={totalPnl >= 0 ? 'text-success' : 'text-danger'}>
+                  {totalPnl >= 0 ? <TrendingUp size={24} /> : <TrendingDown size={24} />}
+                </div>
+              </div>
+            </Card.Body>
+          </Card>
+        </Col>
+
+        <Col lg={3} md={6} className="mb-3">
+          <Card className="h-100">
+            <Card.Body>
+              <div className="d-flex justify-content-between align-items-center">
+                <div>
+                  <h6 className="text-muted mb-1">24h Change</h6>
+                  <h4 className={`mb-0 ${dayChange >= 0 ? 'text-success' : 'text-danger'}`}>
+                    {formatCurrency(dayChange)}
+                  </h4>
+                </div>
+                <div className={dayChange >= 0 ? 'text-success' : 'text-danger'}>
+                  <Activity size={24} />
+                </div>
+              </div>
+            </Card.Body>
+          </Card>
+        </Col>
+
+        <Col lg={3} md={6} className="mb-3">
+          <Card className="h-100">
+            <Card.Body>
+              <div className="d-flex justify-content-between align-items-center">
+                <div>
+                  <h6 className="text-muted mb-1">Active Positions</h6>
+                  <h4 className="mb-0 text-info">{portfolioData.positions.length}</h4>
+                </div>
+                <div className="text-info">
+                  <Eye size={24} />
+                </div>
+              </div>
+            </Card.Body>
+          </Card>
+        </Col>
+      </Row>
+    );
+  };
+
+  /**
+   * Render Portfolio Allocation Chart
+   */
+  const renderAllocationChart = () => {
+    const { allocation } = portfolioData;
+    const allocationData = Object.entries(allocation).map(([symbol, value], index) => ({
+      name: symbol,
+      value: parseFloat(value),
+      fill: Object.values(CHART_COLORS)[index % Object.values(CHART_COLORS).length]
+    }));
+
+    if (allocationData.length === 0) {
+      return (
+        <Card className="mb-4">
+          <Card.Header>
+            <h5 className="mb-0">Asset Allocation</h5>
+          </Card.Header>
+          <Card.Body className="text-center py-5">
+            <p className="text-muted">No positions found</p>
+          </Card.Body>
+        </Card>
+      );
+    }
+
+    return (
+      <Card className="mb-4">
+        <Card.Header>
+          <h5 className="mb-0">Asset Allocation</h5>
+        </Card.Header>
+        <Card.Body>
+          <ResponsiveContainer width="100%" height={300}>
+            <PieChart>
+              <Pie
+                data={allocationData}
+                cx="50%"
+                cy="50%"
+                labelLine={false}
+                label={({ name, percent }) => `${name} ${(percent * 100).toFixed(1)}%`}
+                outerRadius={80}
+                fill="#8884d8"
+                dataKey="value"
+              >
+                {allocationData.map((entry, index) => (
+                  <Cell key={`cell-${index}`} fill={entry.fill} />
+                ))}
+              </Pie>
+              <Tooltip formatter={(value) => formatCurrency(value)} />
+              <Legend />
+            </PieChart>
+          </ResponsiveContainer>
+        </Card.Body>
+      </Card>
+    );
+  };
+
+  /**
+   * Render Current Positions Table
+   */
+  const renderPositionsTable = () => {
+    const { positions } = portfolioData;
+
+    if (positions.length === 0) {
+      return (
+        <Card className="mb-4">
+          <Card.Header>
+            <h5 className="mb-0">Current Positions</h5>
+          </Card.Header>
+          <Card.Body className="text-center py-5">
+            <p className="text-muted">No active positions</p>
+          </Card.Body>
+        </Card>
+      );
+    }
+
+    return (
+      <Card className="mb-4">
+        <Card.Header>
+          <div className="d-flex justify-content-between align-items-center">
+            <h5 className="mb-0">Current Positions</h5>
+            <Badge bg="primary">{positions.length} positions</Badge>
+          </div>
+        </Card.Header>
+        <Card.Body className="p-0">
+          <Table responsive hover className="mb-0">
+            <thead className="table-light">
+              <tr>
+                <th>Token</th>
+                <th>Amount</th>
+                <th>Value (USD)</th>
+                <th>Avg Price</th>
+                <th>Current Price</th>
+                <th>P&L</th>
+                <th>Chain</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {positions.map((position, index) => {
+                const pnl = parseFloat(position.unrealized_pnl_usd || 0);
+                const pnlPercent = parseFloat(position.unrealized_pnl_percentage || 0);
+                
+                return (
+                  <tr key={index}>
+                    <td>
+                      <div className="d-flex align-items-center">
+                        <div className="me-2">
+                          <div 
+                            className="rounded-circle bg-primary d-flex align-items-center justify-content-center"
+                            style={{ width: '32px', height: '32px', fontSize: '12px', fontWeight: 'bold' }}
+                          >
+                            {position.token_symbol?.substring(0, 2) || '??'}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="fw-bold">{position.token_symbol}</div>
+                          <small className="text-muted">{position.token_address?.substring(0, 8)}...</small>
+                        </div>
+                      </div>
+                    </td>
+                    <td>{formatTokenAmount(position.balance)}</td>
+                    <td>{formatCurrency(position.current_value_usd)}</td>
+                    <td>{formatCurrency(position.average_buy_price_usd)}</td>
+                    <td>{formatCurrency(position.current_price_usd)}</td>
+                    <td>
+                      <div className={pnl >= 0 ? 'text-success' : 'text-danger'}>
+                        <div>{formatCurrency(pnl)}</div>
+                        <small>({formatPercentage(pnlPercent)})</small>
+                      </div>
+                    </td>
+                    <td>
+                      <Badge bg="secondary">{position.chain}</Badge>
+                    </td>
+                    <td>
+                      <Button
+                        variant="outline-primary"
+                        size="sm"
+                        onClick={() => {
+                          setSelectedPosition(position);
+                          setShowPositionModal(true);
+                        }}
+                      >
+                        <Eye size={14} />
+                      </Button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </Table>
+        </Card.Body>
+      </Card>
+    );
+  };
+
+  /**
+   * Render Transaction History Table
+   */
+  const renderTransactionHistory = () => {
+    const { transactions } = portfolioData;
+
+    const filteredTransactions = transactions.filter(tx => {
+      const matchesChain = transactionFilters.chain === 'all' || tx.chain === transactionFilters.chain;
+      const matchesStatus = transactionFilters.status === 'all' || tx.status === transactionFilters.status;
+      const matchesSearch = !transactionFilters.search || 
+        tx.token_symbol?.toLowerCase().includes(transactionFilters.search.toLowerCase()) ||
+        tx.tx_hash?.toLowerCase().includes(transactionFilters.search.toLowerCase());
+      
+      return matchesChain && matchesStatus && matchesSearch;
+    });
+
+    return (
+      <Card className="mb-4">
+        <Card.Header>
+          <div className="d-flex justify-content-between align-items-center">
+            <h5 className="mb-0">Transaction History</h5>
+            <div className="d-flex gap-2">
+              <InputGroup style={{ width: '200px' }}>
+                <Form.Control
+                  placeholder="Search transactions..."
+                  value={transactionFilters.search}
+                  onChange={(e) => setTransactionFilters(prev => ({ ...prev, search: e.target.value }))}
+                />
+              </InputGroup>
+              <Dropdown>
+                <Dropdown.Toggle variant="outline-secondary" size="sm">
+                  <Filter size={14} className="me-1" />
+                  Filters
+                </Dropdown.Toggle>
+                <Dropdown.Menu>
+                  <Dropdown.Header>Chain</Dropdown.Header>
+                  <Dropdown.Item onClick={() => setTransactionFilters(prev => ({ ...prev, chain: 'all' }))}>
+                    All Chains
+                  </Dropdown.Item>
+                  <Dropdown.Item onClick={() => setTransactionFilters(prev => ({ ...prev, chain: 'ethereum' }))}>
+                    Ethereum
+                  </Dropdown.Item>
+                  <Dropdown.Item onClick={() => setTransactionFilters(prev => ({ ...prev, chain: 'bsc' }))}>
+                    BSC
+                  </Dropdown.Item>
+                  <Dropdown.Divider />
+                  <Dropdown.Header>Status</Dropdown.Header>
+                  <Dropdown.Item onClick={() => setTransactionFilters(prev => ({ ...prev, status: 'all' }))}>
+                    All Status
+                  </Dropdown.Item>
+                  <Dropdown.Item onClick={() => setTransactionFilters(prev => ({ ...prev, status: 'completed' }))}>
+                    Completed
+                  </Dropdown.Item>
+                  <Dropdown.Item onClick={() => setTransactionFilters(prev => ({ ...prev, status: 'failed' }))}>
+                    Failed
+                  </Dropdown.Item>
+                </Dropdown.Menu>
+              </Dropdown>
+            </div>
+          </div>
+        </Card.Header>
+        <Card.Body className="p-0">
+          {filteredTransactions.length === 0 ? (
+            <div className="text-center py-5">
+              <p className="text-muted">No transactions found</p>
+            </div>
+          ) : (
+            <Table responsive hover className="mb-0">
+              <thead className="table-light">
+                <tr>
+                  <th>Time</th>
+                  <th>Type</th>
+                  <th>Token</th>
+                  <th>Amount</th>
+                  <th>Price</th>
+                  <th>Value (USD)</th>
+                  <th>Gas</th>
+                  <th>Status</th>
+                  <th>Chain</th>
+                  <th>Tx</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredTransactions.slice(0, 50).map((tx, index) => (
+                  <tr key={index}>
+                    <td>
+                      <div>{new Date(tx.timestamp).toLocaleDateString()}</div>
+                      <small className="text-muted">{new Date(tx.timestamp).toLocaleTimeString()}</small>
+                    </td>
+                    <td>
+                      <Badge bg={tx.side === 'buy' ? 'success' : 'danger'}>
+                        {tx.side?.toUpperCase()}
+                      </Badge>
+                    </td>
+                    <td>
+                      <div>{tx.token_symbol}</div>
+                      <small className="text-muted">{tx.token_address?.substring(0, 8)}...</small>
+                    </td>
+                    <td>{formatTokenAmount(tx.amount)}</td>
+                    <td>{formatCurrency(tx.price_usd)}</td>
+                    <td>{formatCurrency(tx.value_usd)}</td>
+                    <td>{formatCurrency(tx.gas_cost_usd)}</td>
+                    <td>
+                      <Badge bg={tx.status === 'completed' ? 'success' : 'danger'}>
+                        {tx.status}
+                      </Badge>
+                    </td>
+                    <td>
+                      <Badge bg="secondary">{tx.chain}</Badge>
+                    </td>
+                    <td>
+                      {tx.tx_hash && (
+                        <Button
+                          variant="link"
+                          size="sm"
+                          onClick={() => window.open(`https://etherscan.io/tx/${tx.tx_hash}`, '_blank')}
+                        >
+                          <ExternalLink size={14} />
+                        </Button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+          )}
+        </Card.Body>
+      </Card>
+    );
+  };
+
+  /**
+   * Render Portfolio Tab Content
+   */
+  const renderPortfolio = () => {
+    if (!isConnected) {
+      return (
+        <Row>
+          <Col lg={12}>
+            <Alert variant="info">
+              <h5>Connect Your Wallet</h5>
+              <p className="mb-0">
+                Please connect your wallet to view your portfolio, positions, and transaction history.
+              </p>
+            </Alert>
+          </Col>
+        </Row>
+      );
+    }
+
+    return (
+      <>
+        {renderPortfolioOverview()}
+        
+        <Row>
+          <Col lg={8}>
+            {renderPositionsTable()}
+            {renderTransactionHistory()}
+          </Col>
+          
+          <Col lg={4}>
+            {renderAllocationChart()}
+            
+            {/* Portfolio Performance Chart */}
+            <Card className="mb-4">
+              <Card.Header>
+                <h5 className="mb-0">Performance Trend</h5>
+              </Card.Header>
+              <Card.Body>
+                <ResponsiveContainer width="100%" height={200}>
+                  <LineChart data={[
+                    { name: '7d ago', value: portfolioData.totalValue * 0.95 },
+                    { name: '5d ago', value: portfolioData.totalValue * 0.97 },
+                    { name: '3d ago', value: portfolioData.totalValue * 0.99 },
+                    { name: '1d ago', value: portfolioData.totalValue * 1.01 },
+                    { name: 'Now', value: portfolioData.totalValue }
+                  ]}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="name" />
+                    <YAxis />
+                    <Tooltip formatter={(value) => formatCurrency(value)} />
+                    <Line 
+                      type="monotone" 
+                      dataKey="value" 
+                      stroke={CHART_COLORS.primary} 
+                      strokeWidth={2}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </Card.Body>
+            </Card>
+          </Col>
+        </Row>
+      </>
+    );
   };
 
   // Render overview tab
@@ -645,6 +1263,17 @@ function Analytics() {
             </Nav.Item>
             <Nav.Item>
               <Nav.Link 
+                active={activeTab === 'portfolio'} 
+                onClick={() => setActiveTab('portfolio')}
+              >
+                Portfolio
+                {isConnected && portfolioData.positions.length > 0 && (
+                  <Badge bg="primary" className="ms-1">{portfolioData.positions.length}</Badge>
+                )}
+              </Nav.Link>
+            </Nav.Item>
+            <Nav.Item>
+              <Nav.Link 
                 active={activeTab === 'performance'} 
                 onClick={() => setActiveTab('performance')}
               >
@@ -666,9 +1295,71 @@ function Analytics() {
       {/* Tab Content */}
       <>
         {activeTab === 'overview' && renderOverview()}
+        {activeTab === 'portfolio' && renderPortfolio()}
         {activeTab === 'performance' && renderPerformance()}
         {activeTab === 'comparisons' && renderComparisons()}
       </>
+
+      {/* Position Detail Modal */}
+      <Modal show={showPositionModal} onHide={() => setShowPositionModal(false)} size="lg">
+        <Modal.Header closeButton>
+          <Modal.Title>Position Details</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          {selectedPosition && (
+            <Row>
+              <Col md={6}>
+                <h5>{selectedPosition.token_symbol}</h5>
+                <p className="text-muted">{selectedPosition.token_address}</p>
+                <Table borderless>
+                  <tbody>
+                    <tr>
+                      <td><strong>Balance:</strong></td>
+                      <td>{formatTokenAmount(selectedPosition.balance)}</td>
+                    </tr>
+                    <tr>
+                      <td><strong>Current Value:</strong></td>
+                      <td>{formatCurrency(selectedPosition.current_value_usd)}</td>
+                    </tr>
+                    <tr>
+                      <td><strong>Average Buy Price:</strong></td>
+                      <td>{formatCurrency(selectedPosition.average_buy_price_usd)}</td>
+                    </tr>
+                    <tr>
+                      <td><strong>Current Price:</strong></td>
+                      <td>{formatCurrency(selectedPosition.current_price_usd)}</td>
+                    </tr>
+                    <tr>
+                      <td><strong>Unrealized P&L:</strong></td>
+                      <td className={parseFloat(selectedPosition.unrealized_pnl_usd || 0) >= 0 ? 'text-success' : 'text-danger'}>
+                        {formatCurrency(selectedPosition.unrealized_pnl_usd)} 
+                        ({formatPercentage(selectedPosition.unrealized_pnl_percentage)})
+                      </td>
+                    </tr>
+                    <tr>
+                      <td><strong>Chain:</strong></td>
+                      <td><Badge bg="secondary">{selectedPosition.chain}</Badge></td>
+                    </tr>
+                  </tbody>
+                </Table>
+              </Col>
+              <Col md={6}>
+                <h6>Position Timeline</h6>
+                <div className="text-muted">
+                  <small>First Purchase: {selectedPosition.first_purchase_date || 'N/A'}</small><br />
+                  <small>Last Update: {selectedPosition.last_update_date || 'N/A'}</small><br />
+                  <small>Total Transactions: {selectedPosition.transaction_count || 0}</small>
+                </div>
+              </Col>
+            </Row>
+          )}
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setShowPositionModal(false)}>
+            Close
+          </Button>
+        </Modal.Footer>
+      </Modal>
     </Container>
   );
 }
