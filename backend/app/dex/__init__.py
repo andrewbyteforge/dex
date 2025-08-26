@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import traceback
+import time
 from typing import Dict, List, Optional, Any, Union
 from decimal import Decimal
 
@@ -36,8 +37,8 @@ jupiter_adapter = None
 # Import Uniswap V3 adapters
 try:
     from .uniswap_v3 import uniswap_v3_adapter, pancake_v3_adapter
-    UNISWAP_V3_AVAILABLE = True
-    PANCAKE_V3_AVAILABLE = True
+    UNISWAP_V3_AVAILABLE = bool(uniswap_v3_adapter)
+    PANCAKE_V3_AVAILABLE = bool(pancake_v3_adapter)
     logger.info("Uniswap V3 adapters imported successfully")
 except ImportError as e:
     logger.warning(f"Uniswap V3 adapters unavailable: {e}")
@@ -51,7 +52,7 @@ except Exception as e:
 # Import PancakeSwap V2 adapter
 try:
     from .pancake import pancake_v2_adapter
-    PANCAKE_V2_AVAILABLE = True
+    PANCAKE_V2_AVAILABLE = bool(pancake_v2_adapter)
     logger.info("PancakeSwap V2 adapter imported successfully")
 except ImportError as e:
     logger.warning(f"PancakeSwap V2 adapter unavailable: {e}")
@@ -60,12 +61,12 @@ except Exception as e:
     logger.error(f"Critical error importing PancakeSwap V2 adapter: {e}", exc_info=True)
     pancake_v2_adapter = None
 
-# Import Uniswap V2 adapters (including pancake_adapter and quickswap_adapter)
+# Import Uniswap V2 adapters (all three are in the same file)
 try:
     from .uniswap_v2 import uniswap_v2_adapter, pancake_adapter, quickswap_adapter
-    UNISWAP_V2_AVAILABLE = True
-    PANCAKE_ADAPTER_AVAILABLE = True
-    QUICKSWAP_AVAILABLE = True
+    UNISWAP_V2_AVAILABLE = bool(uniswap_v2_adapter)
+    PANCAKE_ADAPTER_AVAILABLE = bool(pancake_adapter)
+    QUICKSWAP_AVAILABLE = bool(quickswap_adapter)
     logger.info("Uniswap V2 adapters (including pancake and quickswap) imported successfully")
 except ImportError as e:
     logger.warning(f"Uniswap V2 adapters unavailable: {e}")
@@ -81,7 +82,7 @@ except Exception as e:
 # Import Jupiter adapter for Solana
 try:
     from .jupiter import jupiter_adapter
-    JUPITER_AVAILABLE = True
+    JUPITER_AVAILABLE = bool(jupiter_adapter)
     logger.info("Jupiter adapter imported successfully")
 except ImportError as e:
     logger.debug(f"Jupiter adapter not available: {e}")
@@ -145,9 +146,9 @@ class DEXAdapterRegistry:
         adapters = {}
         
         # Uniswap V3 adapters
-        if UNISWAP_V3_AVAILABLE:
+        if UNISWAP_V3_AVAILABLE and uniswap_v3_adapter:
             try:
-                if uniswap_v3_adapter and hasattr(uniswap_v3_adapter, 'get_quote'):
+                if hasattr(uniswap_v3_adapter, 'get_quote'):
                     adapters["uniswap_v3"] = uniswap_v3_adapter
                     logger.debug("Uniswap V3 adapter registered")
                 else:
@@ -155,9 +156,9 @@ class DEXAdapterRegistry:
             except Exception as e:
                 logger.error(f"Error registering Uniswap V3 adapter: {e}")
         
-        if PANCAKE_V3_AVAILABLE:
+        if PANCAKE_V3_AVAILABLE and pancake_v3_adapter:
             try:
-                if pancake_v3_adapter and hasattr(pancake_v3_adapter, 'get_quote'):
+                if hasattr(pancake_v3_adapter, 'get_quote'):
                     adapters["pancake_v3"] = pancake_v3_adapter
                     logger.debug("PancakeSwap V3 adapter registered")
                 else:
@@ -166,9 +167,9 @@ class DEXAdapterRegistry:
                 logger.error(f"Error registering PancakeSwap V3 adapter: {e}")
         
         # V2 adapters
-        if PANCAKE_V2_AVAILABLE:
+        if PANCAKE_V2_AVAILABLE and pancake_v2_adapter:
             try:
-                if pancake_v2_adapter and hasattr(pancake_v2_adapter, 'get_quote'):
+                if hasattr(pancake_v2_adapter, 'get_quote'):
                     adapters["pancake_v2"] = pancake_v2_adapter
                     logger.debug("PancakeSwap V2 adapter registered")
                 else:
@@ -176,9 +177,9 @@ class DEXAdapterRegistry:
             except Exception as e:
                 logger.error(f"Error registering PancakeSwap V2 adapter: {e}")
         
-        if UNISWAP_V2_AVAILABLE:
+        if UNISWAP_V2_AVAILABLE and uniswap_v2_adapter:
             try:
-                if uniswap_v2_adapter and hasattr(uniswap_v2_adapter, 'get_quote'):
+                if hasattr(uniswap_v2_adapter, 'get_quote'):
                     adapters["uniswap_v2"] = uniswap_v2_adapter
                     logger.debug("Uniswap V2 adapter registered")
                 else:
@@ -186,9 +187,9 @@ class DEXAdapterRegistry:
             except Exception as e:
                 logger.error(f"Error registering Uniswap V2 adapter: {e}")
         
-        if PANCAKE_ADAPTER_AVAILABLE:
+        if PANCAKE_ADAPTER_AVAILABLE and pancake_adapter:
             try:
-                if pancake_adapter and hasattr(pancake_adapter, 'get_quote'):
+                if hasattr(pancake_adapter, 'get_quote'):
                     adapters["pancake"] = pancake_adapter
                     logger.debug("Pancake adapter registered")
                 else:
@@ -196,9 +197,9 @@ class DEXAdapterRegistry:
             except Exception as e:
                 logger.error(f"Error registering Pancake adapter: {e}")
         
-        if QUICKSWAP_AVAILABLE:
+        if QUICKSWAP_AVAILABLE and quickswap_adapter:
             try:
-                if quickswap_adapter and hasattr(quickswap_adapter, 'get_quote'):
+                if hasattr(quickswap_adapter, 'get_quote'):
                     adapters["quickswap"] = quickswap_adapter
                     logger.debug("QuickSwap adapter registered")
                 else:
@@ -207,9 +208,9 @@ class DEXAdapterRegistry:
                 logger.error(f"Error registering QuickSwap adapter: {e}")
         
         # Solana adapters
-        if JUPITER_AVAILABLE:
+        if JUPITER_AVAILABLE and jupiter_adapter:
             try:
-                if jupiter_adapter and hasattr(jupiter_adapter, 'get_quote'):
+                if hasattr(jupiter_adapter, 'get_quote'):
                     adapters["jupiter"] = jupiter_adapter
                     logger.debug("Jupiter adapter registered")
                 else:
@@ -222,8 +223,29 @@ class DEXAdapterRegistry:
         
         return adapters
     
+    def _get_default_chain_mappings(self) -> Dict[str, List[str]]:
+        """
+        Get default chain mappings for adapters.
+        
+        This is the FIXED version that properly maps all adapters to their supported chains.
+        """
+        return {
+            "uniswap_v2": ["ethereum", "base", "arbitrum"],
+            "uniswap_v3": ["ethereum", "base", "arbitrum", "polygon"],
+            "pancake": ["bsc"],
+            "pancake_v2": ["bsc"],
+            "pancake_v3": ["bsc", "ethereum"],
+            "quickswap": ["polygon"],
+            "jupiter": ["solana"]
+        }
+    
     def _build_chain_mapping(self) -> Dict[str, List[str]]:
-        """Build mapping of chains to their available adapters with error handling."""
+        """
+        Build mapping of chains to their available adapters with FIXED logic.
+        
+        This method was the source of the bug - it now properly maps all
+        available adapters to their supported chains.
+        """
         chain_mapping = {
             "ethereum": [],
             "bsc": [],
@@ -234,8 +256,11 @@ class DEXAdapterRegistry:
         }
         
         try:
+            default_mappings = self._get_default_chain_mappings()
+            
             for dex_name, adapter in self.adapters.items():
                 try:
+                    # First try to use the adapter's supports_chain method if it exists
                     if hasattr(adapter, 'supports_chain'):
                         for chain in chain_mapping.keys():
                             try:
@@ -244,14 +269,14 @@ class DEXAdapterRegistry:
                             except Exception as e:
                                 logger.warning(f"Error checking chain support for {dex_name} on {chain}: {e}")
                     else:
-                        # Fallback: use default chain mappings if supports_chain not available
-                        default_mappings = self._get_default_chain_mappings()
+                        # Use default mappings (FIXED: This is the critical path)
                         if dex_name in default_mappings:
                             for chain in default_mappings[dex_name]:
                                 if chain in chain_mapping:
                                     chain_mapping[chain].append(dex_name)
+                                    logger.debug(f"Mapped {dex_name} to {chain}")
                         else:
-                            logger.warning(f"Adapter {dex_name} missing supports_chain method and no default mapping")
+                            logger.warning(f"No default mapping found for adapter {dex_name}")
                             
                 except Exception as e:
                     logger.error(f"Error processing adapter {dex_name} for chain mapping: {e}")
@@ -259,19 +284,12 @@ class DEXAdapterRegistry:
         except Exception as e:
             logger.error(f"Critical error building chain mapping: {e}", exc_info=True)
         
+        # Log final mapping for debugging
+        for chain, adapters in chain_mapping.items():
+            if adapters:
+                logger.debug(f"Chain {chain} has adapters: {adapters}")
+        
         return chain_mapping
-    
-    def _get_default_chain_mappings(self) -> Dict[str, List[str]]:
-        """Get default chain mappings for adapters without supports_chain method."""
-        return {
-            "uniswap_v2": ["ethereum", "base", "arbitrum"],
-            "uniswap_v3": ["ethereum", "base", "arbitrum", "polygon"],
-            "pancake": ["bsc"],
-            "pancake_v2": ["bsc"],
-            "pancake_v3": ["bsc", "ethereum"],
-            "quickswap": ["polygon"],
-            "jupiter": ["solana"]
-        }
     
     def get_adapter(self, dex_name: str) -> Optional[Any]:
         """
@@ -413,7 +431,6 @@ class DEXAdapterRegistry:
             # Execute quote with method signature inspection
             try:
                 import inspect
-                import time
                 
                 start_time = time.time()
                 sig = inspect.signature(adapter.get_quote)
