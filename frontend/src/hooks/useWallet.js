@@ -382,91 +382,109 @@ export const useWallet = (options = {}) => {
    * Restore connection with proper state management
    */
   const restoreConnection = useCallback(async (connectionData, parentTraceId = null) => {
-    const trace_id = logWalletEvent('debug', 'Attempting to restore wallet connection', {
+  const trace_id = logWalletEvent('debug', 'Attempting to restore wallet connection', {
+    wallet_type: connectionData.walletType,
+    wallet_address: connectionData.walletAddress,
+    chain: connectionData.selectedChain,
+    parent_trace: parentTraceId
+  });
+
+  try {
+    const { walletType: storedWalletType, selectedChain: storedChain, walletAddress: storedAddress } = connectionData;
+
+    let isStillConnected = false;
+
+    if (storedChain === 'solana') {
+      if (typeof solanaWalletService.checkConnection === 'function') {
+        isStillConnected = await solanaWalletService.checkConnection(storedAddress, storedChain);
+      } else {
+        logWalletEvent('warn', 'Solana wallet service checkConnection method not available', {
+          trace_id,
+          wallet_address: storedAddress,
+          wallet_type: storedWalletType,
+          chain: storedChain
+        });
+        isStillConnected = true;
+      }
+    } else {
+      if (typeof walletService.checkConnection === 'function') {
+        const result = await walletService.checkConnection(storedAddress, storedChain);
+
+        // DEBUG LOGGING
+        console.log('🔍 [DEBUG] checkConnection result:', result);
+        console.log('🔍 [DEBUG] result.success:', result?.success);
+        console.log('🔍 [DEBUG] result.connected:', result?.connected);
+
+        isStillConnected = result && result.success && result.connected;
+
+        logWalletEvent('debug', 'Connection check result detailed', {
+          raw_result: result,
+          has_result: !!result,
+          has_success: result ? ('success' in result) : false,
+          success_value: result?.success,
+          has_connected: result ? ('connected' in result) : false,
+          connected_value: result?.connected,
+          final_is_connected: isStillConnected,
+          trace_id
+        });
+      } else {
+        logWalletEvent('warn', 'Wallet service checkConnection method not available', {
+          trace_id,
+          wallet_address: storedAddress,
+          wallet_type: storedWalletType,
+          chain: storedChain
+        });
+        isStillConnected = true;
+      }
+    }
+
+    if (isStillConnected) {
+      setWalletAddress(storedAddress);
+      setWalletType(storedWalletType);
+      setSelectedChain(storedChain);
+      setIsConnected(true);
+      setNetworkStatus('connected');
+      setConnectionError(null);
+      setConnectionRetryCount(0);
+
+      logWalletEvent('info', 'Wallet connection restored successfully', {
+        wallet_address: storedAddress,
+        wallet_type: storedWalletType,
+        chain: storedChain,
+        trace_id
+      });
+
+      setTimeout(() => {
+        if (mountedRef.current) {
+          startBalanceUpdates();
+        }
+      }, 100);
+
+      return true;
+    } else {
+      logWalletEvent('info', 'Persisted wallet no longer connected, clearing data', {
+        is_still_connected: isStillConnected,
+        component_mounted: mountedRef.current,
+        wallet_address: storedAddress,
+        wallet_type: storedWalletType,
+        chain: storedChain,
+        trace_id
+      });
+
+      localStorage.removeItem('dex_wallet_connection');
+      return false;
+    }
+
+  } catch (error) {
+    logWalletEvent('error', 'Failed to restore wallet connection', {
+      error: error.message,
       wallet_type: connectionData.walletType,
       wallet_address: connectionData.walletAddress,
       chain: connectionData.selectedChain,
-      parent_trace: parentTraceId
+      trace_id
     });
-
-    try {
-      const { walletType: storedWalletType, selectedChain: storedChain, walletAddress: storedAddress } = connectionData;
-
-      let isStillConnected = false;
-
-      if (storedChain === 'solana') {
-        if (typeof solanaWalletService.checkConnection === 'function') {
-          isStillConnected = await solanaWalletService.checkConnection(storedWalletType);
-        } else {
-          logWalletEvent('warn', 'Solana wallet service checkConnection method not available', { 
-            trace_id,
-            wallet_address: storedAddress,
-            wallet_type: storedWalletType,
-            chain: storedChain
-          });
-          isStillConnected = true;
-        }
-      } else {
-        if (typeof walletService.checkConnection === 'function') {
-          isStillConnected = await walletService.checkConnection(storedWalletType);
-        } else {
-          logWalletEvent('warn', 'Wallet service checkConnection method not available', { 
-            trace_id,
-            wallet_address: storedAddress,
-            wallet_type: storedWalletType,
-            chain: storedChain
-          });
-          isStillConnected = true;
-        }
-      }
-
-      if (isStillConnected && mountedRef.current) {
-        setWalletAddress(storedAddress);
-        setWalletType(storedWalletType);
-        setSelectedChain(storedChain);
-        setIsConnected(true);
-        setNetworkStatus('connected');
-        setConnectionError(null);
-        setConnectionRetryCount(0);
-
-        logWalletEvent('info', 'Wallet connection restored successfully', {
-          wallet_address: storedAddress,
-          wallet_type: storedWalletType,
-          chain: storedChain,
-          trace_id
-        });
-
-        setTimeout(() => {
-          if (mountedRef.current) {
-            startBalanceUpdates();
-          }
-        }, 100);
-
-        return true;
-      } else {
-        logWalletEvent('info', 'Persisted wallet no longer connected, clearing data', {
-          is_still_connected: isStillConnected,
-          component_mounted: mountedRef.current,
-          wallet_address: storedAddress,
-          wallet_type: storedWalletType,
-          chain: storedChain,
-          trace_id
-        });
-        
-        localStorage.removeItem('dex_wallet_connection');
-        return false;
-      }
-
-    } catch (error) {
-      logWalletEvent('error', 'Failed to restore wallet connection', {
-        error: error.message,
-        wallet_type: connectionData.walletType,
-        wallet_address: connectionData.walletAddress,
-        chain: connectionData.selectedChain,
-        trace_id
-      });
-      return false;
-    }
+    return false;
+  }
   }, []);
 
   /**

@@ -479,6 +479,33 @@ class JWTManager:
         logger.info(f"Blacklist cleanup requested, current size: {len(self._blacklisted_tokens)}")
         return 0
 
+def verify_jwt_token(token: str) -> TokenData:
+    """
+    Verify JWT token using the global JWT manager.
+    
+    This function provides a simple interface for token verification
+    that integrates with the existing JWTManager.
+    
+    Args:
+        token: JWT token to verify
+        
+    Returns:
+        TokenData: Decoded token information
+        
+    Raises:
+        HTTPException: If token is invalid or expired
+    """
+    try:
+        return jwt_manager.validate_token(token, TokenType.ACCESS)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Token verification failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token verification failed"
+        )
+
 
 # Global JWT manager instance
 jwt_manager = JWTManager()

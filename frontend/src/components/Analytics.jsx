@@ -1,9 +1,8 @@
 /**
  * Enhanced Analytics Dashboard Component for DEX Sniper Pro
  * 
- * UPDATED: Fixed undefined variable references and improved wallet connection handling.
- * Added dedicated Portfolio tab with position tracking, transaction history, and portfolio management features.
- * Comprehensive analytics interface displaying performance metrics, real-time trading data, KPIs, and comparison charts.
+ * UPDATED: Fixed all React hooks violations, undefined variables, and wallet connection issues.
+ * Added proper authentication headers for API calls and corrected portfolio data handling.
  * 
  * File: frontend/src/components/Analytics.jsx
  */
@@ -66,8 +65,8 @@ const CHART_COLORS = {
 };
 
 function Analytics() {
-  // Wallet integration
-  const { isConnected, walletAddress, selectedChain } = useWallet();
+  // Wallet integration - use the hook at component level
+  const { isConnected, walletAddress, selectedChain, walletType } = useWallet();
 
   // State management
   const [activeTab, setActiveTab] = useState('overview');
@@ -123,228 +122,271 @@ function Analytics() {
   }, []);
 
   /**
-   * Fetch portfolio data from backend APIs (with demo data fallback)
+   * Demo data generators
+   */
+  const getDemoPositions = useCallback(() => [
+    {
+      token_symbol: 'ETH',
+      token_address: '0x0000000000000000000000000000000000000000',
+      chain: 'ethereum',
+      balance: '2.5',
+      current_value_usd: '5000',
+      average_buy_price_usd: '1800',
+      current_price_usd: '2000',
+      unrealized_pnl_usd: '500',
+      unrealized_pnl_percentage: '11.11'
+    },
+    {
+      token_symbol: 'USDC',
+      token_address: '0xa0b86a33e6441d346b3c0c8c1a5c0e3d78f9cc74',
+      chain: 'ethereum',
+      balance: '7500',
+      current_value_usd: '7500',
+      average_buy_price_usd: '1.00',
+      current_price_usd: '1.00',
+      unrealized_pnl_usd: '0',
+      unrealized_pnl_percentage: '0'
+    },
+    {
+      token_symbol: 'MATIC',
+      token_address: '0x7d1afa7b718fb893db30a3abc0cfc608aacfebb0',
+      chain: 'polygon',
+      balance: '1000',
+      current_value_usd: '750',
+      average_buy_price_usd: '0.80',
+      current_price_usd: '0.75',
+      unrealized_pnl_usd: '-50',
+      unrealized_pnl_percentage: '-6.25'
+    }
+  ], []);
+
+  const getDemoTransactions = useCallback(() => [
+    {
+      timestamp: new Date(Date.now() - 86400000).toISOString(),
+      side: 'buy',
+      token_symbol: 'ETH',
+      token_address: '0x0000000000000000000000000000000000000000',
+      amount: '1.0',
+      price_usd: '2000',
+      value_usd: '2000',
+      gas_cost_usd: '25',
+      status: 'completed',
+      chain: 'ethereum',
+      tx_hash: '0x1234567890abcdef1234567890abcdef12345678'
+    },
+    {
+      timestamp: new Date(Date.now() - 172800000).toISOString(),
+      side: 'buy',
+      token_symbol: 'USDC',
+      token_address: '0xa0b86a33e6441d346b3c0c8c1a5c0e3d78f9cc74',
+      amount: '5000',
+      price_usd: '1.00',
+      value_usd: '5000',
+      gas_cost_usd: '15',
+      status: 'completed',
+      chain: 'ethereum',
+      tx_hash: '0xabcdef1234567890abcdef1234567890abcdef12'
+    },
+    {
+      timestamp: new Date(Date.now() - 259200000).toISOString(),
+      side: 'buy',
+      token_symbol: 'MATIC',
+      token_address: '0x7d1afa7b718fb893db30a3abc0cfc608aacfebb0',
+      amount: '1000',
+      price_usd: '0.80',
+      value_usd: '800',
+      gas_cost_usd: '2',
+      status: 'completed',
+      chain: 'polygon',
+      tx_hash: '0xfedcba0987654321fedcba0987654321fedcba09'
+    }
+  ], []);
+
+  /**
+   * Fetch portfolio data from backend APIs with proper authentication
    */
   const fetchPortfolioData = useCallback(async () => {
-    if (!isConnected || !walletAddress) {
-      console.log('[Analytics] Wallet not connected, skipping portfolio fetch');
-      return;
-    }
+    // Use component-level wallet state instead of calling useWallet() inside function
+    const currentWalletAddress = walletAddress;
+    const currentWalletType = walletType;
+    const currentIsConnected = isConnected;
+    const currentChain = selectedChain || 'ethereum';
 
-    const traceId = generateTraceId();
+    const startTime = performance.now();
+    const trace_id = `analytics_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
     console.log('[Analytics] Fetching portfolio data', {
       timestamp: new Date().toISOString(),
       level: 'info',
       component: 'Analytics',
-      trace_id: traceId,
-      wallet_address: walletAddress,
-      chain: selectedChain
+      trace_id,
+      wallet_address: currentWalletAddress,
+      chain: currentChain,
+      is_connected: currentIsConnected
+    });
+
+    // Setup session and headers
+    const sessionId = localStorage.getItem('session_id') || `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    if (!localStorage.getItem('session_id')) {
+      localStorage.setItem('session_id', sessionId);
+    }
+
+    const headers = {
+      'Content-Type': 'application/json',
+      'X-Session-ID': sessionId,
+      'X-Client-Version': '1.0.0',
+      'X-Trace-ID': trace_id
+    };
+
+    // Add wallet-specific headers if connected
+    if (currentWalletAddress && currentWalletType) {
+      headers['X-Wallet-Address'] = currentWalletAddress;
+      headers['X-Wallet-Type'] = currentWalletType;
+      headers['X-Chain'] = currentChain;
+    }
+
+    console.log('[Analytics] Using auth headers', {
+      hasWalletAddress: !!currentWalletAddress,
+      hasSessionId: !!sessionId,
+      walletType: currentWalletType,
+      isConnected: currentIsConnected
     });
 
     try {
-      // Try to fetch from backend APIs first
-      const baseUrl = '/api/v1/ledger';
+      // Use proper API base URL - backend is on port 8001
+      const API_BASE_URL = window.location.hostname === 'localhost' 
+        ? 'http://127.0.0.1:8001/api/v1' 
+        : `${window.location.protocol}//${window.location.hostname}:8001/api/v1`;
+
+      // Early exit if no wallet connected - use demo data
+      if (!currentIsConnected || !currentWalletAddress) {
+        console.log('[Analytics] No wallet connected, using demo data');
+        
+        const demoPositions = getDemoPositions();
+        const demoTransactions = getDemoTransactions();
+        
+        // Update portfolio state with demo data
+        const totalValue = demoPositions.reduce((sum, pos) => sum + parseFloat(pos.current_value_usd || 0), 0);
+        const totalPnl = demoPositions.reduce((sum, pos) => sum + parseFloat(pos.unrealized_pnl_usd || 0), 0);
+        
+        setPortfolioData({
+          positions: demoPositions,
+          transactions: demoTransactions,
+          allocation: {
+            'ETH': 5000,
+            'USDC': 7500,
+            'MATIC': 750
+          },
+          totalValue,
+          totalPnl,
+          dayChange: totalPnl * 0.1
+        });
+        
+        setLoading(false);
+        setError(null);
+        
+        console.log('[Analytics] Demo data loaded for disconnected wallet');
+        return;
+      }
+
+      setLoading(true);
+
+      // Fetch positions, transactions, and summary in parallel
+      const [positionsResponse, transactionsResponse, summaryResponse] = await Promise.allSettled([
+        fetch(`${API_BASE_URL}/ledger/positions?wallet_address=${encodeURIComponent(currentWalletAddress)}&chain=${encodeURIComponent(currentChain)}`, {
+          method: 'GET',
+          headers
+        }),
+        fetch(`${API_BASE_URL}/ledger/transactions?wallet_address=${encodeURIComponent(currentWalletAddress)}&limit=100&chain=all&status=all&timeframe=30d&search=`, {
+          method: 'GET',
+          headers
+        }),
+        fetch(`${API_BASE_URL}/ledger/portfolio-summary?wallet_address=${encodeURIComponent(currentWalletAddress)}`, {
+          method: 'GET',
+          headers
+        })
+      ]);
+
+      // Parse successful responses
       let positions = [];
       let transactions = [];
-      let summary = {};
+      let summary = null;
 
-      // Attempt to fetch positions
-      try {
-        const positionsParams = new URLSearchParams({ 
-          wallet_address: walletAddress, 
-          chain: selectedChain 
+      if (positionsResponse.status === 'fulfilled' && positionsResponse.value.ok) {
+        positions = await positionsResponse.value.json();
+      } else if (positionsResponse.status === 'fulfilled') {
+        console.log('[Analytics] Positions fetch failed', {
+          status: positionsResponse.value.status,
+          statusText: positionsResponse.value.statusText
         });
-        const positionsResponse = await apiClient(`${baseUrl}/positions?${positionsParams}`);
-        if (positionsResponse.ok) {
-          const data = await positionsResponse.json();
-          positions = data.positions || [];
-        }
-      } catch (err) {
-        console.log('[Analytics] Positions API not available, using demo data');
       }
 
-      // Attempt to fetch transactions
-      try {
-        const transactionsParams = new URLSearchParams({ 
-          wallet_address: walletAddress, 
-          limit: '100',
-          ...transactionFilters
+      if (transactionsResponse.status === 'fulfilled' && transactionsResponse.value.ok) {
+        transactions = await transactionsResponse.value.json();
+      } else if (transactionsResponse.status === 'fulfilled') {
+        console.log('[Analytics] Transactions fetch failed', {
+          status: transactionsResponse.value.status,
+          statusText: transactionsResponse.value.statusText
         });
-        const transactionsResponse = await apiClient(`${baseUrl}/transactions?${transactionsParams}`);
-        if (transactionsResponse.ok) {
-          const data = await transactionsResponse.json();
-          transactions = data.transactions || [];
-        }
-      } catch (err) {
-        console.log('[Analytics] Transactions API not available, using demo data');
       }
 
-      // Attempt to fetch portfolio summary
-      try {
-        const summaryParams = new URLSearchParams({ 
-          wallet_address: walletAddress 
+      if (summaryResponse.status === 'fulfilled' && summaryResponse.value.ok) {
+        summary = await summaryResponse.value.json();
+      } else if (summaryResponse.status === 'fulfilled') {
+        console.log('[Analytics] Portfolio summary fetch failed', {
+          status: summaryResponse.value.status,
+          statusText: summaryResponse.value.statusText
         });
-        const summaryResponse = await apiClient(`${baseUrl}/portfolio-summary?${summaryParams}`);
-        if (summaryResponse.ok) {
-          summary = await summaryResponse.json();
-        }
-      } catch (err) {
-        console.log('[Analytics] Portfolio summary API not available, using demo data');
       }
 
-      // If no data from backend, provide demo data to show UI functionality
+      // If no real data available, use demo data for UI demonstration
       if (positions.length === 0 && transactions.length === 0) {
         console.log('[Analytics] Using demo portfolio data for UI demonstration');
-        
-        // Demo positions
-        positions = [
-          {
-            token_symbol: 'ETH',
-            token_address: '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2',
-            balance: '2.5',
-            current_value_usd: '6250.00',
-            average_buy_price_usd: '2400.00',
-            current_price_usd: '2500.00',
-            unrealized_pnl_usd: '250.00',
-            unrealized_pnl_percentage: '4.17',
-            chain: selectedChain,
-            first_purchase_date: '2024-08-01T10:00:00Z',
-            last_update_date: new Date().toISOString(),
-            transaction_count: 3
-          },
-          {
-            token_symbol: 'USDC',
-            token_address: '0xa0b86a33e6ba4cfb7c77be0b7d7fa0a4b5b1d4b6',
-            balance: '1000.0',
-            current_value_usd: '1000.00',
-            average_buy_price_usd: '1.00',
-            current_price_usd: '1.00',
-            unrealized_pnl_usd: '0.00',
-            unrealized_pnl_percentage: '0.00',
-            chain: selectedChain,
-            first_purchase_date: '2024-08-15T14:30:00Z',
-            last_update_date: new Date().toISOString(),
-            transaction_count: 1
-          },
-          {
-            token_symbol: 'WBTC',
-            token_address: '0x2260fac5e5542a773aa44fbcfedf7c193bc2c599',
-            balance: '0.1',
-            current_value_usd: '6000.00',
-            average_buy_price_usd: '58000.00',
-            current_price_usd: '60000.00',
-            unrealized_pnl_usd: '200.00',
-            unrealized_pnl_percentage: '3.45',
-            chain: selectedChain,
-            first_purchase_date: '2024-08-10T09:15:00Z',
-            last_update_date: new Date().toISOString(),
-            transaction_count: 2
-          }
-        ];
-
-        // Demo transactions
-        transactions = [
-          {
-            timestamp: '2024-08-26T08:30:00Z',
-            side: 'buy',
-            token_symbol: 'ETH',
-            token_address: '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2',
-            amount: '1.0',
-            price_usd: '2500.00',
-            value_usd: '2500.00',
-            gas_cost_usd: '25.00',
-            status: 'completed',
-            chain: selectedChain,
-            tx_hash: '0x1234567890abcdef1234567890abcdef12345678'
-          },
-          {
-            timestamp: '2024-08-25T15:45:00Z',
-            side: 'sell',
-            token_symbol: 'USDT',
-            token_address: '0xdac17f958d2ee523a2206206994597c13d831ec7',
-            amount: '500.0',
-            price_usd: '1.00',
-            value_usd: '500.00',
-            gas_cost_usd: '15.00',
-            status: 'completed',
-            chain: selectedChain,
-            tx_hash: '0xabcdef1234567890abcdef1234567890abcdef12'
-          },
-          {
-            timestamp: '2024-08-24T11:20:00Z',
-            side: 'buy',
-            token_symbol: 'WBTC',
-            token_address: '0x2260fac5e5542a773aa44fbcfedf7c193bc2c599',
-            amount: '0.05',
-            price_usd: '58000.00',
-            value_usd: '2900.00',
-            gas_cost_usd: '30.00',
-            status: 'completed',
-            chain: selectedChain,
-            tx_hash: '0x9876543210fedcba9876543210fedcba98765432'
-          }
-        ];
-
-        // Demo summary
-        summary = {
-          daily_change_usd: 125.50
-        };
+        positions = getDemoPositions();
+        transactions = getDemoTransactions();
       }
 
-      // Calculate portfolio metrics
+      // Process and calculate portfolio metrics
       const totalValue = positions.reduce((sum, pos) => sum + parseFloat(pos.current_value_usd || 0), 0);
       const totalPnl = positions.reduce((sum, pos) => sum + parseFloat(pos.unrealized_pnl_usd || 0), 0);
-      const dayChange = summary.daily_change_usd || 0;
+      
+      // Calculate allocation
+      const allocation = {};
+      positions.forEach(pos => {
+        allocation[pos.token_symbol] = parseFloat(pos.current_value_usd || 0);
+      });
 
-      // Calculate asset allocation
-      const allocation = positions.reduce((acc, pos) => {
-        const symbol = pos.token_symbol || 'Unknown';
-        const value = parseFloat(pos.current_value_usd || 0);
-        acc[symbol] = (acc[symbol] || 0) + value;
-        return acc;
-      }, {});
-
+      // Update portfolio state
       setPortfolioData({
         positions,
         transactions,
         allocation,
         totalValue,
         totalPnl,
-        dayChange
+        dayChange: summary?.daily_change || (totalPnl * 0.1)
       });
+
+      const endTime = performance.now();
+      const duration = endTime - startTime;
 
       console.log('[Analytics] Portfolio data processed successfully', {
         timestamp: new Date().toISOString(),
         level: 'info',
         component: 'Analytics',
-        trace_id: traceId,
+        trace_id,
         positions_count: positions.length,
         transactions_count: transactions.length,
         total_value: totalValue,
-        is_demo_data: positions.length > 0 && positions[0].token_symbol === 'ETH'
+        duration_ms: Math.round(duration)
       });
 
-    } catch (err) {
-      console.error('[Analytics] Failed to fetch portfolio data', {
-        timestamp: new Date().toISOString(),
-        level: 'error',
-        component: 'Analytics',
-        trace_id: traceId,
-        error: err.message,
-        wallet_address: walletAddress
-      });
-      
-      // Don't set error for now, just use empty data
-      setPortfolioData({
-        positions: [],
-        transactions: [],
-        allocation: {},
-        totalValue: 0,
-        totalPnl: 0,
-        dayChange: 0
-      });
+    } catch (error) {
+      console.error('[Analytics] Portfolio data fetch failed:', error);
+      setError(error.message || 'Failed to fetch portfolio data');
+    } finally {
+      setLoading(false);
     }
-  }, [isConnected, walletAddress, selectedChain, transactionFilters, apiClient, generateTraceId]);
+  }, [walletAddress, walletType, isConnected, selectedChain, getDemoPositions, getDemoTransactions]);
 
   // Fetch analytics data
   const fetchAnalyticsData = useCallback(async (dataType = 'all') => {
@@ -465,7 +507,7 @@ function Analytics() {
     } finally {
       setLoading(false);
     }
-  }, [selectedPeriod, apiClient, generateTraceId]);
+  }, [selectedPeriod, generateTraceId]);
 
   // Initial data load
   useEffect(() => {
@@ -478,10 +520,10 @@ function Analytics() {
       activeTab,
       isConnected,
       walletAddress,
-      shouldFetch: activeTab === 'portfolio' && isConnected
+      shouldFetch: activeTab === 'portfolio'
     });
     
-    if (activeTab === 'portfolio' && isConnected) {
+    if (activeTab === 'portfolio') {
       console.log('[Analytics] Conditions met, calling fetchPortfolioData');
       fetchPortfolioData();
     }
@@ -503,13 +545,13 @@ function Analytics() {
 
     const interval = setInterval(() => {
       fetchAnalyticsData('realtime');
-      if (activeTab === 'portfolio' && isConnected) {
+      if (activeTab === 'portfolio') {
         fetchPortfolioData();
       }
     }, refreshInterval);
 
     return () => clearInterval(interval);
-  }, [autoRefresh, refreshInterval, activeTab, isConnected, fetchAnalyticsData, fetchPortfolioData]);
+  }, [autoRefresh, refreshInterval, activeTab, fetchAnalyticsData, fetchPortfolioData]);
 
   // Period change handler
   const handlePeriodChange = (newPeriod) => {
@@ -917,6 +959,21 @@ function Analytics() {
       transactionsCount: portfolioData.transactions.length
     });
 
+    if (loading) {
+      return (
+        <Row>
+          <Col lg={12}>
+            <Card>
+              <Card.Body className="text-center py-5">
+                <Spinner animation="border" className="mb-3" />
+                <p>Loading portfolio data...</p>
+              </Card.Body>
+            </Card>
+          </Col>
+        </Row>
+      );
+    }
+
     if (!isConnected) {
       return (
         <Row>
@@ -927,32 +984,6 @@ function Analytics() {
                 Please connect your wallet to view your portfolio, positions, and transaction history.
               </p>
             </Alert>
-          </Col>
-        </Row>
-      );
-    }
-
-    // If connected but no data, trigger fetch and show loading
-    if (portfolioData.positions.length === 0 && portfolioData.transactions.length === 0) {
-      console.log('[Analytics] No portfolio data, triggering fetch');
-      // Trigger fetch in next tick to avoid infinite render loop
-      setTimeout(() => fetchPortfolioData(), 100);
-      
-      return (
-        <Row>
-          <Col lg={12}>
-            <Card>
-              <Card.Body className="text-center py-5">
-                <Spinner animation="border" className="mb-3" />
-                <p>Loading portfolio data...</p>
-                <Button
-                  variant="outline-primary"
-                  onClick={() => fetchPortfolioData()}
-                >
-                  Manual Refresh
-                </Button>
-              </Card.Body>
-            </Card>
           </Col>
         </Row>
       );
@@ -1197,7 +1228,7 @@ function Analytics() {
 
   // Render performance tab
   const renderPerformance = () => {
-    const { performance, kpi } = analyticsData;
+    const { performance } = analyticsData;
 
     if (!performance) {
       return (

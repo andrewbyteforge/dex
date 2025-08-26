@@ -690,6 +690,47 @@ class WalletService {
     }
   }
 
+    async checkConnection(address, chain = 'ethereum') {
+      try {
+          const response = await fetch(`${this.apiBaseUrl}/api/v1/wallets/check-connection?address=${address}&chain=${chain}`, {
+              method: 'GET',
+              headers: {
+                  'Content-Type': 'application/json',
+                  'X-Trace-ID': this.generateTraceId()
+              }
+          });
+
+          const result = await response.json();
+          
+          if (response.ok && result.success) {
+              return {
+                  success: true,
+                  connected: result.connected,
+                  address: result.address,
+                  chain: result.chain
+              };
+          } else {
+              return {
+                  success: false,
+                  connected: false,
+                  error: result.message || 'Connection check failed'
+              };
+          }
+      } catch (error) {
+          console.warn('[WalletService] Connection check failed:', error);
+          return {
+              success: false,
+              connected: false,
+              error: error.message
+          };
+      }
+  }
+
+
+  generateTraceId() {
+    return `wallet_svc_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  }
+
   /**
    * Fetch token balances from backend API - FIXED with context logging
    */

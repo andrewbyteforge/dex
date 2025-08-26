@@ -13,8 +13,9 @@ import uuid
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
-
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from starlette import status as http_status  # Alternative import if needed
+
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -182,7 +183,7 @@ async def get_positions(
             }
         )
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Database error retrieving positions: {trace_id}"
         )
     except Exception as e:
@@ -199,7 +200,7 @@ async def get_positions(
             }
         )
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to fetch positions: {trace_id}"
         )
 
@@ -347,7 +348,7 @@ async def get_transactions(
             }
         )
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Database error retrieving transactions: {trace_id}"
         )
     except Exception as e:
@@ -362,7 +363,7 @@ async def get_transactions(
             }
         )
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to fetch transactions: {trace_id}"
         )
 
@@ -449,7 +450,7 @@ async def get_portfolio_summary(
             }
         )
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Database error calculating summary: {trace_id}"
         )
     except Exception as e:
@@ -465,7 +466,7 @@ async def get_portfolio_summary(
             }
         )
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to calculate portfolio summary: {trace_id}"
         )
 

@@ -95,25 +95,13 @@ class User(Base):
     # Relationships
     orders = relationship("AdvancedOrder", back_populates="user")
     positions = relationship("Position", back_populates="user")
+    ledger_entries = relationship("LedgerEntry", back_populates="user")
 
 
 class Wallet(Base):
     """
     Wallet model for storing wallet configurations.
     Provides compatibility with API routers that expect a Wallet model.
-    
-    Attributes:
-        id: Primary key
-        address: Wallet address (checksummed for EVM)
-        chain: Blockchain network
-        wallet_type: Manual, autotrade, or watch-only
-        label: User-friendly wallet label
-        encrypted_keystore: Encrypted private key storage (autotrade only)
-        is_active: Whether wallet is currently active
-        daily_limit_gbp: Daily trading limit in GBP
-        per_trade_limit_gbp: Per-trade limit in GBP
-        created_at: Wallet creation timestamp
-        updated_at: Last update timestamp
     """
     
     __tablename__ = "wallets"
@@ -352,7 +340,6 @@ class LedgerEntry(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey('users.user_id'), nullable=False, index=True)
     trace_id = Column(String(64), unique=True, index=True, nullable=False)
-    timestamp = Column(DateTime(timezone=True), default=func.now(), nullable=False)
     created_at = Column(DateTime(timezone=True), default=func.now(), nullable=False)
     
     # Trade Information
@@ -407,22 +394,16 @@ class LedgerEntry(Base):
     
     # Relationships
     user = relationship("User", back_populates="ledger_entries")
-    orders = relationship("AdvancedOrder", back_populates="user")
-    positions = relationship("Position", back_populates="user")
-    ledger_entries = relationship("LedgerEntry", back_populates="user")
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """
         Convert ledger entry to dictionary.
-        
-        Returns:
-            Dictionary representation of ledger entry
         """
         return {
             'id': self.id,
             'user_id': self.user_id,
             'trace_id': self.trace_id,
-            'timestamp': self.timestamp.isoformat() if self.timestamp else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
             'chain': self.chain,
             'dex': self.dex,
             'trade_type': self.trade_type,
@@ -455,18 +436,13 @@ class LedgerEntry(Base):
 
 
 class SafetyEvent(Base):
-    """
-    Safety event tracking for risk management and monitoring.
-    
-    Records all safety-related events including blocks, warnings,
-    and interventions by the risk management system.
-    """
+    """Safety event tracking for risk management and monitoring."""
     
     __tablename__ = "safety_events"
     
     id = Column(Integer, primary_key=True, index=True)
-    timestamp = Column(DateTime(timezone=True), default=func.now(), nullable=False)
     trace_id = Column(String(64), index=True)
+    timestamp = Column(DateTime(timezone=True), default=func.now(), nullable=False)
     
     # Event Details
     event_type = Column(String(32), nullable=False)  # block, warning, intervention, kill_switch
@@ -493,17 +469,13 @@ class SafetyEvent(Base):
 
 
 class Trade(Base):
-    """
-    Trade model for basic trade tracking.
-    
-    Simplified trade record for compatibility with existing code.
-    """
+    """Trade model for basic trade tracking."""
     
     __tablename__ = "trades"
     
     id = Column(Integer, primary_key=True, index=True)
     trace_id = Column(String(64), unique=True, index=True)
-    timestamp = Column(DateTime(timezone=True), default=func.now())
+    timestamp = Column(DateTime(timezone=True), default=func.now(), nullable=False)
     
     # Basic trade info
     chain = Column(String(32), nullable=False)
@@ -521,12 +493,7 @@ class Trade(Base):
 
 
 class TokenMetadata(Base):
-    """
-    Token metadata and information cache.
-    
-    Stores token details, contract verification status,
-    and other metadata for quick access.
-    """
+    """Token metadata and information cache."""
     
     __tablename__ = "token_metadata"
     
@@ -580,12 +547,7 @@ class TokenMetadata(Base):
     data_source = Column(String(64))  # dexscreener, etherscan, manual, etc.
     
     def to_dict(self) -> Dict[str, Any]:
-        """
-        Convert token metadata to dictionary.
-        
-        Returns:
-            Dictionary representation of token metadata
-        """
+        """Convert token metadata to dictionary."""
         return {
             'token_address': self.token_address,
             'chain': self.chain,
@@ -607,12 +569,7 @@ class TokenMetadata(Base):
 
 
 class BlacklistedToken(Base):
-    """
-    Blacklisted tokens to avoid.
-    
-    Maintains list of tokens that should not be traded
-    due to security issues, scams, or other risks.
-    """
+    """Blacklisted tokens to avoid."""
     
     __tablename__ = "blacklisted_tokens"
     
@@ -651,11 +608,7 @@ class BlacklistedToken(Base):
 
 
 class Transaction(Base):
-    """
-    Generic transaction record for all blockchain transactions.
-    
-    Tracks all transactions initiated by the system across chains.
-    """
+    """Generic transaction record for all blockchain transactions."""
     
     __tablename__ = "transactions"
     
@@ -724,12 +677,7 @@ class Transaction(Base):
     notes = Column(Text)
     
     def to_dict(self) -> Dict[str, Any]:
-        """
-        Convert transaction to dictionary.
-        
-        Returns:
-            Dictionary representation of transaction
-        """
+        """Convert transaction to dictionary."""
         return {
             'id': self.id,
             'trace_id': self.trace_id,
@@ -772,10 +720,10 @@ Index('idx_trades_user_token', TradeExecution.user_id, TradeExecution.token_addr
 Index('idx_trades_executed_at', TradeExecution.executed_at)
 Index('idx_trades_trace_id', TradeExecution.trace_id)
 
-# Ledger indices
-Index('idx_ledger_timestamp', LedgerEntry.timestamp)
-Index('idx_ledger_wallet_timestamp', LedgerEntry.wallet_address, LedgerEntry.timestamp)
-Index('idx_ledger_chain_timestamp', LedgerEntry.chain, LedgerEntry.timestamp)
+# Ledger indices - Updated to use created_at instead of timestamp
+Index('idx_ledger_created_at', LedgerEntry.created_at)
+Index('idx_ledger_wallet_created_at', LedgerEntry.wallet_address, LedgerEntry.created_at)
+Index('idx_ledger_chain_created_at', LedgerEntry.chain, LedgerEntry.created_at)
 Index('idx_ledger_status', LedgerEntry.status)
 Index('idx_ledger_archived', LedgerEntry.archived)
 

@@ -791,3 +791,44 @@ try:
     
 except Exception as logging_error:
     logger.error(f"Failed to log router endpoints: {logging_error}")
+
+
+@router.get("/check-connection")
+async def check_connection(
+    address: str,
+    chain: str = "ethereum",
+    x_trace_id: Optional[str] = Header(None, alias="X-Trace-ID")
+):
+    """Check if wallet connection is still active."""
+    trace_id = x_trace_id or generate_trace_id()
+    
+    try:
+        log_wallet_operation('info', 'Wallet connection check', 
+            trace_id=trace_id,
+            wallet_address=f"{address[:6]}...{address[-4:]}",
+            chain=chain
+        )
+        
+        # Simple connection check - verify wallet is in registry
+        wallet_key = f"{address}_{chain}"
+        is_connected = wallet_key in REGISTERED_WALLETS
+        
+        return {
+            "success": True,
+            "connected": is_connected,
+            "address": address,
+            "chain": chain,
+            "trace_id": trace_id,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+        
+    except Exception as e:
+        log_wallet_operation('error', 'Connection check failed',
+            trace_id=trace_id,
+            error=str(e)
+        )
+        raise HTTPException(status_code=500, detail={
+            "success": False,
+            "message": "Connection check failed",
+            "trace_id": trace_id
+        })

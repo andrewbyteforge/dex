@@ -164,10 +164,13 @@ async def get_current_user(
     x_api_key: Optional[str] = Header(None)
 ) -> CurrentUser:
     """
-    Get current authenticated user from JWT token or API key.
+    Get current authenticated user with JWT, API key, and wallet support.
     
-    Enhanced with proper JWT validation, comprehensive error handling,
-    and detailed audit logging for all authentication attempts.
+    Enhanced authentication supporting:
+    1. JWT token authentication (existing)
+    2. API key authentication (existing) 
+    3. Wallet-based session authentication (NEW)
+    4. Development mode fallback (existing)
     
     Args:
         request: FastAPI request object
@@ -184,16 +187,18 @@ async def get_current_user(
     session_id = str(uuid.uuid4())
     auth_context = {
         'session_id': session_id,
-        'client_ip': request.client.host if request.client else 'unknown',
-        'user_agent': request.headers.get('user-agent', 'unknown'),
+        'client_ip': _get_client_ip(request),
+        'user_agent': request.headers.get('user-agent', 'unknown')[:100],
         'request_id': getattr(request.state, 'request_id', 'unknown'),
-        'timestamp': datetime.now(timezone.utc).isoformat()
+        'timestamp': datetime.now(timezone.utc).isoformat(),
+        'path': str(request.url.path),
+        'method': request.method
     }
     
     try:
         settings = get_settings()
         
-        # JWT Token authentication (primary method)
+        # Method 1: JWT Token authentication (existing - enhanced)
         if credentials and credentials.credentials:
             logger.debug(
                 "Attempting JWT authentication",
@@ -201,14 +206,13 @@ async def get_current_user(
             )
             
             try:
-                token_data = verify_jwt_token(credentials.credentials)
+                jwt_manager = get_jwt_manager()
+                token_data = jwt_manager.validate_token(credentials.credentials)
                 
-                # In production, retrieve user from database
-                # For now, create user from token claims
                 current_user = CurrentUser(
                     user_id=token_data.user_id,
                     username=token_data.username,
-                    email=token_data.email,
+                    email=None,
                     wallet_address=None,
                     is_active=True,
                     auth_method="jwt",
@@ -233,134 +237,224 @@ async def get_current_user(
                 return current_user
                 
             except HTTPException as e:
-                logger.warning(
+                logger.debug(
                     f"JWT authentication failed: {e.detail}",
-                    extra={
-                        'extra_data': {
-                            **auth_context,
-                            'error_code': e.status_code,
-                            'error_detail': e.detail,
-                            'auth_method': 'jwt'
-                        }
-                    }
-                )
-                raise
-            except Exception as e:
-                logger.error(
-                    f"JWT authentication error: {e}",
-                    exc_info=True,
                     extra={'extra_data': {**auth_context, 'auth_method': 'jwt'}}
                 )
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="JWT authentication failed"
+                # Don't raise here, try other methods
+            except Exception as e:
+                logger.debug(
+                    f"JWT authentication error: {e}",
+                    extra={'extra_data': {**auth_context, 'auth_method': 'jwt'}}
                 )
         
-        # API key authentication (fallback method)
-        elif x_api_key:
+        # Method 2: NEW - Wallet-based session authentication
+        wallet_address = request.headers.get('X-Wallet-Address')
+        wallet_session_id = request.headers.get('X-Session-ID')
+        
+        if wallet_address:
+            logger.debug(
+                "Attempting wallet authentication",
+                extra={
+                    'extra_data': {
+                        **auth_context,
+                        'wallet_address': wallet_address[:10] + '...' if len(wallet_address) > 10 else wallet_address,
+                        'has_session_id': bool(wallet_session_id),
+                        'auth_method': 'wallet'
+                    }
+                }
+            )
+            
+            try:
+                # Import here to avoid circular imports
+                from ..api.wallet import REGISTERED_WALLETS
+                
+                # Check if wallet is registered
+                wallet_data = REGISTERED_WALLETS.get(wallet_address.lower())
+                
+                if wallet_data:
+                    # Try to find or create user for wallet
+                    from ..storage.repositories import get_user_repository
+                    user_repo = get_user_repository()
+                    
+                    user = None
+                    
+                    # Try to find user by session_id from wallet data
+                    if wallet_data.get('session_id'):
+                        try:
+                            user = await user_repo.get_by_session_id(wallet_data['session_id'])
+                        except Exception as e:
+                            logger.debug(f"Could not find user by wallet session_id: {e}")
+                    
+                    # If no user found and we're in development, create one
+                    if not user and settings.ENVIRONMENT == 'development':
+                        try:
+                            import uuid as uuid_mod
+                            new_session_id = wallet_data.get('session_id') or f"wallet_{uuid_mod.uuid4().hex[:12]}"
+                            
+                            user = await user_repo.create_user(
+                                session_id=new_session_id,
+                                preferred_slippage=0.5,
+                                default_trade_amount_gbp=100.0,
+                                risk_tolerance="medium",
+                            )
+                            
+                            # Update wallet registration with user info
+                            wallet_data['user_id'] = user.id
+                            wallet_data['session_id'] = user.session_id
+                            REGISTERED_WALLETS[wallet_address.lower()] = wallet_data
+                            
+                            logger.info(
+                                "Created user for wallet authentication",
+                                extra={
+                                    'extra_data': {
+                                        **auth_context,
+                                        'user_id': user.id,
+                                        'wallet_address': wallet_address[:10] + '...',
+                                        'auth_method': 'wallet_auto_create'
+                                    }
+                                }
+                            )
+                            
+                        except Exception as e:
+                            logger.error(f"Failed to create user for wallet: {e}")
+                            user = None
+                    
+                    if user:
+                        current_user = CurrentUser(
+                            user_id=user.id,
+                            username=f"wallet_user_{user.id}",
+                            email=None,
+                            wallet_address=wallet_address,
+                            is_active=True,
+                            auth_method="wallet",
+                            session_id=user.session_id,
+                            authenticated_at=datetime.now(timezone.utc)
+                        )
+                        
+                        logger.info(
+                            "Wallet authentication successful",
+                            extra={
+                                'extra_data': {
+                                    **auth_context,
+                                    'user_id': current_user.user_id,
+                                    'wallet_address': wallet_address[:10] + '...',
+                                    'auth_method': 'wallet',
+                                    'session_id': user.session_id
+                                }
+                            }
+                        )
+                        
+                        return current_user
+                        
+            except Exception as e:
+                logger.error(
+                    f"Wallet authentication error: {e}",
+                    exc_info=True,
+                    extra={'extra_data': {**auth_context, 'wallet_address': wallet_address[:10] + '...'}}
+                )
+        
+        # Method 3: API key authentication (existing)
+        if x_api_key:
             logger.debug(
                 "Attempting API key authentication",
                 extra={'extra_data': auth_context}
             )
             
             try:
-                verify_api_key(x_api_key)
-                
-                current_user = CurrentUser(
-                    user_id=1000,  # Different ID for API key users
-                    username="api_user",
-                    email="api@dexsniper.local",
-                    wallet_address=None,
-                    is_active=True,
-                    auth_method="api_key",
-                    session_id=session_id,
-                    authenticated_at=datetime.now(timezone.utc)
-                )
-                
-                logger.info(
-                    "API key authentication successful",
-                    extra={
-                        'extra_data': {
-                            **auth_context,
-                            'user_id': current_user.user_id,
-                            'username': current_user.username,
-                            'auth_method': 'api_key',
-                            'key_hash_prefix': hashlib.sha256(x_api_key.encode()).hexdigest()[:16]
+                if verify_api_key(x_api_key):
+                    current_user = CurrentUser(
+                        user_id=1000,
+                        username="api_user",
+                        email="api@dexsniper.local",
+                        wallet_address=None,
+                        is_active=True,
+                        auth_method="api_key",
+                        session_id=session_id,
+                        authenticated_at=datetime.now(timezone.utc)
+                    )
+                    
+                    logger.info(
+                        "API key authentication successful",
+                        extra={
+                            'extra_data': {
+                                **auth_context,
+                                'user_id': current_user.user_id,
+                                'username': current_user.username,
+                                'auth_method': 'api_key',
+                                'key_hash_prefix': hashlib.sha256(x_api_key.encode()).hexdigest()[:16]
+                            }
                         }
-                    }
-                )
-                
-                return current_user
-                
+                    )
+                    
+                    return current_user
+                    
             except HTTPException as e:
-                logger.warning(
+                logger.debug(
                     f"API key authentication failed: {e.detail}",
-                    extra={
-                        'extra_data': {
-                            **auth_context,
-                            'error_code': e.status_code,
-                            'error_detail': e.detail,
-                            'auth_method': 'api_key'
-                        }
-                    }
-                )
-                raise
-            except Exception as e:
-                logger.error(
-                    f"API key authentication error: {e}",
-                    exc_info=True,
                     extra={'extra_data': {**auth_context, 'auth_method': 'api_key'}}
                 )
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="API key authentication failed"
+            except Exception as e:
+                logger.debug(
+                    f"API key authentication error: {e}",
+                    extra={'extra_data': {**auth_context, 'auth_method': 'api_key'}}
                 )
         
-        # Development/single-user mode (no authentication)
-        else:
-            if settings.environment == "development":
-                logger.debug(
-                    "Using development mode authentication",
-                    extra={'extra_data': auth_context}
-                )
-                
-                default_user = CurrentUser(
-                    user_id=1,  # Fix: Use integer instead of 'dev_user' string
-                    username="dex_trader",
-                    email="trader@dexsniper.local",
-                    wallet_address=None,
-                    is_active=True,
-                    auth_method="development",
-                    session_id=session_id,
-                    authenticated_at=datetime.now(timezone.utc)
-                )
-                
-                logger.debug(
-                    "Development authentication successful",
-                    extra={
-                        'extra_data': {
-                            **auth_context,
-                            'user_id': default_user.user_id,
-                            'username': default_user.username,
-                            'auth_method': 'development'
-                        }
+        # Method 4: Development mode fallback (existing - enhanced)
+        if settings.environment == 'development':
+            logger.info("Using development authentication fallback", extra={'extra_data': auth_context})
+            
+            # Generate consistent session ID for development
+            client_signature = f"{auth_context['client_ip']}_{auth_context['user_agent']}"
+            dev_session_id = hashlib.md5(client_signature.encode()).hexdigest()[:16]
+            
+            default_user = CurrentUser(
+                user_id=1,
+                username="dex_trader",
+                email="trader@dexsniper.local",
+                wallet_address=wallet_address,  # Include wallet if provided
+                is_active=True,
+                auth_method="development",
+                session_id=dev_session_id,
+                authenticated_at=datetime.now(timezone.utc)
+            )
+            
+            logger.debug(
+                "Development authentication successful",
+                extra={
+                    'extra_data': {
+                        **auth_context,
+                        'user_id': default_user.user_id,
+                        'username': default_user.username,
+                        'auth_method': 'development',
+                        'wallet_address': wallet_address[:10] + '...' if wallet_address else None
                     }
-                )
-                
-                return default_user
-            else:
-                logger.warning(
-                    "Authentication required in production mode",
-                    extra={'extra_data': auth_context}
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Authentication required",
-                    headers={"WWW-Authenticate": "Bearer"}
-                )
+                }
+            )
+            
+            return default_user
+        
+        # All authentication methods failed
+        logger.warning(
+            "All authentication methods failed",
+            extra={'extra_data': auth_context}
+        )
+        
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "message": "Authentication required",
+                "supported_methods": ["JWT", "API Key", "Wallet"],
+                "headers": {
+                    "JWT": "Authorization: Bearer <token>",
+                    "API Key": "X-API-Key: <key>", 
+                    "Wallet": "X-Wallet-Address: <address>, X-Session-ID: <session>"
+                }
+            },
+            headers={"WWW-Authenticate": "Bearer"}
+        )
     
     except HTTPException:
-        # Re-raise HTTP exceptions with proper logging
         raise
     except Exception as e:
         logger.error(
@@ -372,6 +466,14 @@ async def get_current_user(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Authentication system error"
         )
+
+
+
+
+
+
+
+
 
 def _get_client_ip(request: Request) -> str:
     """

@@ -637,24 +637,24 @@ class LedgerRepository(BaseRepository):
     ) -> List[LedgerEntry]:
         """
         Get user's ledger entries with pagination and filtering.
-        
+    
         Args:
             user_id: User ID
             limit: Maximum number of results
             offset: Number of results to skip
             entry_type: Optional entry type filter
             chain: Optional chain filter
-            
+        
         Returns:
             List of LedgerEntry instances
         """
         conditions = [LedgerEntry.user_id == user_id]
-        
+    
         if entry_type:
-            conditions.append(LedgerEntry.entry_type == entry_type)
-        if chain:
+            conditions.append(LedgerEntry.trade_type == entry_type)  # Changed from entry_type to trade_type
+        if chain and chain != "all":  # Added check to ignore "all" chain filter
             conditions.append(LedgerEntry.chain == chain)
-        
+    
         stmt = (
             select(LedgerEntry)
             .where(and_(*conditions))
@@ -664,7 +664,6 @@ class LedgerRepository(BaseRepository):
         )
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
-
 
 class TokenMetadataRepository(BaseRepository):
     """Repository for TokenMetadata operations."""

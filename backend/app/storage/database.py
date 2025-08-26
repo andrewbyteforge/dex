@@ -398,6 +398,13 @@ class DatabaseManager:
             raise RuntimeError("Database not initialized")
         
         try:
+            # Import all models to register them with Base
+            from .models import (
+                User, Wallet, LedgerEntry, AdvancedOrder, OrderExecution, 
+                Position, TradeExecution, WalletBalance, SystemSettings,
+                SafetyEvent, Trade, TokenMetadata, BlacklistedToken, Transaction
+            )
+            
             async with self.engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
             logger.info("Database tables created successfully")
