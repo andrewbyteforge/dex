@@ -9,11 +9,11 @@ from enum import Enum
 from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
 
-from ..core.logging import get_logger
+import logging
 from .risk_manager import RiskFactor, RiskLevel, RiskCategory
 from ..services.security_providers import SecurityProviderResult, AggregatedSecurityResult
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class ScoringMethod(str, Enum):

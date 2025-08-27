@@ -17,9 +17,8 @@ from ..strategy.risk_manager import risk_manager, RiskAssessment
 from ..services.security_providers import security_provider
 from ..ai.market_intelligence import MarketIntelligenceEngine
 from ..services.pricing import PricingService
-from ..core.logging import get_logger
-
-logger = get_logger(__name__)
+import logging
+logger = logging.getLogger(__name__)
 
 
 class ProcessingStatus(str, Enum):

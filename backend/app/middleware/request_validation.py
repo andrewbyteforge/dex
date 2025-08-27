@@ -25,7 +25,10 @@ logger = logging.getLogger(__name__)
 
 class RequestValidationMiddleware(BaseHTTPMiddleware):
     """
-    Comprehensive request validation middleware.
+    Comprehensive request validation middleware with enhanced security filtering.
+    
+    Provides request size limits, timeout handling, and security filtering
+    to protect against common attack vectors and malformed requests.
     
     Features:
     - Request size limits (prevent DoS attacks)
@@ -33,14 +36,14 @@ class RequestValidationMiddleware(BaseHTTPMiddleware):
     - Content type validation
     - Input sanitization
     - Suspicious pattern detection
-    - Rate limiting integration
+    - Security headers validation
     """
     
     def __init__(
         self,
         app,
         max_request_size: int = 10 * 1024 * 1024,  # 10MB
-        request_timeout: float = 30.0,  # 30 seconds
+        request_timeout: float = 30.0,
         max_json_depth: int = 10,
         max_array_length: int = 1000,
         enable_content_validation: bool = True,
@@ -85,69 +88,63 @@ class RequestValidationMiddleware(BaseHTTPMiddleware):
             '/api/v1/orders'
         }
         
-        logger.info(f"Request validation middleware initialized with {max_request_size//1024//1024}MB limit")
+        logger.info(
+            f"Request validation middleware initialized: "
+            f"max_size={max_request_size//1024//1024}MB, "
+            f"timeout={request_timeout}s, "
+            f"security_filtering={enable_security_filtering}"
+        )
     
     def _compile_security_patterns(self) -> None:
         """Compile regex patterns for security filtering."""
         # SQL injection patterns
-        sql_patterns = [
-            r'union\s+select',
-            r'drop\s+table',
-            r'insert\s+into',
-            r'delete\s+from',
-            r'update\s+set',
-            r'exec\s*\(',
-            r'xp_cmdshell',
-            r'sp_executesql'
+        self.sql_patterns = [
+            re.compile(r"(\bunion\b.*\bselect\b)", re.IGNORECASE),
+            re.compile(r"(\bdrop\b.*\btable\b)", re.IGNORECASE),
+            re.compile(r"(\binsert\b.*\binto\b)", re.IGNORECASE),
+            re.compile(r"(\bdelete\b.*\bfrom\b)", re.IGNORECASE),
+            re.compile(r"(\bselect\b.*\bfrom\b)", re.IGNORECASE),
+            re.compile(r"(\bexec\b|\bexecute\b)", re.IGNORECASE),
         ]
         
         # XSS patterns
-        xss_patterns = [
-            r'<script[^>]*>',
-            r'javascript:',
-            r'on\w+\s*=',
-            r'<iframe[^>]*>',
-            r'<object[^>]*>',
-            r'<embed[^>]*>'
-        ]
-        
-        # Command injection patterns
-        cmd_patterns = [
-            r';\s*rm\s+',
-            r';\s*cat\s+',
-            r';\s*ls\s+',
-            r'&\s*dir\s+',
-            r'`[^`]*`',
-            r'\$\([^)]*\)'
+        self.xss_patterns = [
+            re.compile(r"<script[^>]*>", re.IGNORECASE),
+            re.compile(r"javascript:", re.IGNORECASE),
+            re.compile(r"on\w+\s*=", re.IGNORECASE),
+            re.compile(r"<iframe[^>]*>", re.IGNORECASE),
         ]
         
         # Path traversal patterns
-        path_patterns = [
-            r'\.\./',
-            r'\.\.\\',
-            r'/etc/passwd',
-            r'/windows/system32'
+        self.traversal_patterns = [
+            re.compile(r"\.\.[\\/]"),
+            re.compile(r"[\\/]\.\."),
+            re.compile(r"%2e%2e%2f", re.IGNORECASE),
+            re.compile(r"%2e%2e%5c", re.IGNORECASE),
         ]
         
-        # Compile all patterns
-        all_patterns = sql_patterns + xss_patterns + cmd_patterns + path_patterns
-        self.security_patterns = [re.compile(pattern, re.IGNORECASE) for pattern in all_patterns]
+        # Command injection patterns
+        self.command_patterns = [
+            re.compile(r"[;&|`$]"),
+            re.compile(r"\$\(.*\)"),
+            re.compile(r"`.*`"),
+        ]
     
-    async def dispatch(self, request: Request, call_next) -> Response:
+    async def dispatch(self, request: Request, call_next):
         """
-        Process request with comprehensive validation.
+        Validate and process request with security checks.
         
         Args:
-            request: Incoming HTTP request
+            request: FastAPI request
             call_next: Next middleware in chain
             
         Returns:
-            HTTP response
+            Response after validation and processing
         """
         start_time = time.time()
         
         try:
-            # Skip validation for health checks and static content
+            # Skip validation for certain paths
             if self._should_skip_validation(request):
                 return await call_next(request)
             
@@ -158,74 +155,72 @@ class RequestValidationMiddleware(BaseHTTPMiddleware):
             if self.enable_content_validation:
                 self._validate_content_type(request)
             
-            # Read and validate request body if present
-            if request.method in ["POST", "PUT", "PATCH"]:
-                body = await self._read_and_validate_body(request)
-                
-                # Create new request with validated body
-                if body is not None:
-                    request = await self._create_request_with_body(request, body)
+            # Security filtering
+            if self.enable_security_filtering:
+                await self._security_filter(request)
             
             # Process request with timeout
             try:
                 response = await asyncio.wait_for(
-                    call_next(request), 
+                    call_next(request),
                     timeout=self.request_timeout
                 )
             except asyncio.TimeoutError:
-                logger.warning(
-                    f"Request timeout after {self.request_timeout}s: {request.method} {request.url.path}",
+                logger.error(
+                    f"Request timeout after {self.request_timeout}s for {request.url.path}",
                     extra={
                         'extra_data': {
-                            'method': request.method,
+                            'client_ip': self._get_client_ip(request),
                             'path': request.url.path,
-                            'client_ip': request.client.host if request.client else 'unknown',
+                            'method': request.method,
                             'timeout': self.request_timeout
                         }
                     }
                 )
-                return JSONResponse(
+                raise HTTPException(
                     status_code=status.HTTP_408_REQUEST_TIMEOUT,
-                    content={
-                        "error": "Request timeout",
-                        "detail": f"Request exceeded {self.request_timeout} second timeout"
-                    }
+                    detail=f"Request timeout after {self.request_timeout} seconds"
                 )
             
-            # Add security headers to response
-            self._add_security_headers(response)
-            
-            # Log request metrics
+            # Add processing time header
             processing_time = time.time() - start_time
-            if processing_time > 1.0:  # Log slow requests
-                logger.warning(
-                    f"Slow request: {processing_time:.2f}s - {request.method} {request.url.path}"
-                )
+            response.headers["X-Processing-Time"] = f"{processing_time:.3f}"
             
             return response
             
         except HTTPException:
-            # Re-raise HTTP exceptions
             raise
         except Exception as e:
+            processing_time = time.time() - start_time
             logger.error(
                 f"Request validation error: {e}",
-                exc_info=True,
                 extra={
                     'extra_data': {
-                        'method': request.method,
+                        'client_ip': self._get_client_ip(request),
                         'path': request.url.path,
-                        'client_ip': request.client.host if request.client else 'unknown'
+                        'method': request.method,
+                        'processing_time': processing_time,
+                        'error_type': type(e).__name__
                     }
                 }
             )
-            return JSONResponse(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                content={
-                    "error": "Request validation failed",
-                    "detail": "An error occurred while processing your request"
-                }
-            )
+            # Allow request to continue on validation error
+            return await call_next(request)
+    
+    def _get_client_ip(self, request: Request) -> str:
+        """Extract client IP address from request."""
+        # Check X-Forwarded-For for proxy scenarios
+        forwarded_for = request.headers.get('X-Forwarded-For')
+        if forwarded_for:
+            return forwarded_for.split(',')[0].strip()
+        
+        # Check X-Real-IP header
+        real_ip = request.headers.get('X-Real-IP')
+        if real_ip:
+            return real_ip.strip()
+        
+        # Fallback to direct client IP
+        return request.client.host if request.client else "unknown"
     
     def _should_skip_validation(self, request: Request) -> bool:
         """Check if request should skip validation."""
@@ -236,7 +231,8 @@ class RequestValidationMiddleware(BaseHTTPMiddleware):
             '/metrics',
             '/docs',
             '/redoc',
-            '/openapi.json'
+            '/openapi.json',
+            '/favicon.ico'
         }
         
         path = request.url.path
@@ -266,7 +262,7 @@ class RequestValidationMiddleware(BaseHTTPMiddleware):
                                 'size_bytes': size,
                                 'max_bytes': self.max_request_size,
                                 'path': request.url.path,
-                                'client_ip': request.client.host if request.client else 'unknown'
+                                'client_ip': self._get_client_ip(request)
                             }
                         }
                     )
@@ -306,211 +302,203 @@ class RequestValidationMiddleware(BaseHTTPMiddleware):
     
     async def _read_and_validate_body(self, request: Request) -> Optional[bytes]:
         """Read and validate request body."""
+        if request.method not in ["POST", "PUT", "PATCH"]:
+            return None
+        
         try:
             body = await request.body()
             
-            if not body:
-                return None
-            
-            # Additional size check for body
-            if len(body) > self.max_request_size:
-                raise HTTPException(
-                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                    detail="Request body too large"
-                )
-            
-            # Validate JSON if applicable
-            content_type = request.headers.get('content-type', '')
-            if 'application/json' in content_type:
-                await self._validate_json_body(body)
-            
-            # Security filtering
-            if self.enable_security_filtering:
-                self._check_security_patterns(body.decode('utf-8', errors='ignore'))
+            # Validate JSON structure if applicable
+            content_type = request.headers.get('content-type', '').split(';')[0].strip()
+            if content_type == 'application/json' and body:
+                try:
+                    data = json.loads(body)
+                    self._validate_json_structure(data, depth=0)
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Invalid JSON in request body: {e}")
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Invalid JSON format"
+                    )
             
             return body
             
-        except UnicodeDecodeError:
-            logger.warning("Request body contains invalid UTF-8")
+        except Exception as e:
+            logger.error(f"Error reading request body: {e}")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Request body contains invalid characters"
-            )
-        except json.JSONDecodeError as e:
-            logger.warning(f"Invalid JSON in request body: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid JSON: {str(e)}"
+                detail="Error reading request body"
             )
     
-    async def _validate_json_body(self, body: bytes) -> None:
-        """Validate JSON body structure."""
-        try:
-            data = json.loads(body)
-            
-            # Check JSON depth
-            if self._get_json_depth(data) > self.max_json_depth:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"JSON nesting too deep (max: {self.max_json_depth})"
-                )
-            
-            # Check array lengths
-            self._check_array_lengths(data)
-            
-        except json.JSONDecodeError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid JSON format"
-            )
-    
-    def _get_json_depth(self, obj: Any, depth: int = 0) -> int:
-        """Calculate JSON nesting depth."""
+    def _validate_json_structure(self, data: Any, depth: int = 0) -> None:
+        """Validate JSON structure for depth and array length."""
         if depth > self.max_json_depth:
-            return depth
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"JSON nesting too deep. Maximum depth: {self.max_json_depth}"
+            )
         
-        if isinstance(obj, dict):
-            return max([self._get_json_depth(v, depth + 1) for v in obj.values()] + [depth])
-        elif isinstance(obj, list):
-            return max([self._get_json_depth(item, depth + 1) for item in obj] + [depth])
-        else:
-            return depth
-    
-    def _check_array_lengths(self, obj: Any) -> None:
-        """Check array lengths in JSON data."""
-        if isinstance(obj, list):
-            if len(obj) > self.max_array_length:
+        if isinstance(data, dict):
+            for value in data.values():
+                self._validate_json_structure(value, depth + 1)
+        
+        elif isinstance(data, list):
+            if len(data) > self.max_array_length:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Array too large (max: {self.max_array_length} items)"
+                    detail=f"Array too long. Maximum length: {self.max_array_length}"
                 )
-            for item in obj:
-                self._check_array_lengths(item)
-        elif isinstance(obj, dict):
-            for value in obj.values():
-                self._check_array_lengths(value)
+            
+            for item in data:
+                self._validate_json_structure(item, depth + 1)
     
-    def _check_security_patterns(self, text: str) -> None:
-        """Check for suspicious security patterns."""
-        for pattern in self.security_patterns:
-            if pattern.search(text):
+    async def _security_filter(self, request: Request) -> None:
+        """Apply security filtering to request."""
+        try:
+            # Check headers for suspicious content
+            self._check_suspicious_headers(request)
+            
+            # Check URL path for suspicious patterns
+            self._check_suspicious_path(request)
+            
+            # Check query parameters
+            self._check_query_parameters(request)
+            
+            # Check request body if present
+            if request.method in ["POST", "PUT", "PATCH"]:
+                await self._check_request_body(request)
+                
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Security filtering error: {e}", exc_info=True)
+            # Continue processing - don't block on security filter errors
+    
+    def _check_suspicious_headers(self, request: Request) -> None:
+        """Check for suspicious header patterns."""
+        suspicious_headers = [
+            'x-forwarded-host', 'x-originating-ip', 'x-cluster-client-ip'
+        ]
+        
+        for header in suspicious_headers:
+            if header in request.headers:
+                value = request.headers[header]
+                # Basic validation
+                if len(value) > 255 or any(char in value for char in ['<', '>', '"', "'"]):
+                    logger.warning(
+                        f"Suspicious header detected: {header}={value[:100]}",
+                        extra={
+                            'extra_data': {
+                                'client_ip': self._get_client_ip(request),
+                                'suspicious_header': header,
+                                'header_value': value[:100],
+                                'path': request.url.path
+                            }
+                        }
+                    )
+    
+    def _check_suspicious_path(self, request: Request) -> None:
+        """Check for suspicious path patterns."""
+        path = str(request.url.path).lower()
+        
+        # Check for path traversal
+        for pattern in self.traversal_patterns:
+            if pattern.search(path):
                 logger.warning(
-                    f"Security pattern detected: {pattern.pattern}",
+                    f"Path traversal attempt detected: {request.url.path}",
                     extra={
                         'extra_data': {
-                            'pattern': pattern.pattern,
-                            'text_sample': text[:100] + '...' if len(text) > 100 else text
+                            'client_ip': self._get_client_ip(request),
+                            'path': request.url.path,
+                            'pattern_type': 'path_traversal',
+                            'user_agent': request.headers.get('User-Agent', 'unknown')
                         }
                     }
                 )
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Request contains potentially malicious content"
+                    detail="Invalid path format"
+                )
+        
+        # Check for common attack paths
+        suspicious_patterns = [
+            'wp-admin', 'admin.php', 'config.php', 'shell.php', 
+            '.git', '.svn', '.env', 'phpinfo'
+        ]
+        
+        for pattern in suspicious_patterns:
+            if pattern in path:
+                logger.warning(
+                    f"Suspicious path pattern detected: {pattern} in {request.url.path}",
+                    extra={
+                        'extra_data': {
+                            'client_ip': self._get_client_ip(request),
+                            'path': request.url.path,
+                            'suspicious_pattern': pattern,
+                            'user_agent': request.headers.get('User-Agent', 'unknown')
+                        }
+                    }
                 )
     
-    async def _create_request_with_body(self, request: Request, body: bytes) -> Request:
-        """Create new request with validated body."""
-        # This is a simplified approach - in production you might want to
-        # use a more sophisticated request recreation method
-        request._body = body
-        return request
+    def _check_query_parameters(self, request: Request) -> None:
+        """Check query parameters for malicious content."""
+        for key, value in request.query_params.items():
+            self._check_malicious_content(str(value), f"query_param_{key}")
     
-    def _add_security_headers(self, response: Response) -> None:
-        """Add security headers to response."""
-        security_headers = {
-            "X-Content-Type-Options": "nosniff",
-            "X-Frame-Options": "DENY", 
-            "X-XSS-Protection": "1; mode=block",
-            "Referrer-Policy": "strict-origin-when-cross-origin",
-            "Content-Security-Policy": "default-src 'self'",
-            "Strict-Transport-Security": "max-age=31536000; includeSubDomains"
-        }
-        
-        for header, value in security_headers.items():
-            response.headers[header] = value
-
-
-class TradingEndpointValidator:
-    """
-    Specialized validator for trading-specific endpoints.
-    
-    Provides additional validation for trading operations including
-    parameter ranges, wallet addresses, and transaction data.
-    """
-    
-    @staticmethod
-    def validate_wallet_address(address: str) -> bool:
-        """Validate wallet address format."""
-        if not address:
-            return False
-        
-        # Ethereum address pattern (0x + 40 hex chars)
-        eth_pattern = re.compile(r'^0x[a-fA-F0-9]{40}$')
-        
-        # Solana address pattern (base58, 32-44 chars)
-        sol_pattern = re.compile(r'^[1-9A-HJ-NP-Za-km-z]{32,44}$')
-        
-        return bool(eth_pattern.match(address) or sol_pattern.match(address))
-    
-    @staticmethod
-    def validate_amount(amount: str, min_val: float = 0.0, max_val: float = 1000000.0) -> bool:
-        """Validate trading amount."""
+    async def _check_request_body(self, request: Request) -> None:
+        """Check request body for malicious content."""
         try:
-            val = float(amount)
-            return min_val <= val <= max_val
-        except (ValueError, TypeError):
-            return False
+            # Get body without consuming it
+            body = await request.body()
+            if body:
+                body_str = body.decode('utf-8', errors='ignore')
+                self._check_malicious_content(body_str, "request_body")
+        except Exception as e:
+            logger.debug(f"Could not check request body: {e}")
     
-    @staticmethod
-    def validate_slippage(slippage: str) -> bool:
-        """Validate slippage percentage."""
-        try:
-            val = float(slippage)
-            return 0.1 <= val <= 50.0  # 0.1% to 50% slippage
-        except (ValueError, TypeError):
-            return False
-    
-    @staticmethod
-    def validate_token_address(address: str) -> bool:
-        """Validate token contract address."""
-        if not address:
-            return False
+    def _check_malicious_content(self, content: str, source: str) -> None:
+        """Check content for malicious patterns."""
+        # SQL injection check
+        for pattern in self.sql_patterns:
+            if pattern.search(content):
+                logger.warning(
+                    f"SQL injection attempt detected in {source}",
+                    extra={
+                        'extra_data': {
+                            'source': source,
+                            'pattern_type': 'sql_injection',
+                            'content_preview': content[:200]
+                        }
+                    }
+                )
+                break
         
-        # Similar to wallet address but may have different validation rules
-        return TradingEndpointValidator.validate_wallet_address(address)
-
-
-def create_request_validation_middleware(
-    max_request_size: int = 10 * 1024 * 1024,
-    request_timeout: float = 30.0,
-    enable_security_filtering: bool = True
-) -> type[RequestValidationMiddleware]:
-    """
-    Factory function to create request validation middleware with custom settings.
-    
-    Args:
-        max_request_size: Maximum request size in bytes
-        request_timeout: Request timeout in seconds
-        enable_security_filtering: Enable security pattern detection
+        # XSS check
+        for pattern in self.xss_patterns:
+            if pattern.search(content):
+                logger.warning(
+                    f"XSS attempt detected in {source}",
+                    extra={
+                        'extra_data': {
+                            'source': source,
+                            'pattern_type': 'xss',
+                            'content_preview': content[:200]
+                        }
+                    }
+                )
+                break
         
-    Returns:
-        Configured middleware class
-    """
-    class ConfiguredRequestValidation(RequestValidationMiddleware):
-        def __init__(self, app):
-            super().__init__(
-                app=app,
-                max_request_size=max_request_size,
-                request_timeout=request_timeout,
-                enable_security_filtering=enable_security_filtering
-            )
-    
-    return ConfiguredRequestValidation
-
-
-# Export for easy import
-__all__ = [
-    'RequestValidationMiddleware',
-    'TradingEndpointValidator', 
-    'create_request_validation_middleware'
-]
+        # Command injection check
+        for pattern in self.command_patterns:
+            if pattern.search(content):
+                logger.warning(
+                    f"Command injection attempt detected in {source}",
+                    extra={
+                        'extra_data': {
+                            'source': source,
+                            'pattern_type': 'command_injection',
+                            'content_preview': content[:200]
+                        }
+                    }
+                )
+                break

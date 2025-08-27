@@ -21,10 +21,10 @@ from solders.keypair import Keypair
 from solders.pubkey import Pubkey
 
 from ..core.settings import settings
-from ..core.logging import get_logger
+import logging
 from ..storage.repositories import WalletRepository, get_wallet_repository
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class WalletSecurityError(Exception):

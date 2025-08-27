@@ -33,10 +33,11 @@ from typing import Any, Dict, List, Optional, Set, Tuple, Union
 import numpy as np
 from scipy.stats import pearsonr, zscore
 
-from ..core.logging import get_logger
+
 from ..core.settings import settings
 
-logger = get_logger(__name__)
+import logging
+logger = logging.getLogger(__name__)
 
 
 class MarketRegime(str, Enum):

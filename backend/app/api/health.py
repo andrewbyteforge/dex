@@ -12,11 +12,11 @@ from typing import Any, Dict
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
-from ..core.logging import get_logger
+import logging
 from ..core.settings import settings
 from ..storage.database import db_manager
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/health", tags=["health"])
 
 

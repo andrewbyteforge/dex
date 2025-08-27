@@ -15,12 +15,12 @@ from eth_account.signers.local import LocalAccount
 from web3 import Web3
 
 from ..chains.evm_client import evm_client
-from ..core.logging import get_logger
+import logging
 from ..core.settings import settings
 from ..services.token_metadata import token_metadata_service
 from ..storage.repositories import TransactionRepository, get_transaction_repository
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class ApprovalError(Exception):

@@ -22,9 +22,9 @@ from .models import (
     OrderStatus, OrderType, Base
 )
 from ..core.database import get_database_session
-from ..core.logging import get_logger
+import logging
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class RepositoryError(Exception):

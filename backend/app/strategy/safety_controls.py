@@ -16,13 +16,13 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from enum import Enum
 
-from ..core.logging import get_logger
+import logging
 from ..core.settings import settings
 from ..strategy.risk_manager import risk_manager, RiskLevel, RiskAssessment
 from ..storage.models import SafetyEvent, BlacklistedToken
 from ..storage.repositories import SafetyRepository
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class SafetyLevel(str, Enum):

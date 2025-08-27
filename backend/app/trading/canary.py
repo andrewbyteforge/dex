@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from enum import Enum
 
-from ..core.logging import get_logger
+import logging
 from ..core.settings import settings
 from ..dex.uniswap_v2 import UniswapV2Adapter
 from ..dex.uniswap_v3 import UniswapV3Adapter
@@ -27,7 +27,7 @@ from ..trading.gas_strategy import GasStrategy
 from ..chains.evm_client import EVMClient
 from ..chains.solana_client import SolanaClient
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class CanaryStrategy(str, Enum):

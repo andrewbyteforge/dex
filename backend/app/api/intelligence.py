@@ -19,11 +19,12 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from pydantic import BaseModel, Field
 
 from ..core.dependencies import get_current_user, CurrentUser, rate_limiter
-from ..core.logging import get_logger
+
 from ..discovery.event_processor import event_processor, ProcessedPair, OpportunityLevel
 from ..ai.market_intelligence import MarketIntelligenceEngine
 
-logger = get_logger(__name__)
+import logging
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/intelligence", tags=["Market Intelligence"])
 

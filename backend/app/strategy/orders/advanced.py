@@ -26,7 +26,7 @@ from ...core.logging import get_logger
 from ...core.retry import retry_with_backoff
 from .triggers import OrderTriggerMonitor
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class OrderExecutionError(Exception):

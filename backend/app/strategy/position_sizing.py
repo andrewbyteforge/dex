@@ -14,11 +14,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from enum import Enum
 
-from ..core.logging import get_logger
+import logging
 from ..strategy.risk_manager import RiskLevel, RiskAssessment
 from .base import StrategySignal, StrategyConfig
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class PositionSizingMethod(str, Enum):

@@ -15,14 +15,14 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone, timedelta
 from enum import Enum
 
-from ..core.logging import get_logger
+import logging
 from ..strategy.risk_manager import RiskLevel
 from .base import (
     StrategyType, StrategyPreset, StrategyConfig, TriggerCondition
 )
 from .position_sizing import PositionSizingMethod
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class PresetCategory(str, Enum):

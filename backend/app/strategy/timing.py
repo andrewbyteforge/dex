@@ -16,11 +16,11 @@ from datetime import datetime, timezone, timedelta
 from enum import Enum
 import statistics
 
-from ..core.logging import get_logger
+import logging
 from ..strategy.risk_manager import RiskAssessment
 from .base import StrategySignal, TriggerCondition, SignalType
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class TimingSignal(str, Enum):

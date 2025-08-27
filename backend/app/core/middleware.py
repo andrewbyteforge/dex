@@ -13,7 +13,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from .logging import get_logger
 from .settings import settings
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class RequestTracingMiddleware(BaseHTTPMiddleware):

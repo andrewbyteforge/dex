@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from enum import Enum
 
-from ..core.logging import get_logger
+import logging
 from ..core.settings import settings
 from ..strategy.risk_manager import risk_manager, RiskAssessment, RiskLevel
 from ..strategy.safety_controls import safety_controls, CanaryResult
@@ -25,7 +25,7 @@ from ..trading.canary import enhanced_canary_tester, CanaryStrategy
 from ..discovery.chain_watchers import PairCreatedEvent
 from ..ws.discovery_hub import broadcast_trading_opportunity
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class StrategyType(str, Enum):

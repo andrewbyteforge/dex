@@ -17,7 +17,7 @@ from enum import Enum
 from collections import defaultdict, deque
 import heapq
 
-from ..core.logging import get_logger
+import logging
 from ..core.settings import settings
 from ..strategy.risk_manager import risk_manager, RiskAssessment
 from ..strategy.safety_controls import safety_controls
@@ -32,7 +32,7 @@ from .base import (
 from .position_sizing import position_sizer, PortfolioMetrics, HistoricalPerformance
 from .timing import timing_engine, TimingResult, TimingSignal
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class CoordinatorStatus(str, Enum):

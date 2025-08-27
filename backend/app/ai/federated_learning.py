@@ -34,10 +34,10 @@ from typing import Any, Dict, List, Optional, Set, Tuple, Union
 import numpy as np
 from scipy.stats import entropy
 
-from ..core.logging import get_logger
+import logging
 from ..core.settings import settings
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class LearningType(str, Enum):

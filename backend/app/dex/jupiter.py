@@ -11,9 +11,9 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-from ..core.logging import get_logger
+import logging
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 # Module-level constants
 DEFAULT_SLIPPAGE_TOLERANCE = Decimal("0.005")  # 0.5%

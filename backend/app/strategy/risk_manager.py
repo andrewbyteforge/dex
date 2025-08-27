@@ -17,10 +17,10 @@ from typing import Dict, List, Optional, Any, Set, Tuple
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from ..core.logging import get_logger
+import logging
 from ..core.settings import settings
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 # Import chain client types for proper typing
 try:

@@ -2,9 +2,9 @@ from decimal import Decimal
 from datetime import datetime, timedelta
 from typing import Optional
 from pydantic import BaseModel, Field, validator
-from ..core.logging import get_logger
+import logging
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 class SimulationParametersValidator:
     """Validation logic for simulation parameters."""

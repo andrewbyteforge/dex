@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
-from ..core.logging import get_logger
+import logging
 from ..core.settings import settings
 from .models import TradeRequest, TradeResult, TradePreview, TradeStatus, TradeType
 from .protocols import TradeExecutorProtocol
@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from ..storage.repositories import TransactionRepository
     from ..ledger.ledger_writer import LedgerWriter
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class ExecutionMode(str, Enum):

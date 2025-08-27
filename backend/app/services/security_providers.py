@@ -12,10 +12,10 @@ from dataclasses import dataclass
 
 import httpx
 
-from ..core.logging import get_logger
+import logging
 from ..core.settings import settings
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class SecurityProvider(str, Enum):

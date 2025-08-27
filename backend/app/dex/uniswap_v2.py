@@ -13,9 +13,9 @@ from typing import Any, Dict, List, Optional, Tuple
 from web3 import Web3
 from web3.exceptions import ContractLogicError, Web3Exception
 
-from ..core.logging import get_logger
+import logging
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 # Module-level constants
 DEFAULT_SLIPPAGE_TOLERANCE = Decimal("0.005")  # 0.5%

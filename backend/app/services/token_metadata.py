@@ -11,11 +11,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ..chains.evm_client import evm_client
 from ..chains.solana_client import solana_client
-from ..core.logging import get_logger
+import logging
 from ..core.settings import settings
 from ..storage.repositories import TokenMetadataRepository, get_token_repository
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class TokenMetadataError(Exception):

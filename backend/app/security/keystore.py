@@ -17,9 +17,9 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 from ..core.settings import settings
-from ..core.logging import get_logger
+import logging
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class KeystoreError(Exception):

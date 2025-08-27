@@ -14,10 +14,10 @@ from web3 import Web3
 from web3.types import FilterParams, LogReceipt
 from websockets.exceptions import ConnectionClosed
 
-from ..core.logging import get_logger
+import logging
 from ..core.settings import settings
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class EventType(str, Enum):

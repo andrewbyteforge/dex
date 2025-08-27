@@ -19,9 +19,9 @@ except ImportError as e:
     logger.error(f"Web3 package not found. Please install: pip install web3>=6.11.3")
     raise ImportError(f"Missing web3 dependency: {e}") from e
 
-from ..core.logging import get_logger
+import logging
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 # Module-level constants
 DEFAULT_SLIPPAGE_TOLERANCE = Decimal("0.005")  # 0.5%

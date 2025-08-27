@@ -17,12 +17,12 @@ from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
-from ..core.logging import get_logger
+import logging
 from ..core.dependencies import get_current_user, CurrentUser, require_autotrade_mode
 from ..autotrade.integration import get_autotrade_integration, get_autotrade_engine, AutotradeIntegration
 from ..autotrade.engine import AutotradeEngine, AutotradeMode, OpportunityType, OpportunityPriority, TradeOpportunity
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/autotrade", tags=["autotrade"])
 
 
