@@ -17,6 +17,7 @@ from ..strategy.risk_manager import risk_manager, RiskAssessment
 from ..services.security_providers import security_provider
 from ..ai.market_intelligence import MarketIntelligenceEngine
 from ..services.pricing import PricingService
+
 import logging
 logger = logging.getLogger(__name__)
 

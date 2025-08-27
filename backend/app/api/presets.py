@@ -14,11 +14,11 @@ from enum import Enum
 from fastapi import APIRouter, HTTPException, status, Depends, Query
 from pydantic import BaseModel, Field, field_validator
 
-import logging
+
 from ..core.exceptions import ValidationError, NotFoundError
+from ..core.logging import get_logger
 
-logger = logging.getLogger(__name__)
-
+logger = get_logger(__name__)
 # Create router
 router = APIRouter(prefix="/presets", tags=["Presets"])
 
