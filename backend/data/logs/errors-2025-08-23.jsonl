@@ -1,1 +1,0 @@
-{"timestamp": "2025-08-23T17:44:22.125608Z", "level": "ERROR", "trace_id": "d5b28404-a7b7-4a83-86a2-eb68998e2372", "module": "app.api.wallet", "message": "Failed to load wallet: 404: Keystore file not found", "location": {"file": "D:\\dex\\backend\\app\\api\\wallet.py", "line": 216, "function": "load_wallet"}}

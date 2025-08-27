@@ -6,19 +6,17 @@ including built-in and custom presets with validation and recommendations.
 """
 from __future__ import annotations
 
+import logging
 import uuid
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any
 from decimal import Decimal
 from enum import Enum
 
-from fastapi import APIRouter, HTTPException, status, Depends, Query
+from fastapi import APIRouter, HTTPException, status, Query
 from pydantic import BaseModel, Field, field_validator
 
+logger = logging.getLogger(__name__)
 
-from ..core.exceptions import ValidationError, NotFoundError
-from ..core.logging import get_logger
-
-logger = get_logger(__name__)
 # Create router
 router = APIRouter(prefix="/presets", tags=["Presets"])
 
@@ -103,25 +101,6 @@ class PresetConfig(BaseModel):
         return v.strip()
 
 
-class PresetSummary(BaseModel):
-    """Preset summary for listing."""
-    id: str = Field(..., description="Preset ID")
-    name: str = Field(..., description="Preset name")
-    strategy_type: StrategyType = Field(..., description="Strategy type")
-    preset_type: PresetType = Field(..., description="Preset classification")
-    risk_score: Optional[float] = Field(default=None, description="Risk score (0-100)")
-    version: int = Field(default=1, description="Preset version")
-    is_built_in: bool = Field(default=False, description="Whether preset is built-in")
-    created_at: Optional[str] = Field(default=None, description="Creation timestamp")
-    updated_at: Optional[str] = Field(default=None, description="Last update timestamp")
-
-
-class PresetDetail(PresetSummary):
-    """Detailed preset information."""
-    description: str = Field(..., description="Preset description")
-    config: PresetConfig = Field(..., description="Preset configuration")
-
-
 class PresetValidation(BaseModel):
     """Preset validation result."""
     status: str = Field(..., description="Validation status")
@@ -153,9 +132,27 @@ class PerformanceSummary(BaseModel):
     total_pnl_usd: float = Field(..., description="Total PnL in USD")
 
 
+class PresetSummary(BaseModel):
+    """Preset summary for listing."""
+    id: str = Field(..., description="Preset ID")
+    name: str = Field(..., description="Preset name")
+    strategy_type: StrategyType = Field(..., description="Strategy type")
+    preset_type: PresetType = Field(..., description="Preset classification")
+    risk_score: Optional[float] = Field(default=None, description="Risk score (0-100)")
+    version: int = Field(default=1, description="Preset version")
+    is_built_in: bool = Field(default=False, description="Whether preset is built-in")
+    created_at: Optional[str] = Field(default=None, description="Creation timestamp")
+    updated_at: Optional[str] = Field(default=None, description="Last update timestamp")
+
+
+class PresetDetail(PresetSummary):
+    """Detailed preset information."""
+    description: str = Field(..., description="Preset description")
+    config: PresetConfig = Field(..., description="Preset configuration")
+
+
 # In-memory storage for custom presets (will be replaced with database)
 _custom_presets: Dict[str, PresetDetail] = {}
-_preset_counter = 1
 
 
 # Built-in presets
@@ -542,35 +539,6 @@ async def list_presets(
     return presets
 
 
-@router.get("/{preset_id}", response_model=PresetDetail)
-async def get_preset(preset_id: str) -> PresetDetail:
-    """
-    Get detailed preset configuration.
-    
-    Args:
-        preset_id: Preset identifier
-        
-    Returns:
-        Detailed preset information
-    """
-    logger.info(f"Getting preset: {preset_id}")
-    
-    # Check built-in presets first
-    built_in_presets = _get_built_in_presets()
-    if preset_id in built_in_presets:
-        return built_in_presets[preset_id]
-    
-    # Check custom presets
-    if preset_id in _custom_presets:
-        return _custom_presets[preset_id]
-    
-    logger.warning(f"Preset not found: {preset_id}")
-    raise HTTPException(
-        status_code=status.HTTP_404_NOT_FOUND,
-        detail=f"Preset '{preset_id}' not found"
-    )
-
-
 @router.post("", response_model=PresetDetail, status_code=status.HTTP_201_CREATED)
 async def create_preset(config: PresetConfig) -> PresetDetail:
     """
@@ -710,7 +678,6 @@ async def delete_preset(preset_id: str) -> None:
     del _custom_presets[preset_id]
     
     logger.info(f"Deleted preset: {preset_id}")
-    # Explicitly return None for HTTP 204
     return None
 
 
@@ -867,6 +834,35 @@ async def clone_preset(preset_id: str, name: Optional[str] = None) -> PresetDeta
     return await create_preset(cloned_config)
 
 
+@router.get("/performance/summary", response_model=PerformanceSummary)
+async def get_performance_summary() -> PerformanceSummary:
+    """
+    Get preset performance summary.
+    
+    Returns:
+        Performance summary with preset and trade statistics
+    """
+    built_in_count = len(_get_built_in_presets())
+    custom_count = len(_custom_presets)
+    
+    # Mock trade data (will be replaced with actual data)
+    total_trades = 0
+    successful_trades = 0
+    total_pnl = 0.0
+    
+    win_rate = (successful_trades / total_trades * 100) if total_trades > 0 else 0.0
+    
+    return PerformanceSummary(
+        total_presets=built_in_count + custom_count,
+        built_in_presets=built_in_count,
+        custom_presets=custom_count,
+        total_trades=total_trades,
+        successful_trades=successful_trades,
+        win_rate=win_rate,
+        total_pnl_usd=total_pnl
+    )
+
+
 @router.get("/methods/position-sizing", response_model=List[Dict[str, str]])
 async def get_position_sizing_methods() -> List[Dict[str, str]]:
     """
@@ -939,32 +935,3 @@ async def get_trigger_conditions() -> List[Dict[str, str]]:
             "description": "Trigger on price momentum signals"
         }
     ]
-
-
-@router.get("/performance/summary", response_model=PerformanceSummary)
-async def get_performance_summary() -> PerformanceSummary:
-    """
-    Get preset performance summary.
-    
-    Returns:
-        Performance summary with preset and trade statistics
-    """
-    built_in_count = len(_get_built_in_presets())
-    custom_count = len(_custom_presets)
-    
-    # Mock trade data (will be replaced with actual data)
-    total_trades = 0
-    successful_trades = 0
-    total_pnl = 0.0
-    
-    win_rate = (successful_trades / total_trades * 100) if total_trades > 0 else 0.0
-    
-    return PerformanceSummary(
-        total_presets=built_in_count + custom_count,
-        built_in_presets=built_in_count,
-        custom_presets=custom_count,
-        total_trades=total_trades,
-        successful_trades=successful_trades,
-        win_rate=win_rate,
-        total_pnl_usd=total_pnl
-    )
