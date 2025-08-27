@@ -1,8 +1,9 @@
-"""Trade execution engine with preview, validation, and execution capabilities."""
+"""Trade execution engine with preview, validation, and dual-mode execution capabilities."""
 from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import time
 import uuid
 from decimal import Decimal
@@ -25,8 +26,37 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+class ExecutionMode(str, Enum):
+    """Trade execution modes for dual-mode trading."""
+    LIVE = "live"
+    PAPER = "paper"
+
+
+class PaperTradeSimulation(BaseModel):
+    """Paper trade simulation configuration."""
+    
+    # Latency simulation (milliseconds)
+    base_latency_ms: int = Field(default=120, description="Base execution latency")
+    latency_variance_ms: int = Field(default=50, description="Latency variance range")
+    
+    # Slippage simulation
+    base_slippage_bps: int = Field(default=10, description="Base slippage in basis points")
+    slippage_variance_bps: int = Field(default=20, description="Slippage variance range")
+    
+    # Failure simulation
+    failure_rate: float = Field(default=0.02, description="Transaction failure rate (2%)")
+    revert_rate: float = Field(default=0.005, description="Transaction revert rate (0.5%)")
+    
+    # MEV simulation
+    mev_sandwich_rate: float = Field(default=0.08, description="MEV sandwich attack rate (8%)")
+    mev_impact_bps: int = Field(default=30, description="MEV impact in basis points")
+    
+    # Gas simulation
+    gas_variance: float = Field(default=0.15, description="Gas price variance (±15%)")
+
+
 class TradeExecutor(TradeExecutorProtocol):
-    """Core trade execution engine."""
+    """Core trade execution engine with dual-mode support."""
     
     def __init__(
         self,
@@ -49,10 +79,17 @@ class TradeExecutor(TradeExecutorProtocol):
         self.transaction_repo = transaction_repo
         self.ledger_writer = ledger_writer
         
-        logger.info("TradeExecutor initialized with all dependencies")
+        # Paper trading simulation config
+        self.paper_simulation = PaperTradeSimulation()
+        
+        logger.info("TradeExecutor initialized with dual-mode support (live + paper trading)")
         
         # Active trades tracking
         self.active_trades: Dict[str, TradeResult] = {}
+        
+        # Paper trading metrics
+        self.paper_trade_count = 0
+        self.paper_success_count = 0
         
         # Router contract addresses
         self.router_contracts = {
@@ -76,7 +113,7 @@ class TradeExecutor(TradeExecutorProtocol):
         chain_clients: Dict,
     ) -> TradePreview:
         """
-        Generate trade preview with validation.
+        Generate trade preview with validation (identical for both modes).
         
         Args:
             request: Trade request parameters
@@ -205,14 +242,17 @@ class TradeExecutor(TradeExecutorProtocol):
         request: TradeRequest,
         chain_clients: Dict,
         preview: Optional[TradePreview] = None,
+        execution_mode: ExecutionMode = ExecutionMode.LIVE,
     ) -> TradeResult:
         """
         Execute trade with full validation and monitoring.
+        Supports both live and paper trading modes with identical logic.
         
         Args:
             request: Trade request parameters
             chain_clients: Chain client instances
             preview: Optional pre-generated preview
+            execution_mode: Live or paper trading mode
             
         Returns:
             Trade execution result
@@ -221,7 +261,7 @@ class TradeExecutor(TradeExecutorProtocol):
         trace_id = str(uuid.uuid4())
         
         logger.info(
-            f"Starting trade execution: {trace_id}",
+            f"Starting trade execution: {trace_id} (mode: {execution_mode.value})",
             extra={
                 'extra_data': {
                     'trace_id': trace_id,
@@ -229,6 +269,7 @@ class TradeExecutor(TradeExecutorProtocol):
                     'dex': request.dex,
                     'trade_type': request.trade_type,
                     'wallet': request.wallet_address,
+                    'execution_mode': execution_mode.value,
                 }
             }
         )
@@ -255,13 +296,17 @@ class TradeExecutor(TradeExecutorProtocol):
                     result.error_message = f"Invalid trade: {', '.join(preview.validation_errors)}"
                     return result
             
-            # Get chain client
-            if request.chain == "solana":
-                client = chain_clients.get("solana")
-                return await self._execute_solana_trade(request, client, result)
+            # Route to appropriate execution method
+            if execution_mode == ExecutionMode.PAPER:
+                return await self._execute_paper_trade(request, result, preview)
             else:
-                client = chain_clients.get("evm")
-                return await self._execute_evm_trade(request, client, result, preview)
+                # Existing live execution logic
+                if request.chain == "solana":
+                    client = chain_clients.get("solana")
+                    return await self._execute_solana_trade(request, client, result)
+                else:
+                    client = chain_clients.get("evm")
+                    return await self._execute_evm_trade(request, client, result, preview)
                 
         except Exception as e:
             logger.error(
@@ -275,12 +320,257 @@ class TradeExecutor(TradeExecutorProtocol):
         finally:
             result.execution_time_ms = (time.time() - start_time) * 1000
             
-            # Write to ledger
-            await self._write_to_ledger(request, result)
+            # Write to ledger (both modes)
+            await self._write_to_ledger(request, result, execution_mode)
             
             # Clean up active trades after completion
             if result.status in [TradeStatus.CONFIRMED, TradeStatus.FAILED, TradeStatus.REVERTED]:
                 self.active_trades.pop(trace_id, None)
+    
+    async def _execute_paper_trade(
+        self,
+        request: TradeRequest,
+        result: TradeResult,
+        preview: TradePreview,
+    ) -> TradeResult:
+        """
+        Execute realistic paper trade simulation.
+        
+        Simulates all aspects of real trading including:
+        - Execution latency and variance
+        - Slippage and price impact
+        - MEV attacks and sandwiching
+        - Gas fees and network congestion
+        - Failure scenarios (reverts, timeouts)
+        
+        Args:
+            request: Trade request parameters
+            result: TradeResult to update
+            preview: Trade preview with expected outcomes
+            
+        Returns:
+            Simulated trade execution result
+        """
+        try:
+            # Update paper trade metrics
+            self.paper_trade_count += 1
+            
+            logger.info(
+                f"Executing paper trade: {result.trace_id}",
+                extra={
+                    'extra_data': {
+                        'trace_id': result.trace_id,
+                        'paper_trade_count': self.paper_trade_count,
+                        'chain': request.chain,
+                        'dex': request.dex,
+                    }
+                }
+            )
+            
+            # Simulate execution latency
+            execution_latency_ms = self._simulate_execution_latency()
+            await asyncio.sleep(execution_latency_ms / 1000.0)
+            
+            # Simulate approval phase if needed
+            result.status = TradeStatus.APPROVING
+            await asyncio.sleep(0.1)  # Brief approval delay
+            
+            # Simulate transaction building
+            result.status = TradeStatus.BUILDING
+            await asyncio.sleep(0.05)
+            
+            # Check for simulated failures
+            failure_result = self._simulate_execution_failures(request)
+            if failure_result["failed"]:
+                result.status = TradeStatus.REVERTED if failure_result["reverted"] else TradeStatus.FAILED
+                result.error_message = failure_result["reason"]
+                
+                logger.warning(
+                    f"Paper trade failed: {result.trace_id}: {failure_result['reason']}",
+                    extra={'extra_data': {'trace_id': result.trace_id, 'failure_type': failure_result['type']}}
+                )
+                return result
+            
+            # Simulate execution phase
+            result.status = TradeStatus.EXECUTING
+            
+            # Simulate MEV impact
+            mev_impact = self._simulate_mev_impact(request, preview)
+            
+            # Calculate realistic output with slippage + MEV
+            realistic_output = self._calculate_realistic_output(
+                request, preview, mev_impact
+            )
+            
+            # Simulate gas usage
+            simulated_gas = self._simulate_gas_usage(preview)
+            
+            # Generate mock transaction details
+            result.status = TradeStatus.SUBMITTED
+            result.tx_hash = self._generate_mock_tx_hash()
+            
+            # Simulate network confirmation delay
+            confirmation_delay = random.uniform(2.0, 8.0)  # 2-8 seconds
+            await asyncio.sleep(confirmation_delay)
+            
+            # Simulate successful execution
+            result.status = TradeStatus.CONFIRMED
+            result.block_number = random.randint(18_000_000, 19_000_000)
+            result.gas_used = str(simulated_gas["gas_used"])
+            result.actual_output = str(realistic_output)
+            result.actual_price = str(realistic_output / Decimal(request.amount_in))
+            
+            # Update success metrics
+            self.paper_success_count += 1
+            
+            logger.info(
+                f"Paper trade executed successfully: {result.trace_id}",
+                extra={
+                    'extra_data': {
+                        'trace_id': result.trace_id,
+                        'execution_time_ms': result.execution_time_ms,
+                        'output_amount': str(realistic_output),
+                        'mev_impact_bps': mev_impact["impact_bps"],
+                        'paper_success_rate': self.paper_success_count / self.paper_trade_count,
+                    }
+                }
+            )
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Paper trade execution error: {e}")
+            result.status = TradeStatus.FAILED
+            result.error_message = f"Paper trade simulation error: {str(e)}"
+            return result
+    
+    def _simulate_execution_latency(self) -> int:
+        """Simulate realistic execution latency."""
+        base = self.paper_simulation.base_latency_ms
+        variance = self.paper_simulation.latency_variance_ms
+        return random.randint(base - variance//2, base + variance//2)
+    
+    def _simulate_execution_failures(self, request: TradeRequest) -> Dict[str, any]:
+        """Simulate realistic execution failures."""
+        random_value = random.random()
+        
+        # Transaction failure (network issues, gas estimation errors)
+        if random_value < self.paper_simulation.failure_rate:
+            return {
+                "failed": True,
+                "reverted": False,
+                "reason": "Transaction failed: gas estimation error",
+                "type": "transaction_failure"
+            }
+        
+        # Transaction revert (slippage, liquidity issues)
+        if random_value < (self.paper_simulation.failure_rate + self.paper_simulation.revert_rate):
+            return {
+                "failed": True,
+                "reverted": True,
+                "reason": "Transaction reverted: insufficient output amount",
+                "type": "revert"
+            }
+        
+        # Deadline exceeded
+        if random_value < 0.01:  # 1% chance
+            return {
+                "failed": True,
+                "reverted": True,
+                "reason": "Transaction reverted: deadline exceeded",
+                "type": "deadline"
+            }
+        
+        return {"failed": False}
+    
+    def _simulate_mev_impact(self, request: TradeRequest, preview: TradePreview) -> Dict[str, any]:
+        """Simulate MEV sandwich attacks and frontrunning."""
+        if random.random() < self.paper_simulation.mev_sandwich_rate:
+            impact_bps = random.randint(10, self.paper_simulation.mev_impact_bps)
+            return {
+                "sandwiched": True,
+                "impact_bps": impact_bps,
+                "type": "sandwich_attack"
+            }
+        
+        return {"sandwiched": False, "impact_bps": 0}
+    
+    def _calculate_realistic_output(
+        self,
+        request: TradeRequest,
+        preview: TradePreview,
+        mev_impact: Dict[str, any]
+    ) -> Decimal:
+        """Calculate realistic output amount with slippage and MEV impact."""
+        expected_output = Decimal(preview.expected_output)
+        
+        # Apply base slippage
+        base_slippage_bps = random.randint(
+            max(1, self.paper_simulation.base_slippage_bps - self.paper_simulation.slippage_variance_bps//2),
+            self.paper_simulation.base_slippage_bps + self.paper_simulation.slippage_variance_bps//2
+        )
+        
+        slippage_factor = Decimal("1") - (Decimal(str(base_slippage_bps)) / Decimal("10000"))
+        output_after_slippage = expected_output * slippage_factor
+        
+        # Apply MEV impact
+        if mev_impact.get("sandwiched", False):
+            mev_factor = Decimal("1") - (Decimal(str(mev_impact["impact_bps"])) / Decimal("10000"))
+            output_after_slippage *= mev_factor
+        
+        # Ensure minimum output is respected
+        minimum_output = Decimal(preview.minimum_output)
+        
+        # Small chance of failing minimum output (causes revert in real trading)
+        if output_after_slippage < minimum_output and random.random() < 0.02:
+            return minimum_output * Decimal("0.99")  # Slightly below minimum
+        
+        return max(output_after_slippage, minimum_output)
+    
+    def _simulate_gas_usage(self, preview: TradePreview) -> Dict[str, any]:
+        """Simulate realistic gas usage with variance."""
+        base_gas = int(preview.gas_estimate)
+        
+        # Gas can vary by ±15% due to network conditions
+        variance = int(base_gas * self.paper_simulation.gas_variance)
+        actual_gas = random.randint(
+            max(21000, base_gas - variance),
+            base_gas + variance
+        )
+        
+        return {
+            "gas_used": actual_gas,
+            "gas_efficiency": actual_gas / base_gas if base_gas > 0 else 1.0
+        }
+    
+    def _generate_mock_tx_hash(self) -> str:
+        """Generate realistic-looking mock transaction hash."""
+        return "0x" + "".join(random.choices("0123456789abcdef", k=64))
+    
+    async def get_paper_trading_metrics(self) -> Dict[str, any]:
+        """Get paper trading performance metrics."""
+        success_rate = (self.paper_success_count / self.paper_trade_count) if self.paper_trade_count > 0 else 0.0
+        
+        return {
+            "total_paper_trades": self.paper_trade_count,
+            "successful_paper_trades": self.paper_success_count,
+            "paper_success_rate": success_rate,
+            "simulation_config": {
+                "base_latency_ms": self.paper_simulation.base_latency_ms,
+                "failure_rate": self.paper_simulation.failure_rate,
+                "mev_sandwich_rate": self.paper_simulation.mev_sandwich_rate,
+                "revert_rate": self.paper_simulation.revert_rate,
+            }
+        }
+    
+    async def update_paper_simulation_config(self, config_updates: Dict[str, any]) -> None:
+        """Update paper trading simulation configuration."""
+        for key, value in config_updates.items():
+            if hasattr(self.paper_simulation, key):
+                setattr(self.paper_simulation, key, value)
+                logger.info(f"Updated paper simulation config: {key} = {value}")
+    
+    # Existing methods remain unchanged...
     
     async def _execute_evm_trade(
         self,
@@ -570,8 +860,13 @@ class TradeExecutor(TradeExecutorProtocol):
         
         return MockResult()
     
-    async def _write_to_ledger(self, request: TradeRequest, result: TradeResult) -> None:
-        """Write trade result to ledger."""
+    async def _write_to_ledger(
+        self, 
+        request: TradeRequest, 
+        result: TradeResult, 
+        execution_mode: ExecutionMode = ExecutionMode.LIVE
+    ) -> None:
+        """Write trade result to ledger with execution mode tracking."""
         try:
             await self.ledger_writer.write_trade(
                 trace_id=result.trace_id,
@@ -586,6 +881,38 @@ class TradeExecutor(TradeExecutorProtocol):
                 status=result.status,
                 gas_used=result.gas_used,
                 error_message=result.error_message,
+                execution_mode=execution_mode.value,  # Track whether live or paper
             )
         except Exception as e:
             logger.error(f"Failed to write to ledger: {e}")
+
+
+# Convenience functions for dual-mode execution
+async def execute_live_trade(
+    executor: TradeExecutor,
+    request: TradeRequest,
+    chain_clients: Dict,
+    preview: Optional[TradePreview] = None,
+) -> TradeResult:
+    """Execute live trade with real funds."""
+    return await executor.execute_trade(
+        request=request,
+        chain_clients=chain_clients,
+        preview=preview,
+        execution_mode=ExecutionMode.LIVE,
+    )
+
+
+async def execute_paper_trade(
+    executor: TradeExecutor,
+    request: TradeRequest,
+    chain_clients: Dict,
+    preview: Optional[TradePreview] = None,
+) -> TradeResult:
+    """Execute paper trade simulation (no real funds)."""
+    return await executor.execute_trade(
+        request=request,
+        chain_clients=chain_clients,
+        preview=preview,
+        execution_mode=ExecutionMode.PAPER,
+    )

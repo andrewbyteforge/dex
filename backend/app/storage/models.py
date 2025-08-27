@@ -392,6 +392,9 @@ class LedgerEntry(Base):
     archived = Column(Boolean, default=False)
     archived_at = Column(DateTime(timezone=True))
     
+    # Execution mode tracking for paper vs live trades
+    execution_mode = Column(String(16), default="live", nullable=False)  # "live" or "paper"
+    
     # Relationships
     user = relationship("User", back_populates="ledger_entries")
 
@@ -432,6 +435,7 @@ class LedgerEntry(Base):
             'notes': self.notes,
             'archived': self.archived,
             'archived_at': self.archived_at.isoformat() if self.archived_at else None,
+            'execution_mode': self.execution_mode,
         }
 
 
@@ -726,6 +730,7 @@ Index('idx_ledger_wallet_created_at', LedgerEntry.wallet_address, LedgerEntry.cr
 Index('idx_ledger_chain_created_at', LedgerEntry.chain, LedgerEntry.created_at)
 Index('idx_ledger_status', LedgerEntry.status)
 Index('idx_ledger_archived', LedgerEntry.archived)
+Index('idx_ledger_execution_mode', LedgerEntry.execution_mode)  # New index for paper vs live trades
 
 # Safety event indices
 Index('idx_safety_timestamp', SafetyEvent.timestamp)
