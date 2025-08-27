@@ -468,13 +468,6 @@ async def get_current_user(
         )
 
 
-
-
-
-
-
-
-
 def _get_client_ip(request: Request) -> str:
     """
     Extract client IP address from request properly handling Address objects.
@@ -500,9 +493,6 @@ def _get_client_ip(request: Request) -> str:
         return request.client.host
     
     return "unknown"
-
-
-
 
 
 async def get_current_active_user(
@@ -932,6 +922,163 @@ def get_trade_executor():
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Trade executor initialization failed"
+        )
+
+
+# ============================================================================
+# Autotrade Service Dependencies (NEW ADDITIONS)
+# ============================================================================
+
+async def get_risk_manager():
+    """
+    FastAPI dependency to get RiskManager instance.
+    
+    Returns:
+        RiskManager: Risk assessment service
+    """
+    try:
+        from ..strategy.risk_manager import risk_manager
+        logger.debug("Retrieved RiskManager instance")
+        return risk_manager
+    except Exception as e:
+        logger.error(f"Failed to get RiskManager: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Risk manager not available"
+        )
+
+
+async def get_safety_controls():
+    """
+    FastAPI dependency to get SafetyControls instance.
+    
+    Returns:
+        SafetyControls: Safety controls and circuit breakers
+    """
+    try:
+        from ..strategy.safety_controls import safety_controls
+        logger.debug("Retrieved SafetyControls instance")
+        return safety_controls
+    except Exception as e:
+        logger.error(f"Failed to get SafetyControls: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Safety controls not available"
+        )
+
+
+async def get_performance_analytics():
+    """
+    FastAPI dependency to get PerformanceAnalytics instance.
+    
+    Returns:
+        PerformanceAnalytics: Performance tracking service
+    """
+    try:
+        # Try to import the real performance analytics
+        from ..analytics.performance import PerformanceAnalytics
+        
+        # Create a mock implementation for now
+        class MockPerformanceAnalytics:
+            """Mock performance analytics service."""
+            
+            def __init__(self):
+                """Initialize mock analytics."""
+                self.name = "MockPerformanceAnalytics"
+                self.trades_tracked = 0
+                logger.debug("Mock performance analytics initialized")
+            
+            async def track_trade(self, trade_data: Dict[str, Any]) -> None:
+                """Track trade performance."""
+                self.trades_tracked += 1
+                logger.debug(f"Trade tracked: {self.trades_tracked}")
+            
+            async def get_metrics(self) -> Dict[str, Any]:
+                """Get performance metrics."""
+                return {
+                    "trades_tracked": self.trades_tracked,
+                    "total_profit": 0.0,
+                    "win_rate": 0.0
+                }
+        
+        analytics = MockPerformanceAnalytics()
+        logger.debug("Retrieved PerformanceAnalytics instance")
+        return analytics
+        
+    except Exception as e:
+        logger.error(f"Failed to get PerformanceAnalytics: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Performance analytics not available"
+        )
+
+
+async def get_event_processor():
+    """
+    FastAPI dependency to get EventProcessor instance.
+    
+    Returns:
+        EventProcessor: Discovery event processor
+    """
+    try:
+        # Import the actual EventProcessor
+        from ..discovery.event_processor import EventProcessor
+        
+        # Create mock for now
+        class MockEventProcessor:
+            """Mock event processor service."""
+            
+            def __init__(self):
+                """Initialize mock event processor."""
+                self.name = "MockEventProcessor"
+                self.callbacks = {}
+                logger.debug("Mock event processor initialized")
+            
+            def add_callback(self, event_type: str, callback):
+                """Add event callback."""
+                if event_type not in self.callbacks:
+                    self.callbacks[event_type] = []
+                self.callbacks[event_type].append(callback)
+                logger.debug(f"Added callback for event type: {event_type}")
+            
+            async def process_event(self, event_type: str, event_data: Dict[str, Any]) -> None:
+                """Process discovery event."""
+                callbacks = self.callbacks.get(event_type, [])
+                for callback in callbacks:
+                    try:
+                        await callback(event_data)
+                    except Exception as e:
+                        logger.error(f"Error in event callback: {e}")
+        
+        processor = MockEventProcessor()
+        logger.debug("Retrieved EventProcessor instance")
+        return processor
+        
+    except Exception as e:
+        logger.error(f"Failed to get EventProcessor: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Event processor not available"
+        )
+
+
+# Add repository dependency that's already available
+async def get_transaction_repository():
+    """
+    FastAPI dependency to get TransactionRepository instance.
+    
+    Returns:
+        TransactionRepository: Transaction repository
+    """
+    try:
+        from ..storage.repositories import get_transaction_repository
+        async for repo in get_transaction_repository():
+            return repo
+    except Exception as e:
+        logger.error(f"Failed to get TransactionRepository: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Transaction repository not available"
         )
 
 

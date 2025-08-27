@@ -14,6 +14,8 @@ import AutotradeMonitor from './AutotradeMonitor';
 import AdvancedOrders from './AdvancedOrders';
 import useWebSocket from '../hooks/useWebSocket';
 
+const API_BASE_URL = 'http://localhost:8001';
+
 /**
  * Enhanced Autotrade dashboard component with comprehensive error handling.
  * Uses stable WebSocket connection with proper lifecycle management.
@@ -434,7 +436,7 @@ const Autotrade = () => {
 
       logMessage('info', 'Loading initial autotrade data', { isRetry, attempt: retryCount + 1 });
 
-      const statusResponse = await fetch('/api/v1/autotrade/status', {
+      const statusResponse = await fetch('http://localhost:8001/api/v1/autotrade/status', {
         headers: {
           'Content-Type': 'application/json'
         },
@@ -502,7 +504,7 @@ const Autotrade = () => {
 
       logMessage('info', `Starting autotrade engine`, { mode });
 
-      const response = await fetch(`/api/v1/autotrade/start?mode=${encodeURIComponent(mode)}`, {
+      const response = await fetch(`http://localhost:8001/api/v1/autotrade/start?mode=${encodeURIComponent(mode)}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -554,7 +556,7 @@ const Autotrade = () => {
 
       logMessage('info', 'Stopping autotrade engine');
 
-      const response = await fetch('/api/v1/autotrade/stop', {
+      const response = await fetch('http://localhost:8001/api/v1/autotrade/stop', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -603,7 +605,7 @@ const Autotrade = () => {
     try {
       logMessage('warn', 'Initiating emergency stop procedure');
 
-      const response = await fetch('/api/v1/autotrade/emergency-stop', {
+      const response = await fetch('http://localhost:8001/api/v1/autotrade/emergency-stop', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
