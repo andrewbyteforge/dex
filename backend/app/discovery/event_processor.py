@@ -15,6 +15,8 @@ from .chain_watchers import PairCreatedEvent, LiquidityEvent
 from .dexscreener import dexscreener_client, DexscreenerResponse
 from ..strategy.risk_manager import risk_manager, RiskAssessment
 from ..services.security_providers import security_provider
+from ..ai.market_intelligence import MarketIntelligenceEngine
+from ..services.pricing import PricingService
 from ..core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -85,6 +87,10 @@ class ProcessedPair:
     risk_assessment_time_ms: Optional[float] = None
     security_provider_data: Optional[Dict[str, Any]] = None
     
+    # Phase 2 Week 10: Market Intelligence data
+    intelligence_data: Optional[Dict[str, Any]] = None
+    intelligence_analysis_time_ms: Optional[float] = None
+    
     # Final classification
     opportunity_level: OpportunityLevel = OpportunityLevel.POOR
     tradeable: bool = False
@@ -112,10 +118,18 @@ class EventProcessor:
     """
     
     def __init__(self):
-        """Initialize event processor."""
+        """Initialize event processor with Market Intelligence integration."""
         self.is_running = False
         self.processing_queue = asyncio.Queue(maxsize=1000)
         self.processed_pairs: Dict[str, ProcessedPair] = {}
+        
+        # Phase 2 Week 10: Initialize Market Intelligence Engine
+        try:
+            self.market_intelligence = MarketIntelligenceEngine()
+            logger.info("Market Intelligence Engine initialized for discovery processing")
+        except Exception as e:
+            logger.error(f"Failed to initialize Market Intelligence: {e}")
+            self.market_intelligence = None
         
         # Processing callbacks
         self.processing_callbacks: Dict[ProcessingStatus, List[Callable]] = {
@@ -293,11 +307,15 @@ class EventProcessor:
             # Step 1: Validate with Dexscreener
             await self._validate_with_dexscreener(processed_pair)
             
-            # Step 2: Risk assessment
+            # Step 2: Market Intelligence Analysis (Phase 2 Week 10 Enhancement)
+            if processed_pair.dexscreener_found and processed_pair.has_liquidity:
+                await self._analyze_market_intelligence(processed_pair)
+            
+            # Step 3: Risk assessment
             if processed_pair.dexscreener_found and processed_pair.has_liquidity:
                 await self._assess_risk(processed_pair)
             
-            # Step 3: Final classification
+            # Step 4: Final classification
             self._classify_opportunity(processed_pair)
             
             # Complete processing
@@ -330,6 +348,7 @@ class EventProcessor:
                         'processing_time_ms': processed_pair.processing_time_ms,
                         'liquidity_usd': float(processed_pair.liquidity_usd) if processed_pair.liquidity_usd else None,
                         'risk_level': processed_pair.risk_assessment.overall_risk.value if processed_pair.risk_assessment else None,
+                        'intelligence_score': processed_pair.intelligence_data.get("intelligence_score", {}).get("overall_score") if processed_pair.intelligence_data else None,
                     }
                 }
             )
@@ -424,6 +443,155 @@ class EventProcessor:
             processed_pair.errors.append(f"Dexscreener validation failed: {str(e)}")
             logger.error(f"Dexscreener validation error for {processed_pair.pair_address}: {e}")
     
+    async def _analyze_market_intelligence(self, processed_pair: ProcessedPair):
+        """
+        Analyze pair using Market Intelligence Engine (Phase 2 Week 10 Enhancement).
+        
+        Performs comprehensive AI analysis including social sentiment, whale behavior,
+        market regime detection, and coordination pattern recognition.
+        """
+        if not self.market_intelligence:
+            logger.warning("Market Intelligence Engine not available, skipping AI analysis")
+            return
+        
+        intelligence_start = time.time()
+        
+        try:
+            # Determine target token (usually token0 is the new token)
+            target_token = processed_pair.token0
+            token_symbol = processed_pair.base_token_symbol or "UNKNOWN"
+            
+            logger.debug(
+                f"Starting Market Intelligence analysis for {processed_pair.pair_address}",
+                extra={
+                    'extra_data': {
+                        'pair_address': processed_pair.pair_address,
+                        'target_token': target_token,
+                        'symbol': token_symbol,
+                        'chain': processed_pair.chain,
+                    }
+                }
+            )
+            
+            # Phase 1: Social Sentiment Analysis
+            social_sentiment = await self.market_intelligence.analyze_social_sentiment(
+                token_address=target_token,
+                token_symbol=token_symbol,
+                lookback_hours=1  # New pairs need immediate sentiment
+            )
+            
+            # Phase 2: Whale Behavior Analysis
+            whale_analysis = await self.market_intelligence.analyze_whale_behavior(
+                token_address=target_token,
+                chain=processed_pair.chain,
+                lookback_minutes=30  # Short lookback for new pairs
+            )
+            
+            # Phase 3: Market Regime Detection
+            market_regime = await self.market_intelligence.detect_market_regime(
+                timeframe_minutes=60  # 1-hour market context
+            )
+            
+            # Phase 4: Coordination Pattern Recognition
+            coordination_analysis = await self.market_intelligence.detect_coordination_patterns(
+                token_address=target_token,
+                chain=processed_pair.chain,
+                lookback_minutes=15  # Very recent for new pairs
+            )
+            
+            # Phase 5: Generate Unified Intelligence Score
+            intelligence_score = await self.market_intelligence.calculate_intelligence_score(
+                social_sentiment=social_sentiment,
+                whale_behavior=whale_analysis,
+                market_regime=market_regime,
+                coordination_patterns=coordination_analysis
+            )
+            
+            # Store intelligence data in processed_pair
+            processed_pair.intelligence_data = {
+                "social_sentiment": {
+                    "sentiment_score": social_sentiment.sentiment_score,
+                    "volume_mentions": social_sentiment.volume_mentions,
+                    "bot_activity": social_sentiment.bot_activity,
+                    "sentiment_trend": social_sentiment.sentiment_trend,
+                },
+                "whale_behavior": {
+                    "whale_activity_detected": whale_analysis.whale_activity_detected,
+                    "large_transactions": len(whale_analysis.large_transactions),
+                    "net_whale_flow": whale_analysis.net_whale_flow,
+                    "whale_sentiment": whale_analysis.whale_sentiment,
+                },
+                "market_regime": {
+                    "regime": market_regime.regime,
+                    "confidence": market_regime.confidence,
+                    "volatility_level": market_regime.volatility_level,
+                },
+                "coordination_patterns": {
+                    "coordination_detected": coordination_analysis.coordination_detected,
+                    "pattern_type": coordination_analysis.pattern_type,
+                    "confidence": coordination_analysis.confidence,
+                    "risk_level": coordination_analysis.risk_level,
+                },
+                "intelligence_score": {
+                    "overall_score": intelligence_score.overall_score,
+                    "confidence": intelligence_score.confidence,
+                    "risk_factors": intelligence_score.risk_factors,
+                    "opportunity_factors": intelligence_score.opportunity_factors,
+                }
+            }
+            
+            # Add intelligence-based recommendations
+            if intelligence_score.overall_score >= 0.7:
+                processed_pair.trading_recommendations.append(
+                    f"AI Intelligence: HIGH opportunity score ({intelligence_score.overall_score:.2f})"
+                )
+            elif intelligence_score.overall_score >= 0.5:
+                processed_pair.trading_recommendations.append(
+                    f"AI Intelligence: MODERATE opportunity score ({intelligence_score.overall_score:.2f})"
+                )
+            else:
+                processed_pair.risk_warnings.append(
+                    f"AI Intelligence: LOW opportunity score ({intelligence_score.overall_score:.2f})"
+                )
+            
+            # Add specific AI warnings
+            if coordination_analysis.coordination_detected:
+                processed_pair.risk_warnings.append(
+                    f"Coordination detected: {coordination_analysis.pattern_type}"
+                )
+            
+            if whale_analysis.whale_activity_detected and whale_analysis.whale_sentiment == "bearish":
+                processed_pair.risk_warnings.append("Bearish whale activity detected")
+            
+            if social_sentiment.bot_activity > 0.5:
+                processed_pair.risk_warnings.append("High bot activity in social mentions")
+            
+            # Calculate processing time
+            intelligence_time_ms = (time.time() - intelligence_start) * 1000
+            processed_pair.intelligence_analysis_time_ms = intelligence_time_ms
+            
+            logger.info(
+                f"Market Intelligence analysis completed for {processed_pair.pair_address}",
+                extra={
+                    'extra_data': {
+                        'pair_address': processed_pair.pair_address,
+                        'intelligence_score': intelligence_score.overall_score,
+                        'whale_activity': whale_analysis.whale_activity_detected,
+                        'coordination_detected': coordination_analysis.coordination_detected,
+                        'social_sentiment': social_sentiment.sentiment_score,
+                        'analysis_time_ms': intelligence_time_ms,
+                    }
+                }
+            )
+            
+        except Exception as e:
+            processed_pair.errors.append(f"Market Intelligence analysis failed: {str(e)}")
+            logger.error(
+                f"Market Intelligence analysis error for {processed_pair.pair_address}: {e}",
+                extra={'extra_data': {'pair_address': processed_pair.pair_address}},
+                exc_info=True
+            )
+    
     async def _assess_risk(self, processed_pair: ProcessedPair):
         """Perform comprehensive risk assessment."""
         processed_pair.processing_status = ProcessingStatus.RISK_ASSESSING
@@ -494,7 +662,7 @@ class EventProcessor:
             logger.error(f"Risk assessment error for {processed_pair.pair_address}: {e}")
     
     def _classify_opportunity(self, processed_pair: ProcessedPair):
-        """Classify the opportunity level and determine tradability."""
+        """Classify the opportunity level and determine tradability with AI intelligence."""
         # Start with poor opportunity
         opportunity_level = OpportunityLevel.POOR
         tradeable = False
@@ -522,7 +690,41 @@ class EventProcessor:
             else:
                 opportunity_level = OpportunityLevel.POOR
             
-            # Downgrade based on risk assessment
+            # Phase 2 Week 10 Enhancement: AI Intelligence Integration
+            if processed_pair.intelligence_data:
+                intelligence_score = processed_pair.intelligence_data.get("intelligence_score", {}).get("overall_score", 0.5)
+                coordination_detected = processed_pair.intelligence_data.get("coordination_patterns", {}).get("coordination_detected", False)
+                
+                # Upgrade opportunity based on high AI intelligence score
+                if intelligence_score >= 0.8 and opportunity_level == OpportunityLevel.GOOD:
+                    opportunity_level = OpportunityLevel.EXCELLENT
+                    processed_pair.trading_recommendations.append("Upgraded to EXCELLENT based on AI intelligence")
+                elif intelligence_score >= 0.7 and opportunity_level == OpportunityLevel.FAIR:
+                    opportunity_level = OpportunityLevel.GOOD
+                    processed_pair.trading_recommendations.append("Upgraded to GOOD based on AI intelligence")
+                
+                # Downgrade or block based on coordination detection
+                if coordination_detected:
+                    coordination_risk = processed_pair.intelligence_data.get("coordination_patterns", {}).get("risk_level", "medium")
+                    if coordination_risk == "critical":
+                        opportunity_level = OpportunityLevel.BLOCKED
+                        processed_pair.risk_warnings.append("BLOCKED due to critical coordination patterns")
+                    elif coordination_risk == "high":
+                        if opportunity_level == OpportunityLevel.EXCELLENT:
+                            opportunity_level = OpportunityLevel.GOOD
+                        elif opportunity_level == OpportunityLevel.GOOD:
+                            opportunity_level = OpportunityLevel.FAIR
+                        processed_pair.risk_warnings.append("Downgraded due to coordination patterns")
+                
+                # Downgrade based on low AI intelligence score
+                if intelligence_score <= 0.3:
+                    if opportunity_level == OpportunityLevel.EXCELLENT:
+                        opportunity_level = OpportunityLevel.GOOD
+                    elif opportunity_level == OpportunityLevel.GOOD:
+                        opportunity_level = OpportunityLevel.FAIR
+                    processed_pair.risk_warnings.append("Downgraded due to low AI intelligence score")
+            
+            # Traditional risk assessment downgrade
             if processed_pair.risk_assessment:
                 risk_level = processed_pair.risk_assessment.overall_risk.value
                 if risk_level == "critical":
@@ -537,13 +739,13 @@ class EventProcessor:
             
             # Add opportunity-based recommendations
             if opportunity_level == OpportunityLevel.EXCELLENT:
-                processed_pair.trading_recommendations.append("✅ Excellent opportunity - good liquidity and low risk")
+                processed_pair.trading_recommendations.append("Excellent opportunity - good liquidity, low risk, strong AI signals")
             elif opportunity_level == OpportunityLevel.GOOD:
-                processed_pair.trading_recommendations.append("✅ Good opportunity - moderate liquidity")
+                processed_pair.trading_recommendations.append("Good opportunity - moderate liquidity with positive signals")
             elif opportunity_level == OpportunityLevel.FAIR:
-                processed_pair.trading_recommendations.append("⚠️ Fair opportunity - use smaller position sizes")
+                processed_pair.trading_recommendations.append("Fair opportunity - use smaller position sizes")
             elif opportunity_level == OpportunityLevel.POOR:
-                processed_pair.trading_recommendations.append("⚠️ Poor opportunity - high risk or low liquidity")
+                processed_pair.trading_recommendations.append("Poor opportunity - high risk or low liquidity")
         
         processed_pair.opportunity_level = opportunity_level
         processed_pair.tradeable = tradeable

@@ -3,7 +3,7 @@ DEX Sniper Pro - Main FastAPI Application Entry Point.
 
 This module initializes the FastAPI application with all core services,
 Redis-backed rate limiting, database connections, background schedulers, 
-and WebSocket support with comprehensive error handling.
+WebSocket support, and Market Intelligence integration for Phase 2 Week 10.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import AsyncGenerator
 from collections import defaultdict, deque
 
-from fastapi import FastAPI, Request, HTTPException, status
+from fastapi import FastAPI, Request, HTTPException, status, WebSocket, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -219,6 +219,23 @@ class RequestValidationMiddleware(BaseHTTPMiddleware):
 # Initialize structured logging FIRST
 setup_logging()
 logger = logging.getLogger(__name__)
+
+# Intelligence system availability checks
+try:
+    from app.api.intelligence import router as intelligence_router
+    INTELLIGENCE_ROUTER_AVAILABLE = True
+    logger.info("Intelligence API router imported successfully")
+except ImportError as e:
+    logger.warning(f"Intelligence API router not available: {e}")
+    INTELLIGENCE_ROUTER_AVAILABLE = False
+
+try:
+    from app.ws.intelligence_hub import intelligence_hub
+    INTELLIGENCE_HUB_AVAILABLE = True  
+    logger.info("Intelligence WebSocket hub imported successfully")
+except ImportError as e:
+    logger.warning(f"Intelligence WebSocket hub not available: {e}")
+    INTELLIGENCE_HUB_AVAILABLE = False
 
 # Enhanced rate limiting imports (after logger is defined)
 try:
@@ -469,10 +486,10 @@ async def setup_enhanced_rate_limiting() -> dict:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """
-    Enhanced application lifecycle management with Redis rate limiting.
+    Enhanced application lifecycle management with Redis rate limiting and Market Intelligence.
     
     Manages startup and shutdown of all core services including
-    Redis rate limiting, database, chain clients, and background services.
+    Redis rate limiting, database, chain clients, Market Intelligence, and background services.
     """
     logger.info("Starting DEX Sniper Pro backend...")
     
@@ -601,7 +618,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.error(f"Discovery service initialization failed: {e}")
             app.state.discovery_status = "failed"
         
-        # 7. Start scheduler for background tasks
+        # 7. Initialize Market Intelligence Hub (Phase 2 Week 10)
+        try:
+            if INTELLIGENCE_HUB_AVAILABLE:
+                logger.info("Starting Market Intelligence WebSocket hub...")
+                await intelligence_hub.start_hub()
+                app.state.intelligence_hub = intelligence_hub
+                logger.info("Market Intelligence Hub started successfully")
+                app.state.intelligence_hub_status = "operational"
+            else:
+                logger.warning("Intelligence hub not available - skipping initialization")
+                app.state.intelligence_hub_status = "not_available"
+        except Exception as e:
+            startup_warnings.append(f"Intelligence hub initialization failed: {e}")
+            logger.error(f"Intelligence hub initialization failed: {e}")
+            app.state.intelligence_hub_status = "failed"
+        
+        # 8. Start scheduler for background tasks
         try:
             logger.info("Starting background scheduler...")
             await scheduler_manager.start()
@@ -667,7 +700,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.error(f"Scheduler initialization failed: {e}")
             app.state.scheduler_status = "failed"
         
-        # 8. Start WebSocket hub
+        # 9. Start WebSocket hub
         try:
             from app.ws.hub import ws_hub
             logger.info("Starting WebSocket hub...")
@@ -684,13 +717,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.error(f"WebSocket hub initialization failed: {e}")
             app.state.websocket_status = "failed"
         
-        # 9. Log comprehensive startup summary
+        # 10. Log comprehensive startup summary
         logger.info("=" * 60)
         logger.info("DEX Sniper Pro backend initialized successfully!")
         logger.info(f"  Environment: {getattr(settings, 'ENVIRONMENT', 'development')}")
         logger.info(f"  API URL: http://127.0.0.1:8001")
         logger.info(f"  Documentation: http://127.0.0.1:8001/docs")
         logger.info(f"  WebSocket: ws://127.0.0.1:8001/ws")
+        logger.info(f"  Intelligence WebSocket: ws://127.0.0.1:8001/ws/intelligence")
         logger.info(f"  Mode: {'TESTNET' if getattr(settings, 'USE_TESTNET', False) else 'MAINNET'}")
         
         # Rate limiting status
@@ -699,6 +733,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.info(f"  Rate Limiting: {config['type']} ({config['status']})")
             if config.get('rules_loaded'):
                 logger.info(f"  Rate Limit Rules: {config['rules_loaded']} active")
+        
+        # Market Intelligence status
+        if hasattr(app.state, 'intelligence_hub_status'):
+            logger.info(f"  Market Intelligence: {app.state.intelligence_hub_status}")
         
         # Component status summary
         operational_components = []
@@ -712,6 +750,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "solana_client": getattr(app.state, 'solana_client_status', 'unknown'),
             "risk_manager": getattr(app.state, 'risk_manager_status', 'unknown'),
             "discovery": getattr(app.state, 'discovery_status', 'unknown'),
+            "intelligence_hub": getattr(app.state, 'intelligence_hub_status', 'unknown'),
             "scheduler": getattr(app.state, 'scheduler_status', 'unknown'),
             "websocket": getattr(app.state, 'websocket_status', 'unknown')
         }
@@ -760,7 +799,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     shutdown_errors = []
     
     try:
-        # 1. Shutdown Redis rate limiter first
+        # 1. Shutdown Intelligence Hub first
+        if INTELLIGENCE_HUB_AVAILABLE and hasattr(app.state, 'intelligence_hub'):
+            try:
+                await app.state.intelligence_hub.stop_hub()
+                logger.info("Market Intelligence Hub shut down successfully")
+            except Exception as e:
+                shutdown_errors.append(f"Intelligence hub shutdown: {e}")
+    except Exception as e:
+        shutdown_errors.append(f"Intelligence hub shutdown error: {e}")
+    
+    try:
+        # 2. Shutdown Redis rate limiter
         if REDIS_RATE_LIMITING_AVAILABLE:
             try:
                 await shutdown_rate_limiter()
@@ -771,7 +821,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         shutdown_errors.append(f"Rate limiter shutdown error: {e}")
     
     try:
-        # 2. Stop scheduler
+        # 3. Stop scheduler
         if hasattr(scheduler_manager, 'scheduler') and scheduler_manager.scheduler.running:
             await scheduler_manager.stop()
             logger.info("Scheduler stopped successfully")
@@ -779,7 +829,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         shutdown_errors.append(f"Scheduler shutdown: {e}")
     
     try:
-        # 3. Clear caches
+        # 4. Clear caches
         if hasattr(app.state, "dexscreener_client"):
             app.state.dexscreener_client.clear_cache()
             logger.info("Dexscreener cache cleared")
@@ -787,7 +837,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         shutdown_errors.append(f"Cache cleanup: {e}")
     
     try:
-        # 4. Close chain clients
+        # 5. Close chain clients
         if hasattr(app.state, "evm_client"):
             await app.state.evm_client.close()
             logger.info("EVM client closed successfully")
@@ -804,7 +854,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         shutdown_errors.append(f"Solana client shutdown: {e}")
     
     try:
-        # 5. Stop WebSocket hub
+        # 6. Stop WebSocket hub
         if hasattr(app.state, "ws_hub"):
             await app.state.ws_hub.stop()
             logger.info("WebSocket hub stopped successfully")
@@ -822,7 +872,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 # Create FastAPI app with enhanced lifespan manager
 app = FastAPI(
     title="DEX Sniper Pro",
-    description="High-performance DEX trading bot with advanced safety features and Redis-backed rate limiting",
+    description="High-performance DEX trading bot with advanced safety features, Redis-backed rate limiting, and Market Intelligence",
     version="1.0.0",
     lifespan=lifespan,
     docs_url="/docs",
@@ -950,6 +1000,58 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
+# Create mock intelligence router if real one not available
+if not INTELLIGENCE_ROUTER_AVAILABLE:
+    from fastapi import APIRouter
+    from datetime import datetime, timezone
+    
+    mock_intelligence_router = APIRouter(prefix="/intelligence", tags=["Intelligence (Mock)"])
+    
+    @mock_intelligence_router.get("/test")
+    async def test_intelligence_mock():
+        return {
+            "status": "mock_mode",
+            "message": "Intelligence API running in mock mode",
+            "timestamp": datetime.now(timezone.utc)
+        }
+    
+    @mock_intelligence_router.get("/pairs/recent")
+    async def get_recent_pairs_mock():
+        return {
+            "pairs": [],
+            "total_analyzed": 0,
+            "avg_intelligence_score": 0.0,
+            "high_opportunity_count": 0,
+            "analysis_timestamp": datetime.now(timezone.utc),
+            "status": "mock_mode"
+        }
+    
+    @mock_intelligence_router.get("/market/regime")
+    async def get_market_regime_mock():
+        return {
+            "regime": "bull",
+            "confidence": 0.75,
+            "volatility_level": "medium",
+            "trend_strength": 0.6,
+            "status": "mock_mode"
+        }
+    
+    @mock_intelligence_router.get("/stats/processing")
+    async def get_stats_mock():
+        return {
+            "processing_stats": {"pairs_processed": 0},
+            "intelligence_processing": {
+                "pairs_with_intelligence": 0,
+                "intelligence_success_rate": 0.0,
+                "avg_intelligence_time_ms": 0.0
+            },
+            "status": "mock_mode"
+        }
+    
+    intelligence_router = mock_intelligence_router
+    logger.info("Using mock intelligence router")
+
+
 # Include API routers with comprehensive error handling
 try:
     from app.api import api_router
@@ -957,8 +1059,6 @@ try:
     
     app.include_router(api_router, prefix="/api/v1")
     logger.info("Main API router included successfully")
-
-    
     
 except ImportError as e:
     logger.error(f"Failed to import main API router: {e}")
@@ -966,11 +1066,21 @@ except ImportError as e:
     # Fallback: Include individual routers manually
     logger.info("Attempting to include individual API routers...")
     
-    # Add the ledger router first
+    # Add the Intelligence router FIRST (Phase 2 Week 10)
+    try:
+        app.include_router(intelligence_router, prefix="/api/v1")
+        logger.info("Intelligence API router included successfully")
+        fallback_success_count = 1
+    except Exception as e:
+        logger.error(f"Failed to include Intelligence API router: {e}")
+        fallback_success_count = 0
+    
+    # Add the ledger router
     try:
         from app.api.ledger import router as ledger_router
         app.include_router(ledger_router, prefix="/api/v1")
         logger.info("Ledger API router included successfully")
+        fallback_success_count += 1
     except ImportError as e:
         logger.warning(f"Ledger API router not available: {e}")
     except Exception as e:
@@ -994,8 +1104,6 @@ except ImportError as e:
         ("monitoring", "Monitoring & Alerting"),
         ("diagnostics", "Self-Diagnostic Tools"),
     ]
-
-    fallback_success_count = 1  # Start with 1 since ledger router was added
     
     for router_name, description in individual_routers:
         try:
@@ -1028,6 +1136,25 @@ except Exception as e:
     logger.error(f"Failed to register WebSocket router: {e}")
 
 
+# Add WebSocket endpoint for real-time intelligence updates (Phase 2 Week 10)
+@app.websocket("/ws/intelligence/{user_id}")
+async def intelligence_websocket_endpoint(websocket: WebSocket, user_id: str):
+    """WebSocket endpoint for real-time Market Intelligence updates."""
+    if not INTELLIGENCE_HUB_AVAILABLE:
+        logger.error("Intelligence hub not available for WebSocket connection")
+        await websocket.close(code=1011, reason="Service unavailable")
+        return
+    
+    try:
+        await intelligence_hub.connect_user(websocket, user_id)
+    except Exception as e:
+        logger.error(f"Intelligence WebSocket connection failed: {e}")
+        try:
+            await websocket.close(code=1011, reason="Connection failed")
+        except:
+            pass
+
+
 # Enhanced debug route listing endpoint
 @app.get("/api/routes")
 async def list_routes():
@@ -1057,6 +1184,7 @@ async def list_routes():
         api_v1_routes = [r for r in routes if r['path'].startswith('/api/v1')]
         websocket_paths = [r for r in routes + websocket_routes if '/ws/' in r['path']]
         ledger_routes = [r for r in routes if 'ledger' in r['path']]
+        intelligence_routes = [r for r in routes if 'intelligence' in r['path']]
         
         # Get rate limiting status
         rate_limit_status = "unknown"
@@ -1068,9 +1196,15 @@ async def list_routes():
             "api_v1_routes": len(api_v1_routes),
             "websocket_routes": len(websocket_routes),
             "ledger_routes": len(ledger_routes),
+            "intelligence_routes": len(intelligence_routes),
             "rate_limiting": rate_limit_status,
             "routes": sorted(routes, key=lambda x: x['path']),
             "websocket_endpoints": websocket_paths,
+            "intelligence_status": {
+                "router_available": INTELLIGENCE_ROUTER_AVAILABLE,
+                "hub_available": INTELLIGENCE_HUB_AVAILABLE,
+                "mode": "production" if INTELLIGENCE_ROUTER_AVAILABLE else "mock"
+            },
             "core_endpoints": {
                 "health_check": "/health",
                 "api_health": "/api/v1/health",
@@ -1082,7 +1216,12 @@ async def list_routes():
                 "ledger_positions": "/api/v1/ledger/positions",
                 "ledger_transactions": "/api/v1/ledger/transactions",
                 "portfolio_summary": "/api/v1/ledger/portfolio-summary",
+                "intelligence_pairs": "/api/v1/intelligence/pairs/recent",
+                "intelligence_analysis": "/api/v1/intelligence/pairs/{address}/analysis",
+                "market_regime": "/api/v1/intelligence/market/regime",
+                "intelligence_test": "/api/v1/intelligence/test",
                 "websocket_main": "/ws/{client_id}",
+                "websocket_intelligence": "/ws/intelligence/{user_id}",
                 "websocket_status": "/ws/status"
             }
         }
@@ -1094,7 +1233,7 @@ async def list_routes():
 # Enhanced root endpoint
 @app.get("/")
 async def root():
-    """Root endpoint - API status and available services with rate limiting info."""
+    """Root endpoint - API status and available services with rate limiting and intelligence info."""
     try:
         uptime = None
         if hasattr(app.state, 'started_at'):
@@ -1105,6 +1244,13 @@ async def root():
         if hasattr(app.state, 'rate_limiter_config'):
             rate_limiting_info = app.state.rate_limiter_config
         
+        # Get intelligence hub info
+        intelligence_info = {
+            "status": getattr(app.state, 'intelligence_hub_status', 'unknown'),
+            "router_mode": "production" if INTELLIGENCE_ROUTER_AVAILABLE else "mock",
+            "hub_available": INTELLIGENCE_HUB_AVAILABLE
+        }
+        
         return {
             "name": "DEX Sniper Pro API",
             "version": "1.0.0",
@@ -1112,6 +1258,7 @@ async def root():
             "environment": getattr(settings, 'ENVIRONMENT', 'development'),
             "uptime_seconds": uptime,
             "rate_limiting": rate_limiting_info,
+            "market_intelligence": intelligence_info,
             "documentation": "/docs",
             "api_routes": "/api/routes",
             "websocket_test": "/ws/test",
@@ -1126,8 +1273,13 @@ async def root():
                 "ledger_positions": "/api/v1/ledger/positions",
                 "ledger_transactions": "/api/v1/ledger/transactions",
                 "portfolio_summary": "/api/v1/ledger/portfolio-summary",
+                "intelligence_pairs": "/api/v1/intelligence/pairs/recent",
+                "intelligence_analysis": "/api/v1/intelligence/pairs/{address}/analysis",
+                "market_regime": "/api/v1/intelligence/market/regime",
+                "intelligence_test": "/api/v1/intelligence/test",
                 "websocket_status": "/ws/status",
-                "websocket_connection": "/ws/{client_id}"
+                "websocket_connection": "/ws/{client_id}",
+                "websocket_intelligence": "/ws/intelligence/{user_id}"
             }
         }
     except Exception as e:
@@ -1138,7 +1290,7 @@ async def root():
 # Comprehensive health check endpoint with rate limiting status
 @app.get("/health")
 async def health_check():
-    """Comprehensive health check for all system components including rate limiting."""
+    """Comprehensive health check for all system components including rate limiting and intelligence."""
     try:
         # Base component status
         components = {
@@ -1149,6 +1301,7 @@ async def health_check():
             "solana_client": getattr(app.state, 'solana_client_status', 'unknown'),
             "risk_manager": getattr(app.state, 'risk_manager_status', 'unknown'),
             "discovery": getattr(app.state, 'discovery_status', 'unknown'),
+            "intelligence_hub": getattr(app.state, 'intelligence_hub_status', 'unknown'),
             "websocket_hub": getattr(app.state, 'websocket_status', 'unknown'),
             "scheduler": getattr(app.state, 'scheduler_status', 'unknown')
         }
@@ -1165,6 +1318,23 @@ async def health_check():
                 "rules_active": config.get('rules_loaded', 0)
             }
         
+        # Add intelligence hub status
+        intelligence_health = {
+            "status": getattr(app.state, 'intelligence_hub_status', 'unknown'),
+            "router_mode": "production" if INTELLIGENCE_ROUTER_AVAILABLE else "mock",
+            "hub_available": INTELLIGENCE_HUB_AVAILABLE
+        }
+        if hasattr(app.state, 'intelligence_hub'):
+            try:
+                hub_stats = app.state.intelligence_hub.get_hub_stats()
+                intelligence_health.update({
+                    "active_connections": hub_stats.get('active_connections', 0),
+                    "events_sent": hub_stats.get('events_sent_total', 0),
+                    "market_regime": hub_stats.get('current_market_regime', 'unknown')
+                })
+            except Exception as e:
+                logger.warning(f"Failed to get intelligence hub stats: {e}")
+        
         # Calculate uptime
         uptime_seconds = None
         if hasattr(app.state, 'started_at'):
@@ -1173,6 +1343,7 @@ async def health_check():
         # Check if WebSocket routes are registered
         websocket_routes_registered = any('/ws/' in str(route.path) for route in app.routes)
         ledger_routes_registered = any('/ledger/' in str(route.path) for route in app.routes)
+        intelligence_routes_registered = any('/intelligence/' in str(route.path) for route in app.routes)
         
         # Calculate overall health
         operational_count = sum(1 for status in components.values() if status == "operational")
@@ -1193,8 +1364,10 @@ async def health_check():
             "health_percentage": round(health_percentage, 1),
             "components": components,
             "rate_limiting": rate_limiting_health,
+            "market_intelligence": intelligence_health,
             "websocket_routes_registered": websocket_routes_registered,
             "ledger_routes_registered": ledger_routes_registered,
+            "intelligence_routes_registered": intelligence_routes_registered,
             "startup_info": {
                 "errors": len(getattr(app.state, 'startup_errors', [])),
                 "warnings": len(getattr(app.state, 'startup_warnings', []))
@@ -1208,6 +1381,13 @@ async def health_check():
                     "/api/v1/ledger/positions",
                     "/api/v1/ledger/transactions", 
                     "/api/v1/ledger/portfolio-summary"
+                ],
+                "intelligence_endpoints": [
+                    "/api/v1/intelligence/pairs/recent",
+                    "/api/v1/intelligence/pairs/{address}/analysis",
+                    "/api/v1/intelligence/market/regime",
+                    "/api/v1/intelligence/test",
+                    "/ws/intelligence/{user_id}"
                 ]
             }
         }
@@ -1224,13 +1404,15 @@ async def health_check():
 # Enhanced ping endpoint with rate limiting headers
 @app.get("/ping")
 async def ping():
-    """Simple ping endpoint for connectivity testing with rate limiting info."""
+    """Simple ping endpoint for connectivity testing with rate limiting and intelligence info."""
     try:
         return {
             "status": "pong",
             "timestamp": time.time(),
             "message": "DEX Sniper Pro API is responsive",
-            "rate_limiting_active": hasattr(app.state, 'rate_limiter_config')
+            "rate_limiting_active": hasattr(app.state, 'rate_limiter_config'),
+            "intelligence_active": hasattr(app.state, 'intelligence_hub'),
+            "intelligence_mode": "production" if INTELLIGENCE_ROUTER_AVAILABLE else "mock"
         }
     except Exception as e:
         logger.error(f"Ping endpoint error: {e}", exc_info=True)
@@ -1244,6 +1426,8 @@ async def startup_event():
     try:
         # Setup middleware (rate limiting middleware is added during lifespan)
         logger.info("Rate limiter initialized: 60 calls/minute per IP")
+        logger.info(f"Market Intelligence WebSocket endpoint available at /ws/intelligence/{{user_id}}")
+        logger.info(f"Intelligence router mode: {'production' if INTELLIGENCE_ROUTER_AVAILABLE else 'mock'}")
     except Exception as e:
         logger.error(f"Startup event error: {e}")
 
