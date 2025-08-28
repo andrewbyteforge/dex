@@ -16,7 +16,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from pydantic import BaseModel, Field
 
 # FIXED: Changed to relative imports instead of absolute imports
-from ..analytics.performance import PerformanceAnalytics
+from ..api.analytics import PerformanceAnalytics
 from ..api.presets import get_builtin_preset
 from ..storage.repositories import TransactionRepository
 from ..strategy.risk_manager import RiskManager
