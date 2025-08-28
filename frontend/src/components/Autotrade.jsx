@@ -1,24 +1,25 @@
 /**
- * Enhanced Autotrade dashboard component with production-ready WebSocket connection
- * FIXED: Uses /ws/autotrade endpoint, eliminates console errors, handles backend unavailability
+ * Enhanced Autotrade dashboard component with AI Intelligence Integration (Phase 2.3)
+ * COMPLETE: Production-ready WebSocket connection + AI Intelligence Display
  *
  * File: frontend/src/components/Autotrade.jsx
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Container, Row, Col, Card, Button, Badge, Alert, Spinner, Nav, Modal } from 'react-bootstrap';
-import { Play, Pause, Square, Activity, AlertTriangle, Wifi, WifiOff, RefreshCw, Settings } from 'lucide-react';
+import { Play, Pause, Square, Activity, AlertTriangle, Wifi, WifiOff, RefreshCw, Settings, Brain } from 'lucide-react';
 
 import AutotradeConfig from './AutotradeConfig';
 import AutotradeMonitor from './AutotradeMonitor';
 import AdvancedOrders from './AdvancedOrders';
+import AIIntelligenceDisplay from './AIIntelligenceDisplay';
 import useWebSocket from '../hooks/useWebSocket';
 
 const API_BASE_URL = 'http://localhost:8001';
 
 /**
- * Enhanced Autotrade dashboard component with production WebSocket connection
- * Uses /ws/autotrade endpoint and handles backend unavailability gracefully
+ * Enhanced Autotrade dashboard component with AI Intelligence Integration
+ * Phase 2.3: Complete AI-powered autotrade interface
  */
 const Autotrade = () => {
   // UI State management
@@ -51,6 +52,15 @@ const Autotrade = () => {
     success_rate: 0,
     total_profit_usd: 0,
     last_updated: null
+  });
+  
+  // Phase 2.3: AI Intelligence State
+  const [aiIntelligenceData, setAiIntelligenceData] = useState(null);
+  const [marketRegime, setMarketRegime] = useState({ regime: 'unknown', confidence: 0 });
+  const [aiStats, setAiStats] = useState({
+    pairs_analyzed: 0,
+    avg_ai_score: 0,
+    high_risk_blocked: 0
   });
   
   // Error tracking and retry logic
@@ -115,6 +125,55 @@ const Autotrade = () => {
     // Track error history for debugging
     setErrorHistory(prev => [errorEntry, ...prev.slice(0, 9)]);
   }, [logMessage, wsKey]);
+
+  /**
+   * Phase 2.3: Load AI intelligence data from API
+   */
+  const loadAIIntelligenceData = useCallback(async () => {
+    if (!backendAvailable) return;
+
+    try {
+      // Get recent AI analyzed pairs
+      const recentResponse = await fetch(`${API_BASE_URL}/api/v1/intelligence/pairs/recent?limit=1`);
+      if (recentResponse.ok) {
+        const recentData = await recentResponse.json();
+        if (recentData.pairs && recentData.pairs.length > 0) {
+          const latestPair = recentData.pairs[0];
+          setAiIntelligenceData({
+            pair_address: latestPair.pair_address,
+            token_symbol: latestPair.token_symbol,
+            opportunity_level: latestPair.opportunity_level,
+            ai_intelligence: latestPair.intelligence_data,
+            timestamp: latestPair.analyzed_at
+          });
+        }
+      }
+
+      // Get current market regime
+      const regimeResponse = await fetch(`${API_BASE_URL}/api/v1/intelligence/market/regime`);
+      if (regimeResponse.ok) {
+        const regimeData = await regimeResponse.json();
+        setMarketRegime({
+          regime: regimeData.regime,
+          confidence: regimeData.confidence,
+          updated_at: regimeData.updated_at
+        });
+      }
+
+      // Get AI processing stats
+      const statsResponse = await fetch(`${API_BASE_URL}/api/v1/intelligence/stats/processing`);
+      if (statsResponse.ok) {
+        const statsData = await statsResponse.json();
+        setAiStats(prev => ({
+          ...prev,
+          ...statsData.ai_intelligence_stats
+        }));
+      }
+
+    } catch (error) {
+      logMessage('debug', 'AI intelligence data not available', { error: error.message });
+    }
+  }, [backendAvailable, logMessage]);
 
   /**
    * Load initial autotrade data with comprehensive error handling
@@ -186,6 +245,9 @@ const Autotrade = () => {
           queueSize: statusData.queue_size || 0
         });
 
+        // Phase 2.3: Load AI intelligence data
+        await loadAIIntelligenceData();
+
       } catch (fetchError) {
         clearTimeout(timeoutId);
         throw fetchError;
@@ -230,10 +292,10 @@ const Autotrade = () => {
         setLoading(false);
       }
     }
-  }, [retryCount, backendAvailable, logMessage, logError]);
+  }, [retryCount, backendAvailable, logMessage, logError, loadAIIntelligenceData]);
 
   /**
-   * Handle WebSocket message processing with comprehensive error handling
+   * Handle WebSocket message processing with AI intelligence support
    */
   const handleWebSocketMessage = useCallback((message) => {
     if (!mountedRef.current) return;
@@ -292,6 +354,74 @@ const Autotrade = () => {
           }
           break;
 
+        // Phase 2.3: AI Intelligence WebSocket Messages
+        case 'new_pair_analysis':
+          if (message.data && message.data.intelligence_data) {
+            logMessage('info', 'New pair AI analysis received', { 
+              pair_address: message.data.pair_address,
+              intelligence_score: message.data.intelligence_data.intelligence_score 
+            });
+            
+            // Store the most recent AI analysis for display
+            setAiIntelligenceData({
+              pair_address: message.data.pair_address,
+              token_symbol: message.data.token_symbol,
+              opportunity_level: message.data.opportunity_level,
+              ai_intelligence: message.data.intelligence_data,
+              timestamp: new Date().toISOString()
+            });
+          }
+          break;
+
+        case 'market_regime_change':
+          if (message.data) {
+            logMessage('info', 'Market regime change', { 
+              regime: message.data.regime,
+              confidence: message.data.confidence 
+            });
+            setMarketRegime({
+              regime: message.data.regime,
+              confidence: message.data.confidence,
+              updated_at: new Date().toISOString()
+            });
+          }
+          break;
+
+        case 'whale_activity_alert':
+          if (message.data) {
+            logMessage('warn', 'Whale activity detected', message.data);
+            // Update AI intelligence data if it matches current pair
+            if (aiIntelligenceData && message.data.token_address === aiIntelligenceData.pair_address) {
+              setAiIntelligenceData(prev => ({
+                ...prev,
+                ai_intelligence: {
+                  ...prev.ai_intelligence,
+                  whale_activity: message.data.activity_score,
+                  whale_dump_risk: message.data.dump_risk
+                }
+              }));
+            }
+          }
+          break;
+
+        case 'coordination_detected':
+          if (message.data) {
+            logMessage('error', 'Coordination pattern detected', message.data);
+            // Show coordination warning
+            setError(`AI Alert: Coordination detected - ${message.data.pattern_type} (Risk: ${message.data.risk_level})`);
+          }
+          break;
+
+        case 'ai_stats_update':
+          if (message.data) {
+            setAiStats(prev => ({
+              ...prev,
+              ...message.data,
+              last_updated: new Date().toISOString()
+            }));
+          }
+          break;
+
         case 'emergency_stop':
           logMessage('warn', 'Emergency stop triggered', message.data);
           setIsRunning(false);
@@ -320,12 +450,11 @@ const Autotrade = () => {
     } catch (err) {
       logError('websocket_message_handler', err, { message });
     }
-  }, [error, logMessage, logError]);
+  }, [error, logMessage, logError, aiIntelligenceData]);
 
   /**
-   * Production WebSocket connection to /ws/autotrade endpoint
+   * Production WebSocket connection with AI intelligence support
    */
-  // Fixed:
   const { 
     isConnected: wsConnected, 
     isConnecting: wsConnecting,
@@ -336,12 +465,12 @@ const Autotrade = () => {
       maxReconnectAttempts: 3,
       reconnectInterval: 5000,
       shouldReconnect: shouldConnect && backendAvailable,
-      suppressDevErrors: true, // Use enhanced error suppression
+      suppressDevErrors: true,
       onOpen: () => {
         logMessage('info', 'Autotrade WebSocket connected successfully');
         
         if (mountedRef.current && sendMessage) {
-          // Subscribe to all autotrade events
+          // Subscribe to all autotrade events INCLUDING AI intelligence events
           sendMessage({
             type: 'subscribe',
             channels: [
@@ -349,7 +478,13 @@ const Autotrade = () => {
               'trade_executed', 
               'opportunity_found',
               'metrics_update',
-              'emergency_stop'
+              'emergency_stop',
+              // Phase 2.3: AI Intelligence channels
+              'new_pair_analysis',
+              'market_regime_change',
+              'whale_activity_alert',
+              'coordination_detected',
+              'ai_stats_update'
             ]
           });
         }
@@ -692,19 +827,19 @@ const Autotrade = () => {
   );
 
   /**
-   * Render performance metrics
+   * Phase 2.3: Enhanced performance metrics with AI statistics
    */
   const renderMetrics = () => (
     <Card className="mb-4">
       <Card.Header>
         <div className="d-flex align-items-center gap-2">
           <Activity size={18} />
-          <span>Performance Metrics</span>
+          <span>Performance & AI Metrics</span>
         </div>
       </Card.Header>
       <Card.Body>
         <Row>
-          <Col sm={6} lg={3} className="mb-3">
+          <Col sm={6} lg={2} className="mb-3">
             <div className="text-center">
               <div className="h4 text-primary mb-1">
                 {metrics.opportunities_found || 0}
@@ -712,7 +847,7 @@ const Autotrade = () => {
               <div className="small text-muted">Opportunities Found</div>
             </div>
           </Col>
-          <Col sm={6} lg={3} className="mb-3">
+          <Col sm={6} lg={2} className="mb-3">
             <div className="text-center">
               <div className="h4 text-info mb-1">
                 {metrics.opportunities_executed || 0}
@@ -720,7 +855,7 @@ const Autotrade = () => {
               <div className="small text-muted">Trades Executed</div>
             </div>
           </Col>
-          <Col sm={6} lg={3} className="mb-3">
+          <Col sm={6} lg={2} className="mb-3">
             <div className="text-center">
               <div className={`h4 mb-1 ${(metrics.total_profit_usd || 0) >= 0 ? 'text-success' : 'text-danger'}`}>
                 ${Number((metrics.total_profit_usd || 0)).toFixed(2)}
@@ -728,7 +863,7 @@ const Autotrade = () => {
               <div className="small text-muted">Total Profit</div>
             </div>
           </Col>
-          <Col sm={6} lg={3} className="mb-3">
+          <Col sm={6} lg={2} className="mb-3">
             <div className="text-center">
               <div className="h4 text-info mb-1">
                 {Number(((metrics.success_rate || 0) * 100)).toFixed(1)}%
@@ -736,7 +871,46 @@ const Autotrade = () => {
               <div className="small text-muted">Success Rate</div>
             </div>
           </Col>
+          {/* Phase 2.3: AI Metrics */}
+          <Col sm={6} lg={2} className="mb-3">
+            <div className="text-center">
+              <div className="h4 text-warning mb-1">
+                {aiStats.pairs_analyzed || 0}
+              </div>
+              <div className="small text-muted">AI Analyzed</div>
+            </div>
+          </Col>
+          <Col sm={6} lg={2} className="mb-3">
+            <div className="text-center">
+              <div className="h4 text-danger mb-1">
+                {aiStats.high_risk_blocked || 0}
+              </div>
+              <div className="small text-muted">AI Blocked</div>
+            </div>
+          </Col>
         </Row>
+
+        {/* Phase 2.3: Market Regime Display */}
+        {marketRegime.regime !== 'unknown' && (
+          <Row className="mt-3">
+            <Col>
+              <div className="text-center">
+                <Badge 
+                  bg={
+                    marketRegime.regime === 'bull' ? 'success' :
+                    marketRegime.regime === 'bear' ? 'danger' :
+                    marketRegime.regime === 'volatile' ? 'warning' : 'info'
+                  }
+                  className="px-3 py-2"
+                >
+                  <Brain size={14} className="me-1" />
+                  Market Regime: {marketRegime.regime.toUpperCase()} 
+                  ({(marketRegime.confidence * 100).toFixed(0)}% confidence)
+                </Badge>
+              </div>
+            </Col>
+          </Row>
+        )}
 
         {metrics.last_updated && (
           <div className="text-center small text-muted mt-3">
@@ -756,7 +930,7 @@ const Autotrade = () => {
         <Spinner animation="border" role="status" variant="primary">
           <span className="visually-hidden">Loading...</span>
         </Spinner>
-        <div className="mt-3">Loading autotrade dashboard...</div>
+        <div className="mt-3">Loading AI-powered autotrade dashboard...</div>
         <div className="text-muted small mt-1">
           {backendAvailable ? 'Connecting to backend...' : 'Backend appears to be offline'}
         </div>
@@ -846,13 +1020,15 @@ const Autotrade = () => {
       {/* Tab Content */}
       {activeTab === 'overview' && (
         <Row>
-          <Col>
+          <Col lg={8}>
             <Card>
               <Card.Body>
-                <h5>Autotrade Engine Overview</h5>
+                <h5>AI-Powered Autotrade Engine Overview</h5>
                 <p className="text-muted">
-                  The autotrade engine monitors opportunities across multiple chains and executes trades 
-                  based on configured strategies. {!backendAvailable && 'Backend connection required for full functionality.'}
+                  The AI-powered autotrade engine monitors opportunities across multiple chains and executes trades 
+                  based on configured strategies and AI intelligence analysis. Advanced market intelligence including 
+                  social sentiment, whale behavior, and coordination pattern detection informs all trading decisions.
+                  {!backendAvailable && ' Backend connection required for full functionality.'}
                 </p>
 
                 <Row>
@@ -863,6 +1039,8 @@ const Autotrade = () => {
                       <li>Engine: {isRunning ? `Running (${engineMode})` : 'Stopped'}</li>
                       <li>Backend: {backendAvailable ? 'Available' : 'Offline'}</li>
                       <li>Queue Size: {autotradeStatus.queue_size || 0}</li>
+                      <li>AI Analysis: {aiStats.pairs_analyzed || 0} pairs analyzed</li>
+                      <li>Market Regime: {marketRegime.regime !== 'unknown' ? marketRegime.regime : 'Unknown'}</li>
                     </ul>
                   </Col>
                   <Col md={6}>
@@ -890,6 +1068,38 @@ const Autotrade = () => {
               </Card.Body>
             </Card>
           </Col>
+          
+          {/* Phase 2.3: AI Intelligence Display Column */}
+          <Col lg={4}>
+            <AIIntelligenceDisplay 
+              intelligenceData={aiIntelligenceData}
+              className="mb-4"
+            />
+            
+            {/* Recent AI Alerts */}
+            {errorHistory.filter(e => e.operation.includes('coordination') || e.operation.includes('whale')).length > 0 && (
+              <Card>
+                <Card.Header className="py-2">
+                  <h6 className="mb-0 text-warning">
+                    <AlertTriangle size={16} className="me-1" />
+                    Recent AI Alerts
+                  </h6>
+                </Card.Header>
+                <Card.Body>
+                  {errorHistory
+                    .filter(e => e.operation.includes('coordination') || e.operation.includes('whale'))
+                    .slice(0, 3)
+                    .map((alert, index) => (
+                      <div key={index} className="small mb-2">
+                        <div className="text-danger fw-bold">{alert.operation}</div>
+                        <div className="text-muted">{new Date(alert.timestamp).toLocaleTimeString()}</div>
+                      </div>
+                    ))
+                  }
+                </Card.Body>
+              </Card>
+            )}
+          </Col>
         </Row>
       )}
 
@@ -899,6 +1109,8 @@ const Autotrade = () => {
           isRunning={isRunning}
           wsConnected={wsConnected}
           metrics={metrics}
+          aiIntelligenceData={aiIntelligenceData}
+          marketRegime={marketRegime}
           onRefresh={loadInitialData}
         />
       )}
@@ -907,6 +1119,7 @@ const Autotrade = () => {
         <AutotradeConfig 
           currentMode={engineMode}
           isRunning={isRunning}
+          aiStats={aiStats}
           onModeChange={(mode) => {
             setEngineMode(mode);
             if (isRunning) {
@@ -920,6 +1133,7 @@ const Autotrade = () => {
         <AdvancedOrders 
           isRunning={isRunning}
           wsConnected={wsConnected}
+          aiIntelligenceData={aiIntelligenceData}
         />
       )}
 
