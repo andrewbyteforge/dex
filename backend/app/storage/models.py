@@ -1,25 +1,95 @@
-"""Database models for DEX Sniper Pro.
+"""
+Enhanced database models with comprehensive state management for DEX Sniper Pro.
 
-Enhanced with AdvancedOrder and Position models for order management.
-Includes Wallet model for API compatibility.
+This module provides models for system state, configuration, and persistent
+state management with atomic transactions and emergency controls.
+
+Fixed all 'metadata' column conflicts with SQLAlchemy reserved attributes.
 """
 
 from __future__ import annotations
 
-from typing import Optional, Dict, Any
-from decimal import Decimal
-from datetime import datetime
-from enum import Enum
 import json
+from datetime import datetime, timezone
+from decimal import Decimal
+from enum import Enum
+from typing import Dict, List, Optional, Any
 
-from sqlalchemy import Column, String, Integer, Numeric, DateTime, Text, Boolean, ForeignKey, Float, JSON, Index, DECIMAL
+from sqlalchemy import (
+    Column, String, Integer, DateTime, Boolean, Text, Numeric, 
+    ForeignKey, Index, UniqueConstraint, CheckConstraint, Float, JSON
+)
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy.types import TypeDecorator, VARCHAR
 from sqlalchemy.sql import func
-from sqlalchemy import Enum as SQLEnum
 
+# Try to import JSONB for PostgreSQL, fallback to VARCHAR for SQLite
+try:
+    from sqlalchemy.dialects.postgresql import JSONB
+except ImportError:
+    JSONB = None
+
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Create base class
 Base = declarative_base()
+
+
+# Custom JSON type that works with both SQLite and PostgreSQL
+class JSONType(TypeDecorator):
+    """JSON field type that works with SQLite and PostgreSQL."""
+    
+    impl = VARCHAR
+    cache_ok = True
+    
+    def load_dialect_impl(self, dialect):
+        """Load appropriate type for dialect."""
+        if dialect.name == 'postgresql' and JSONB is not None:
+            return dialect.type_descriptor(JSONB())
+        else:
+            return dialect.type_descriptor(VARCHAR())
+    
+    def process_bind_param(self, value, dialect):
+        """Process value before storing."""
+        if value is not None:
+            return json.dumps(value)
+        return value
+    
+    def process_result_value(self, value, dialect):
+        """Process value after loading."""
+        if value is not None:
+            try:
+                return json.loads(value)
+            except (json.JSONDecodeError, TypeError):
+                return value
+        return value
+
+
+# System State Management Enums
+class SystemStateType(Enum):
+    """System state types."""
+    AUTOTRADE_ENGINE = "autotrade_engine"
+    AI_INTELLIGENCE = "ai_intelligence" 
+    RISK_MANAGER = "risk_manager"
+    SAFETY_CONTROLS = "safety_controls"
+    DISCOVERY_ENGINE = "discovery_engine"
+    WEBSOCKET_HUB = "websocket_hub"
+    DATABASE = "database"
+    CHAIN_CLIENTS = "chain_clients"
+
+
+class SystemStateStatus(Enum):
+    """System state status values."""
+    STOPPED = "stopped"
+    STARTING = "starting"
+    RUNNING = "running"
+    STOPPING = "stopping"
+    PAUSED = "paused"
+    ERROR = "error"
+    MAINTENANCE = "maintenance"
 
 
 class OrderStatus(Enum):
@@ -62,114 +132,453 @@ class ChainType(str, Enum):
     BASE = "base"
 
 
-class JSONType(TypeDecorator):
-    """JSON column type for SQLite."""
-    impl = VARCHAR
-    cache_ok = True
+# ============================================================================
+# SYSTEM STATE MANAGEMENT MODELS
+# ============================================================================
 
-    def process_bind_param(self, value, dialect):
-        """Convert Python dict to JSON string."""
-        if value is not None:
-            return json.dumps(value)
-        return None
+class SystemState(Base):
+    """
+    Persistent system state tracking.
+    
+    Tracks the state of all major system components with atomic updates
+    and emergency controls. Provides single source of truth for system status.
+    """
+    __tablename__ = "system_state"
+    
+    # Primary key
+    state_id = Column(String(50), primary_key=True)  # Component identifier
+    
+    # State information
+    component_type = Column(String(30), nullable=False)  # SystemStateType value
+    status = Column(String(20), nullable=False)  # SystemStateStatus value
+    sub_status = Column(String(50), nullable=True)  # Additional status details
+    
+    # Configuration and component data
+    configuration = Column(JSONType, nullable=True)
+    component_data = Column(JSONType, nullable=True)  # RENAMED from 'metadata'
+    health_data = Column(JSONType, nullable=True)
+    
+    # Control flags
+    is_emergency_stopped = Column(Boolean, default=False, nullable=False)
+    is_manually_controlled = Column(Boolean, default=False, nullable=False)
+    can_auto_start = Column(Boolean, default=True, nullable=False)
+    requires_confirmation = Column(Boolean, default=False, nullable=False)
+    
+    # Timing and tracking
+    state_changed_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_heartbeat_at = Column(DateTime, nullable=True)
+    uptime_seconds = Column(Integer, default=0, nullable=False)
+    restart_count = Column(Integer, default=0, nullable=False)
+    
+    # Error tracking
+    last_error_message = Column(Text, nullable=True)
+    last_error_at = Column(DateTime, nullable=True)
+    error_count = Column(Integer, default=0, nullable=False)
+    trace_id = Column(String(36), nullable=True)
+    
+    # Process information
+    process_identifier = Column(String(50), nullable=True)  # RENAMED from 'process_id'
+    system_version = Column(String(20), nullable=True)  # RENAMED from 'version'
+    environment = Column(String(20), nullable=True)
+    
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    
+    # Constraints
+    __table_args__ = (
+        Index('ix_system_state_component_status', 'component_type', 'status'),
+        Index('ix_system_state_emergency', 'is_emergency_stopped'),
+        Index('ix_system_state_heartbeat', 'last_heartbeat_at'),
+        CheckConstraint('uptime_seconds >= 0', name='check_uptime_non_negative'),
+        CheckConstraint('restart_count >= 0', name='check_restart_count_non_negative'),
+    )
 
-    def process_result_value(self, value, dialect):
-        """Convert JSON string to Python dict."""
-        if value is not None:
-            return json.loads(value)
-        return None
+    @property
+    def component_type_enum(self) -> SystemStateType:
+        """Get component type as enum."""
+        return SystemStateType(self.component_type)
+    
+    @property
+    def status_enum(self) -> SystemStateStatus:
+        """Get status as enum."""
+        return SystemStateStatus(self.status)
+    
+    def is_operational(self) -> bool:
+        """Check if component is in operational state."""
+        return (
+            self.status == SystemStateStatus.RUNNING.value and 
+            not self.is_emergency_stopped
+        )
+    
+    def can_start(self) -> bool:
+        """Check if component can be started."""
+        return (
+            self.status in [SystemStateStatus.STOPPED.value, SystemStateStatus.ERROR.value] and
+            not self.is_emergency_stopped and
+            self.can_auto_start
+        )
+    
+    def needs_restart(self) -> bool:
+        """Check if component needs restart based on health."""
+        if not self.last_heartbeat_at:
+            return True
+        
+        heartbeat_age = (datetime.utcnow() - self.last_heartbeat_at).total_seconds()
+        return heartbeat_age > 300  # 5 minutes without heartbeat
 
+
+class SystemSettings(Base):
+    """
+    Persistent system settings and configuration.
+    
+    Stores configuration values that persist across restarts and can be
+    modified through the API with validation and audit trails.
+    """
+    __tablename__ = "system_settings"
+    
+    # Primary key
+    setting_id = Column(String(100), primary_key=True)  # Hierarchical key like "autotrade.risk.max_position_usd"
+    
+    # Setting information
+    category = Column(String(50), nullable=False)  # autotrade, ai, risk, safety, etc.
+    subcategory = Column(String(50), nullable=True)
+    setting_name = Column(String(100), nullable=False)
+    
+    # Value and type information
+    value = Column(Text, nullable=True)  # JSON serialized value
+    value_type = Column(String(20), nullable=False)  # string, number, boolean, json, etc.
+    default_value = Column(Text, nullable=True)
+    
+    # Additional information
+    description = Column(Text, nullable=True)
+    validation_rules = Column(JSONType, nullable=True)
+    is_sensitive = Column(Boolean, default=False, nullable=False)
+    is_read_only = Column(Boolean, default=False, nullable=False)
+    requires_restart = Column(Boolean, default=False, nullable=False)
+    
+    # Access control
+    user_editable = Column(Boolean, default=True, nullable=False)
+    admin_only = Column(Boolean, default=False, nullable=False)
+    environment_specific = Column(Boolean, default=False, nullable=False)
+    
+    # Change tracking
+    last_changed_by = Column(String(100), nullable=True)
+    change_reason = Column(Text, nullable=True)
+    version = Column(Integer, default=1, nullable=False)
+    
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    
+    # Constraints
+    __table_args__ = (
+        Index('ix_system_settings_category', 'category', 'subcategory'),
+        Index('ix_system_settings_editable', 'user_editable', 'admin_only'),
+        UniqueConstraint('setting_id', name='uq_system_settings_id'),
+    )
+    
+    def get_typed_value(self) -> Any:
+        """Get value converted to appropriate type."""
+        if not self.value:
+            return self.get_typed_default()
+        
+        try:
+            if self.value_type == 'boolean':
+                return self.value.lower() in ('true', '1', 'yes', 'on')
+            elif self.value_type == 'integer':
+                return int(self.value)
+            elif self.value_type == 'float':
+                return float(self.value)
+            elif self.value_type == 'decimal':
+                return Decimal(self.value)
+            elif self.value_type == 'json':
+                return json.loads(self.value)
+            else:
+                return self.value
+        except (ValueError, json.JSONDecodeError) as e:
+            logger.warning(f"Failed to parse setting {self.setting_id}: {e}")
+            return self.get_typed_default()
+    
+    def get_typed_default(self) -> Any:
+        """Get default value converted to appropriate type."""
+        if not self.default_value:
+            return None
+        
+        try:
+            if self.value_type == 'boolean':
+                return self.default_value.lower() in ('true', '1', 'yes', 'on')
+            elif self.value_type == 'integer':
+                return int(self.default_value)
+            elif self.value_type == 'float':
+                return float(self.default_value)
+            elif self.value_type == 'decimal':
+                return Decimal(self.default_value)
+            elif self.value_type == 'json':
+                return json.loads(self.default_value)
+            else:
+                return self.default_value
+        except (ValueError, json.JSONDecodeError):
+            return None
+
+
+class SystemEvent(Base):
+    """
+    System event audit log.
+    
+    Records all significant system events including state changes,
+    configuration modifications, errors, and administrative actions.
+    """
+    __tablename__ = "system_events"
+    
+    # Primary key
+    event_id = Column(String(36), primary_key=True)  # UUID
+    
+    # Event information
+    event_type = Column(String(50), nullable=False)  # state_change, config_change, error, etc.
+    component = Column(String(50), nullable=True)  # Which component generated event
+    severity = Column(String(20), nullable=False)  # info, warning, error, critical
+    
+    # Event details
+    title = Column(String(200), nullable=False)
+    message = Column(Text, nullable=True)
+    event_data = Column(JSONType, nullable=True)  # Additional structured data
+    
+    # Context information
+    user_id = Column(String(100), nullable=True)
+    session_id = Column(String(100), nullable=True)
+    trace_id = Column(String(36), nullable=True)
+    request_id = Column(String(36), nullable=True)
+    
+    # System context
+    environment = Column(String(20), nullable=True)
+    system_version = Column(String(20), nullable=True)  # RENAMED from 'version'
+    process_identifier = Column(String(50), nullable=True)  # RENAMED from 'process_id'
+    
+    # State information (for state change events)
+    old_state = Column(String(50), nullable=True)
+    new_state = Column(String(50), nullable=True)
+    state_data = Column(JSONType, nullable=True)  # RENAMED from 'state_metadata'
+    
+    # Timing
+    occurred_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    processed_at = Column(DateTime, nullable=True)
+    
+    # Response tracking
+    response_required = Column(Boolean, default=False, nullable=False)
+    response_deadline = Column(DateTime, nullable=True)
+    responded_at = Column(DateTime, nullable=True)
+    response_data = Column(JSONType, nullable=True)
+    
+    # Constraints
+    __table_args__ = (
+        Index('ix_system_events_component_type', 'component', 'event_type'),
+        Index('ix_system_events_severity', 'severity', 'occurred_at'),
+        Index('ix_system_events_trace', 'trace_id'),
+        Index('ix_system_events_response', 'response_required', 'response_deadline'),
+    )
+
+
+class EmergencyAction(Base):
+    """
+    Emergency action tracking.
+    
+    Records emergency stops, kill switches, and other critical safety actions
+    with full audit trail and recovery procedures.
+    """
+    __tablename__ = "emergency_actions"
+    
+    # Primary key
+    action_id = Column(String(36), primary_key=True)  # UUID
+    
+    # Action information
+    action_type = Column(String(50), nullable=False)  # emergency_stop, kill_switch, manual_override
+    trigger_reason = Column(String(100), nullable=False)  # What triggered the action
+    affected_components = Column(JSONType, nullable=False)  # List of affected components
+    
+    # Action details
+    description = Column(Text, nullable=True)
+    action_data = Column(JSONType, nullable=True)
+    severity_level = Column(String(20), nullable=False)  # low, medium, high, critical
+    
+    # Authorization
+    initiated_by = Column(String(100), nullable=False)  # User or system
+    authorization_level = Column(String(20), nullable=False)  # user, admin, system, automatic
+    approval_required = Column(Boolean, default=False, nullable=False)
+    approved_by = Column(String(100), nullable=True)
+    
+    # Status tracking
+    status = Column(String(20), nullable=False)  # pending, active, resolved, cancelled
+    is_active = Column(Boolean, default=True, nullable=False)
+    can_auto_resolve = Column(Boolean, default=False, nullable=False)
+    
+    # Timing
+    triggered_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    activated_at = Column(DateTime, nullable=True)
+    resolved_at = Column(DateTime, nullable=True)
+    expires_at = Column(DateTime, nullable=True)
+    
+    # Resolution information
+    resolution_type = Column(String(50), nullable=True)  # manual, automatic, timeout
+    resolution_description = Column(Text, nullable=True)
+    resolved_by = Column(String(100), nullable=True)
+    
+    # Recovery tracking
+    recovery_required = Column(Boolean, default=False, nullable=False)
+    recovery_steps = Column(JSONType, nullable=True)
+    recovery_completed = Column(Boolean, default=False, nullable=False)
+    recovery_verified_by = Column(String(100), nullable=True)
+    
+    # Context
+    trace_id = Column(String(36), nullable=True)
+    environment = Column(String(20), nullable=True)
+    action_version = Column(String(20), nullable=True)  # RENAMED from 'version'
+    
+    # Constraints  
+    __table_args__ = (
+        Index('ix_emergency_actions_status', 'status', 'is_active'),
+        Index('ix_emergency_actions_type', 'action_type', 'severity_level'),
+        Index('ix_emergency_actions_triggered', 'triggered_at'),
+        Index('ix_emergency_actions_trace', 'trace_id'),
+    )
+
+
+# ============================================================================
+# CORE APPLICATION MODELS
+# ============================================================================
 
 class User(Base):
-    """User model."""
+    """User model for multi-user scenarios."""
     __tablename__ = "users"
 
     user_id = Column(Integer, primary_key=True, autoincrement=True)
     username = Column(String(50), unique=True, nullable=False)
     email = Column(String(100), unique=True, nullable=True)
-    wallet_address = Column(String(100), nullable=True)
+    is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    is_active = Column(Boolean, default=True)
 
     # Relationships
-    orders = relationship("AdvancedOrder", back_populates="user")
-    positions = relationship("Position", back_populates="user")
+    wallets = relationship("Wallet", back_populates="user", cascade="all, delete-orphan")
     ledger_entries = relationship("LedgerEntry", back_populates="user")
+    positions = relationship("Position", back_populates="user")
+    orders = relationship("AdvancedOrder", back_populates="user")
 
 
 class Wallet(Base):
-    """
-    Wallet model for storing wallet configurations.
-    Provides compatibility with API routers that expect a Wallet model.
-    """
-    
+    """Wallet model."""
     __tablename__ = "wallets"
-    __table_args__ = (
-        Index("ix_wallet_address_chain", "address", "chain", unique=True),
-        Index("ix_wallet_type", "wallet_type"),
-        Index("ix_wallet_active", "is_active"),
-    )
+
+    wallet_id = Column(String(36), primary_key=True)  # UUID
+    user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
+    chain = Column(String(20), nullable=False)
+    address = Column(String(100), nullable=False)
+    wallet_type = Column(String(20), nullable=False)  # hot/cold/watch
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    user = relationship("User", back_populates="wallets")
+    balances = relationship("WalletBalance", back_populates="wallet")
+    ledger_entries = relationship("LedgerEntry", back_populates="wallet")
+
+
+class WalletBalance(Base):
+    """Wallet balance tracking."""
+    __tablename__ = "wallet_balances"
+
+    balance_id = Column(String(36), primary_key=True)  # UUID
+    wallet_id = Column(String(36), ForeignKey("wallets.wallet_id"), nullable=False)
+    token_address = Column(String(100), nullable=False)
+    balance = Column(Numeric(36, 18), nullable=False)
+    balance_usd = Column(Numeric(18, 8), nullable=True)
+    last_updated = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    wallet = relationship("Wallet", back_populates="balances")
+
+
+class LedgerEntry(Base):
+    """Comprehensive ledger for all transactions."""
+    __tablename__ = "ledger_entries"
+
+    entry_id = Column(String(36), primary_key=True)  # UUID
+    user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
+    wallet_id = Column(String(36), ForeignKey("wallets.wallet_id"), nullable=False)
     
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    address = Column(String(255), nullable=False)
-    chain = Column(SQLEnum(ChainType), nullable=False)
-    wallet_type = Column(SQLEnum(WalletType), nullable=False)
-    label = Column(String(100), nullable=True)
-    encrypted_keystore = Column(Text, nullable=True)  # Only for autotrade wallets
-    is_active = Column(Boolean, default=True, nullable=False)
-    daily_limit_gbp = Column(DECIMAL(20, 2), nullable=True)
-    per_trade_limit_gbp = Column(DECIMAL(20, 2), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    # Transaction details
+    tx_hash = Column(String(100), nullable=True)
+    chain = Column(String(20), nullable=False)
+    block_number = Column(Integer, nullable=True)
     
-    # Link to user
-    user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    # Trade information
+    trade_type = Column(String(20), nullable=False)  # buy/sell/swap
+    strategy = Column(String(50), nullable=True)
+    token_in = Column(String(100), nullable=True)
+    token_out = Column(String(100), nullable=True)
+    amount_in = Column(Numeric(36, 18), nullable=True)
+    amount_out = Column(Numeric(36, 18), nullable=True)
     
-    def __repr__(self) -> str:
-        """String representation of wallet."""
-        return f"<Wallet(address={self.address[:10]}..., chain={self.chain}, type={self.wallet_type})>"
+    # Pricing and fees
+    price_usd = Column(Numeric(18, 8), nullable=True)
+    gas_fee = Column(Numeric(36, 18), nullable=True)
+    protocol_fee = Column(Numeric(36, 18), nullable=True)
+    slippage = Column(Numeric(8, 4), nullable=True)
+    
+    # Status and additional data
+    status = Column(String(20), nullable=False)  # pending/confirmed/failed
+    error_message = Column(Text, nullable=True)
+    ledger_data = Column(JSONType, nullable=True)  # RENAMED from 'metadata'
+    trace_id = Column(String(36), nullable=True)
+    
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow)
+    confirmed_at = Column(DateTime, nullable=True)
+
+    # Relationships
+    user = relationship("User", back_populates="ledger_entries")
+    wallet = relationship("Wallet", back_populates="ledger_entries")
 
 
 class AdvancedOrder(Base):
-    """Advanced order model."""
+    """Advanced order types (limit, stop-loss, take-profit, etc.)."""
     __tablename__ = "advanced_orders"
 
     order_id = Column(String(36), primary_key=True)  # UUID
     user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
-    order_type = Column(String(20), nullable=False)  # OrderType enum
+    
+    # Order details
+    order_type = Column(String(20), nullable=False)  # limit/stop_loss/take_profit/trailing_stop
     token_address = Column(String(100), nullable=False)
-    pair_address = Column(String(100), nullable=True)
     chain = Column(String(20), nullable=False)
-    dex = Column(String(30), nullable=False)
-    side = Column(String(10), nullable=False)  # buy/sell
     
-    # Quantities and prices (stored as strings for precision)
+    # Order parameters
     quantity = Column(Numeric(36, 18), nullable=False)
-    remaining_quantity = Column(Numeric(36, 18), nullable=False)
     trigger_price = Column(Numeric(36, 18), nullable=True)
-    entry_price = Column(Numeric(36, 18), nullable=True)
-    fill_price = Column(Numeric(36, 18), nullable=True)
+    limit_price = Column(Numeric(36, 18), nullable=True)
+    stop_price = Column(Numeric(36, 18), nullable=True)
+    trail_amount = Column(Numeric(36, 18), nullable=True)
+    trail_percent = Column(Numeric(8, 4), nullable=True)
     
-    # Order status and metadata
-    status = Column(String(20), nullable=False)  # OrderStatus enum
-    parameters = Column(JSONType, nullable=True)  # Order-specific parameters
-    execution_count = Column(Integer, default=0)
-    last_execution_at = Column(DateTime, nullable=True)
+    # Execution settings
+    max_slippage = Column(Numeric(8, 4), nullable=True)
+    max_gas_price = Column(Numeric(36, 18), nullable=True)
+    partial_fill_allowed = Column(Boolean, default=True)
     
-    # Tracking and audit
-    trace_id = Column(String(36), nullable=True)
-    tx_hash = Column(String(100), nullable=True)
-    error_message = Column(Text, nullable=True)
-    
-    # Timestamps
+    # Status and timing
+    status = Column(String(20), nullable=False)  # pending/active/filled/cancelled/expired
     created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     expires_at = Column(DateTime, nullable=True)
+    filled_at = Column(DateTime, nullable=True)
+    
+    # Order results
+    filled_quantity = Column(Numeric(36, 18), default=0)
+    average_fill_price = Column(Numeric(36, 18), nullable=True)
+    total_fees = Column(Numeric(36, 18), default=0)
 
     # Relationships
     user = relationship("User", back_populates="orders")
-    executions = relationship("OrderExecution", back_populates="order")
+    executions = relationship("OrderExecution", back_populates="order", cascade="all, delete-orphan")
 
     @property
     def order_type_enum(self) -> OrderType:
@@ -231,7 +640,7 @@ class Position(Base):
     total_fees = Column(Numeric(36, 18), default=0)
     average_entry_price = Column(Numeric(36, 18), nullable=False)
     
-    # Position metadata
+    # Position data
     is_open = Column(Boolean, default=True)
     position_type = Column(String(10), default="long")  # long/short
     
@@ -248,510 +657,133 @@ class Position(Base):
         """Calculate PnL percentage."""
         if not self.current_price or not self.entry_price:
             return Decimal('0')
-        
-        # Convert SQLAlchemy column values to Decimal
-        current = Decimal(str(self.current_price))
-        entry = Decimal(str(self.entry_price))
-        
-        if self.position_type == "long":
-            return ((current - entry) / entry) * Decimal('100')
-        else:  # short
-            return ((entry - current) / entry) * Decimal('100')
+        return ((self.current_price - self.entry_price) / self.entry_price) * 100
 
 
 class TradeExecution(Base):
-    """Trade execution record."""
+    """Trade execution details."""
     __tablename__ = "trade_executions"
 
-    execution_id = Column(String(36), primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
-    token_address = Column(String(100), nullable=False)
-    pair_address = Column(String(100), nullable=True)
+    execution_id = Column(String(36), primary_key=True)  # UUID
+    strategy_name = Column(String(100), nullable=False)
     chain = Column(String(20), nullable=False)
-    dex = Column(String(30), nullable=False)
+    dex = Column(String(50), nullable=False)
     
     # Trade details
-    side = Column(String(10), nullable=False)  # buy/sell
-    quantity = Column(Numeric(36, 18), nullable=False)
-    price = Column(Numeric(36, 18), nullable=False)
-    total_value = Column(Numeric(36, 18), nullable=False)
+    token_in = Column(String(100), nullable=False)
+    token_out = Column(String(100), nullable=False)
+    amount_in = Column(Numeric(36, 18), nullable=False)
+    amount_out = Column(Numeric(36, 18), nullable=False)
+    expected_amount_out = Column(Numeric(36, 18), nullable=True)
     
-    # Execution details
-    slippage = Column(Numeric(10, 4), nullable=True)
+    # Execution results
+    tx_hash = Column(String(100), nullable=True)
     gas_used = Column(Integer, nullable=True)
     gas_price = Column(Numeric(36, 18), nullable=True)
-    
-    # Transaction details
-    tx_hash = Column(String(100), nullable=True)
     block_number = Column(Integer, nullable=True)
-    trace_id = Column(String(36), nullable=True)
-    order_id = Column(String(36), nullable=True)  # Link to advanced order
+    
+    # Performance metrics
+    slippage = Column(Numeric(8, 4), nullable=True)
+    price_impact = Column(Numeric(8, 4), nullable=True)
+    execution_time_ms = Column(Integer, nullable=True)
     
     # Status and timing
     status = Column(String(20), nullable=False)
     executed_at = Column(DateTime, default=datetime.utcnow)
     confirmed_at = Column(DateTime, nullable=True)
-
-
-class WalletBalance(Base):
-    """Wallet balance tracking."""
-    __tablename__ = "wallet_balances"
-
-    balance_id = Column(String(36), primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
-    wallet_address = Column(String(100), nullable=False)
-    token_address = Column(String(100), nullable=False)
-    chain = Column(String(20), nullable=False)
     
-    # Balance details
-    balance = Column(Numeric(36, 18), nullable=False)
-    token_symbol = Column(String(20), nullable=True)
-    token_decimals = Column(Integer, nullable=True)
-    usd_value = Column(Numeric(36, 18), nullable=True)
-    
-    # Timestamps
-    last_updated = Column(DateTime, default=datetime.utcnow)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-
-class SystemSettings(Base):
-    """System configuration settings."""
-    __tablename__ = "system_settings"
-
-    setting_id = Column(String(50), primary_key=True)
-    setting_value = Column(Text, nullable=False)
-    setting_type = Column(String(20), default="string")  # string/json/number/boolean
-    description = Column(Text, nullable=True)
-    is_encrypted = Column(Boolean, default=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    updated_by = Column(String(50), nullable=True)
-
-
-class LedgerEntry(Base):
-    """
-    Ledger entry for tracking all trades and transactions.
-    
-    Maintains immutable record of all trading activity for
-    audit, tax reporting, and performance analysis.
-    """
-    
-    __tablename__ = "ledger_entries"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey('users.user_id'), nullable=False, index=True)
-    trace_id = Column(String(64), unique=True, index=True, nullable=False)
-    created_at = Column(DateTime(timezone=True), default=func.now(), nullable=False)
-    
-    # Trade Information
-    chain = Column(String(32), nullable=False, index=True)
-    dex = Column(String(32), nullable=False)
-    trade_type = Column(String(32), nullable=False)  # manual, autotrade, canary
-    
-    # Token Details
-    input_token = Column(String(128), nullable=False)
-    input_token_symbol = Column(String(32))
-    output_token = Column(String(128), nullable=False)
-    output_token_symbol = Column(String(32))
-    
-    # Amounts (stored as strings to preserve precision)
-    input_amount = Column(String(78), nullable=False)
-    output_amount = Column(String(78), nullable=False)
-    
-    # Pricing
-    price = Column(String(78))
-    price_usd = Column(String(32))
-    
-    # Transaction Details
-    tx_hash = Column(String(128), index=True)
-    block_number = Column(Integer)
-    gas_used = Column(String(32))
-    gas_price = Column(String(32))
-    transaction_fee = Column(String(78))
-    transaction_fee_usd = Column(String(32))
-    
-    # Status
-    status = Column(String(32), nullable=False)  # completed, failed, reverted
-    error_message = Column(Text)
-    
-    # Wallet Information
-    wallet_address = Column(String(128), nullable=False, index=True)
-    
-    # P&L Tracking
-    realized_pnl = Column(String(32))
-    realized_pnl_usd = Column(String(32))
-    
-    # Risk Metrics
-    risk_score = Column(Float)
-    risk_factors = Column(JSON)
-    
-    # Metadata
-    tags = Column(JSON)  # Custom tags for filtering
-    notes = Column(Text)
-    
-    # Archive Status
-    archived = Column(Boolean, default=False)
-    archived_at = Column(DateTime(timezone=True))
-    
-    # Execution mode tracking for paper vs live trades
-    execution_mode = Column(String(16), default="live", nullable=False)  # "live" or "paper"
-    
-    # Relationships
-    user = relationship("User", back_populates="ledger_entries")
-
-    def to_dict(self) -> Dict[str, Any]:
-        """
-        Convert ledger entry to dictionary.
-        """
-        return {
-            'id': self.id,
-            'user_id': self.user_id,
-            'trace_id': self.trace_id,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
-            'chain': self.chain,
-            'dex': self.dex,
-            'trade_type': self.trade_type,
-            'input_token': self.input_token,
-            'input_token_symbol': self.input_token_symbol,
-            'output_token': self.output_token,
-            'output_token_symbol': self.output_token_symbol,
-            'input_amount': self.input_amount,
-            'output_amount': self.output_amount,
-            'price': self.price,
-            'price_usd': self.price_usd,
-            'tx_hash': self.tx_hash,
-            'block_number': self.block_number,
-            'gas_used': self.gas_used,
-            'gas_price': self.gas_price,
-            'transaction_fee': self.transaction_fee,
-            'transaction_fee_usd': self.transaction_fee_usd,
-            'status': self.status,
-            'error_message': self.error_message,
-            'wallet_address': self.wallet_address,
-            'realized_pnl': self.realized_pnl,
-            'realized_pnl_usd': self.realized_pnl_usd,
-            'risk_score': self.risk_score,
-            'risk_factors': self.risk_factors,
-            'tags': self.tags,
-            'notes': self.notes,
-            'archived': self.archived,
-            'archived_at': self.archived_at.isoformat() if self.archived_at else None,
-            'execution_mode': self.execution_mode,
-        }
+    # Error handling
+    error_message = Column(Text, nullable=True)
+    retry_count = Column(Integer, default=0)
+    trace_id = Column(String(36), nullable=True)
 
 
 class SafetyEvent(Base):
-    """Safety event tracking for risk management and monitoring."""
-    
+    """Safety events and circuit breaker activations."""
     __tablename__ = "safety_events"
+
+    event_id = Column(String(36), primary_key=True)  # UUID
+    event_type = Column(String(50), nullable=False)
+    severity = Column(String(20), nullable=False)  # low/medium/high/critical
     
-    id = Column(Integer, primary_key=True, index=True)
-    trace_id = Column(String(64), index=True)
-    timestamp = Column(DateTime(timezone=True), default=func.now(), nullable=False)
+    # Event details
+    description = Column(Text, nullable=False)
+    trigger_data = Column(JSONType, nullable=True)
+    affected_strategies = Column(JSONType, nullable=True)
     
-    # Event Details
-    event_type = Column(String(32), nullable=False)  # block, warning, intervention, kill_switch
-    severity = Column(String(16), nullable=False)  # low, medium, high, critical
-    
-    # Context
-    chain = Column(String(32))
-    token_address = Column(String(128))
-    wallet_address = Column(String(128))
-    
-    # Event Information
-    reason = Column(String(256), nullable=False)
-    details = Column(JSON)
-    risk_score = Column(Float)
-    
-    # Action Taken
-    action = Column(String(64))  # blocked, warned, paused, killed
-    automatic = Column(Boolean, default=True)
+    # Response actions
+    actions_taken = Column(JSONType, nullable=True)
+    manual_override = Column(Boolean, default=False)
+    override_reason = Column(Text, nullable=True)
     
     # Resolution
     resolved = Column(Boolean, default=False)
-    resolved_at = Column(DateTime(timezone=True))
-    resolution_notes = Column(Text)
+    resolved_at = Column(DateTime, nullable=True)
+    resolution_notes = Column(Text, nullable=True)
+    
+    # Timestamps
+    occurred_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class Trade(Base):
-    """Trade model for basic trade tracking."""
-    
+    """Trade model for basic tracking."""
     __tablename__ = "trades"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    trace_id = Column(String(64), unique=True, index=True)
-    timestamp = Column(DateTime(timezone=True), default=func.now(), nullable=False)
-    
-    # Basic trade info
-    chain = Column(String(32), nullable=False)
-    token_address = Column(String(128), nullable=False)
-    side = Column(String(10), nullable=False)  # buy/sell
-    amount = Column(String(78), nullable=False)
-    price = Column(String(78))
-    
-    # Transaction info
-    tx_hash = Column(String(128))
-    status = Column(String(32), default="pending")
-    
-    # Wallet
-    wallet_address = Column(String(128), nullable=False)
+
+    trade_id = Column(String(36), primary_key=True)
+    strategy = Column(String(50), nullable=False)
+    chain = Column(String(20), nullable=False)
+    token_address = Column(String(100), nullable=False)
+    trade_type = Column(String(10), nullable=False)  # buy/sell
+    amount = Column(Numeric(36, 18), nullable=False)
+    price = Column(Numeric(36, 18), nullable=False)
+    tx_hash = Column(String(100), nullable=True)
+    status = Column(String(20), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class TokenMetadata(Base):
-    """Token metadata and information cache."""
-    
+    """Token metadata cache."""
     __tablename__ = "token_metadata"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    token_address = Column(String(128), unique=True, nullable=False, index=True)
-    chain = Column(String(32), nullable=False, index=True)
-    
-    # Basic Info
-    symbol = Column(String(32))
-    name = Column(String(128))
-    decimals = Column(Integer)
-    total_supply = Column(String(78))
-    
-    # Contract Details
+
+    token_id = Column(String(100), primary_key=True)  # chain:address
+    chain = Column(String(20), nullable=False)
+    address = Column(String(100), nullable=False)
+    symbol = Column(String(20), nullable=True)
+    name = Column(String(100), nullable=True)
+    decimals = Column(Integer, nullable=True)
+    total_supply = Column(Numeric(36, 18), nullable=True)
     is_verified = Column(Boolean, default=False)
-    contract_created_at = Column(DateTime(timezone=True))
-    deployer_address = Column(String(128))
-    
-    # Trading Info
-    liquidity_locked = Column(Boolean, default=False)
-    liquidity_lock_end = Column(DateTime(timezone=True))
-    honeypot_status = Column(String(32))  # safe, warning, danger, unknown
-    buy_tax = Column(Float)
-    sell_tax = Column(Float)
-    max_tx_amount = Column(String(78))
-    max_wallet_amount = Column(String(78))
-    
-    # Ownership
-    owner_address = Column(String(128))
-    owner_renounced = Column(Boolean, default=False)
-    
-    # Risk Metrics
-    risk_score = Column(Float)
-    risk_factors = Column(JSON)
-    security_audit = Column(JSON)
-    
-    # Social/Marketing
-    website = Column(String(256))
-    telegram = Column(String(256))
-    twitter = Column(String(256))
-    description = Column(Text)
-    logo_url = Column(String(512))
-    
-    # Trading Pairs
-    primary_pair = Column(String(128))
-    pair_count = Column(Integer, default=0)
-    
-    # Metadata
-    last_updated = Column(DateTime(timezone=True), default=func.now())
-    update_count = Column(Integer, default=0)
-    data_source = Column(String(64))  # dexscreener, etherscan, manual, etc.
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert token metadata to dictionary."""
-        return {
-            'token_address': self.token_address,
-            'chain': self.chain,
-            'symbol': self.symbol,
-            'name': self.name,
-            'decimals': self.decimals,
-            'total_supply': self.total_supply,
-            'is_verified': self.is_verified,
-            'honeypot_status': self.honeypot_status,
-            'buy_tax': self.buy_tax,
-            'sell_tax': self.sell_tax,
-            'owner_renounced': self.owner_renounced,
-            'liquidity_locked': self.liquidity_locked,
-            'risk_score': self.risk_score,
-            'risk_factors': self.risk_factors,
-            'primary_pair': self.primary_pair,
-            'last_updated': self.last_updated.isoformat() if self.last_updated else None,
-        }
+    token_data = Column(JSONType, nullable=True)  # RENAMED from 'metadata'
+    last_updated = Column(DateTime, default=datetime.utcnow)
 
 
 class BlacklistedToken(Base):
-    """Blacklisted tokens to avoid."""
-    
+    """Blacklisted tokens."""
     __tablename__ = "blacklisted_tokens"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    token_address = Column(String(128), nullable=False, index=True)
-    chain = Column(String(32), nullable=False, index=True)
-    
-    # Blacklist Details
-    reason = Column(String(256), nullable=False)
-    severity = Column(String(16), nullable=False)  # low, medium, high, critical
-    category = Column(String(64))  # scam, honeypot, rugpull, hack, etc.
-    
-    # Evidence
-    evidence = Column(JSON)
-    reported_by = Column(String(128))
-    confirmed_by = Column(String(128))
-    
-    # Status
+
+    blacklist_id = Column(String(36), primary_key=True)
+    chain = Column(String(20), nullable=False)
+    address = Column(String(100), nullable=False)
+    reason = Column(String(200), nullable=False)
+    added_by = Column(String(100), nullable=False)
+    added_at = Column(DateTime, default=datetime.utcnow)
     is_active = Column(Boolean, default=True)
-    
-    # Timestamps
-    blacklisted_at = Column(DateTime(timezone=True), default=func.now())
-    expires_at = Column(DateTime(timezone=True))  # Optional expiry
-    reviewed_at = Column(DateTime(timezone=True))
-    
-    # Additional Info
-    notes = Column(Text)
-    reference_url = Column(String(512))
-    
-    # Unique constraint on token + chain
-    __table_args__ = (
-        Index('idx_blacklist_token_chain', 'token_address', 'chain', unique=True),
-        Index('idx_blacklist_active', 'is_active'),
-        Index('idx_blacklist_severity', 'severity'),
-    )
 
 
 class Transaction(Base):
-    """Generic transaction record for all blockchain transactions."""
-    
+    """Basic transaction model."""
     __tablename__ = "transactions"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    trace_id = Column(String(64), unique=True, index=True, nullable=False)
-    
-    # Transaction Identity
-    tx_hash = Column(String(128), unique=True, index=True)
-    chain = Column(String(32), nullable=False, index=True)
-    
-    # Transaction Type
-    tx_type = Column(String(32), nullable=False)  # swap, approve, transfer, etc.
-    direction = Column(String(10))  # in, out, swap
-    
-    # Addresses
-    from_address = Column(String(128), nullable=False)
-    to_address = Column(String(128), nullable=False)
-    contract_address = Column(String(128))
-    
-    # Values
-    value = Column(String(78))  # Native token value
-    gas_limit = Column(Integer)
-    gas_price = Column(String(32))
-    gas_used = Column(Integer)
-    effective_gas_price = Column(String(32))
-    max_fee_per_gas = Column(String(32))
-    max_priority_fee = Column(String(32))
-    
-    # Transaction Data
-    input_data = Column(Text)  # Transaction input data
-    method_id = Column(String(10))  # Function selector
-    
-    # Status
-    status = Column(String(20), nullable=False)  # pending, confirmed, failed
-    success = Column(Boolean)
-    revert_reason = Column(Text)
-    
-    # Block Info
-    block_number = Column(Integer, index=True)
-    block_hash = Column(String(128))
-    block_timestamp = Column(DateTime(timezone=True))
-    transaction_index = Column(Integer)
-    
-    # Confirmations
-    confirmations = Column(Integer, default=0)
-    
-    # Timing
-    created_at = Column(DateTime(timezone=True), default=func.now())
-    confirmed_at = Column(DateTime(timezone=True))
-    finalized_at = Column(DateTime(timezone=True))
-    
-    # Cost Tracking
-    transaction_fee = Column(String(78))
-    transaction_fee_usd = Column(String(32))
-    
-    # Nonce
-    nonce = Column(Integer)
-    
-    # Related Entities
-    wallet_address = Column(String(128), index=True)
-    related_order_id = Column(String(36))
-    related_trade_id = Column(String(36))
-    
-    # Metadata
-    tags = Column(JSON)
-    notes = Column(Text)
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert transaction to dictionary."""
-        return {
-            'id': self.id,
-            'trace_id': self.trace_id,
-            'tx_hash': self.tx_hash,
-            'chain': self.chain,
-            'tx_type': self.tx_type,
-            'from_address': self.from_address,
-            'to_address': self.to_address,
-            'value': self.value,
-            'gas_used': self.gas_used,
-            'status': self.status,
-            'success': self.success,
-            'block_number': self.block_number,
-            'block_timestamp': self.block_timestamp.isoformat() if self.block_timestamp else None,
-            'confirmations': self.confirmations,
-            'transaction_fee': self.transaction_fee,
-            'transaction_fee_usd': self.transaction_fee_usd,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
-            'confirmed_at': self.confirmed_at.isoformat() if self.confirmed_at else None,
-        }
 
-
-# Index definitions for performance
-# Order indices
-Index('idx_orders_user_status', AdvancedOrder.user_id, AdvancedOrder.status)
-Index('idx_orders_token_chain', AdvancedOrder.token_address, AdvancedOrder.chain)
-Index('idx_orders_created_at', AdvancedOrder.created_at)
-Index('idx_orders_trace_id', AdvancedOrder.trace_id)
-
-# Position indices
-Index('idx_positions_user_token', Position.user_id, Position.token_address)
-Index('idx_positions_is_open', Position.is_open)
-
-# Execution indices
-Index('idx_executions_order_id', OrderExecution.order_id)
-Index('idx_executions_tx_hash', OrderExecution.tx_hash)
-
-# Trade execution indices
-Index('idx_trades_user_token', TradeExecution.user_id, TradeExecution.token_address)
-Index('idx_trades_executed_at', TradeExecution.executed_at)
-Index('idx_trades_trace_id', TradeExecution.trace_id)
-
-# Ledger indices - Updated to use created_at instead of timestamp
-Index('idx_ledger_created_at', LedgerEntry.created_at)
-Index('idx_ledger_wallet_created_at', LedgerEntry.wallet_address, LedgerEntry.created_at)
-Index('idx_ledger_chain_created_at', LedgerEntry.chain, LedgerEntry.created_at)
-Index('idx_ledger_status', LedgerEntry.status)
-Index('idx_ledger_archived', LedgerEntry.archived)
-Index('idx_ledger_execution_mode', LedgerEntry.execution_mode)  # New index for paper vs live trades
-
-# Safety event indices
-Index('idx_safety_timestamp', SafetyEvent.timestamp)
-Index('idx_safety_type', SafetyEvent.event_type)
-Index('idx_safety_severity', SafetyEvent.severity)
-Index('idx_safety_resolved', SafetyEvent.resolved)
-
-# Simple trade indices
-Index('idx_trade_timestamp', Trade.timestamp)
-Index('idx_trade_wallet', Trade.wallet_address)
-
-# Token metadata indices
-Index('idx_token_metadata_chain', TokenMetadata.chain)
-Index('idx_token_metadata_symbol', TokenMetadata.symbol)
-Index('idx_token_metadata_risk', TokenMetadata.risk_score)
-Index('idx_token_metadata_updated', TokenMetadata.last_updated)
-
-# Transaction indices
-Index('idx_transaction_chain', Transaction.chain)
-Index('idx_transaction_block', Transaction.block_number)
-Index('idx_transaction_wallet', Transaction.wallet_address)
-Index('idx_transaction_status', Transaction.status)
-Index('idx_transaction_type', Transaction.tx_type)
-Index('idx_transaction_created', Transaction.created_at)
+    transaction_id = Column(String(36), primary_key=True)
+    chain = Column(String(20), nullable=False)
+    tx_hash = Column(String(100), nullable=False)
+    from_address = Column(String(100), nullable=False)
+    to_address = Column(String(100), nullable=True)
+    value = Column(Numeric(36, 18), nullable=False)
+    gas_used = Column(Integer, nullable=True)
+    gas_price = Column(Numeric(36, 18), nullable=True)
+    block_number = Column(Integer, nullable=True)
+    status = Column(String(20), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    confirmed_at = Column(DateTime, nullable=True)
