@@ -233,7 +233,7 @@ class SentimentAnalyzer:
         
         logger.info(
             "Sentiment analyzer initialized",
-            extra={"module": "market_intelligence", "component": "sentiment"}
+            extra={"ai_component": "sentiment", "intelligence_module": "market_intelligence"}
         )
     
     async def analyze_social_sentiment(
@@ -550,7 +550,7 @@ class WhaleTracker:
         
         logger.info(
             "Whale tracker initialized",
-            extra={"module": "market_intelligence", "component": "whale_tracker"}
+            extra={"ai_component": "whale_tracker", "intelligence_module": "market_intelligence"}
         )
     
     async def track_whale_activity(
@@ -908,8 +908,8 @@ class MarketRegimeDetector:
         self.regime_cache: Dict[str, Any] = {}
         
         logger.info(
-            "Market regime detector initialized",
-            extra={"module": "market_intelligence", "component": "regime_detector"}
+            "Market regime detector initialized", 
+            extra={"ai_component": "regime_detector", "intelligence_module": "market_intelligence"}
         )
     
     async def detect_market_regime(
@@ -1263,8 +1263,9 @@ class CoordinationDetector:
         # Use instance-specific logger to avoid conflicts
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
         
-        self.logger.info(
-            "Coordination detector initialized"
+        logger.info(
+            "Coordination detector initialized",
+            extra={"ai_component": "coordination_detector", "intelligence_module": "market_intelligence"}
         )
     
     async def detect_coordination(
@@ -1638,17 +1639,39 @@ class MarketIntelligenceEngine:
     """
     
     def __init__(self) -> None:
-        """Initialize advanced market intelligence system."""
-        self.sentiment_analyzer = SentimentAnalyzer()
-        self.whale_tracker = WhaleTracker()
-        self.regime_detector = MarketRegimeDetector()
-        self.coordination_detector = CoordinationDetector()
-        
-        # Cache for intelligence data
-        self.intelligence_cache: Dict[str, Dict] = {}
-        self.cache_ttl = timedelta(minutes=15)
-        
-        logger.info("Advanced market intelligence system initialized")
+        """Initialize advanced market intelligence system with safe logging."""
+        try:
+            # Initialize components with error handling
+            logger.info("Initializing Market Intelligence components...")
+            
+            self.sentiment_analyzer = SentimentAnalyzer()
+            logger.debug("SentimentAnalyzer initialized")
+            
+            self.whale_tracker = WhaleTracker() 
+            logger.debug("WhaleTracker initialized")
+            
+            self.regime_detector = MarketRegimeDetector()
+            logger.debug("MarketRegimeDetector initialized")
+            
+            self.coordination_detector = CoordinationDetector()
+            logger.debug("CoordinationDetector initialized")
+            
+            # Cache for intelligence data
+            self.intelligence_cache: Dict[str, Dict] = {}
+            self.cache_ttl = timedelta(minutes=15)
+            
+            logger.info("Advanced market intelligence system initialized successfully")
+            
+        except Exception as e:
+            logger.error(f"Market Intelligence initialization failed: {e}", exc_info=True)
+            # Initialize with minimal fallback components
+            self.sentiment_analyzer = None
+            self.whale_tracker = None
+            self.regime_detector = None
+            self.coordination_detector = None
+            self.intelligence_cache = {}
+            self.cache_ttl = timedelta(minutes=15)
+            raise
     
     async def analyze_market_intelligence(
         self,

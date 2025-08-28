@@ -373,35 +373,49 @@ async def get_autotrade_integration() -> AutotradeIntegration:
     """
     Get or create the autotrade integration instance.
     
-    Returns:
-        AutotradeIntegration: Initialized autotrade integration
+    This function properly initializes all dependencies with database sessions.
     """
     global _autotrade_integration
     
     if _autotrade_integration is None:
         try:
-            # Get all required dependencies from the correct locations
-            trade_executor = await get_trade_executor()
-            risk_manager = await get_risk_manager()
-            safety_controls = await get_safety_controls()
-            performance_analytics = await get_performance_analytics()
-            transaction_repo = await get_transaction_repository()
-            event_processor = await get_event_processor()
-            
-            # Create integration instance
-            _autotrade_integration = AutotradeIntegration(
-                trade_executor=trade_executor,
-                risk_manager=risk_manager,
-                safety_controls=safety_controls,
-                performance_analytics=performance_analytics,
-                transaction_repo=transaction_repo,
-                event_processor=event_processor
+            # Import required dependencies
+            from ..core.dependencies import (
+                get_trade_executor,
+                get_risk_manager,
+                get_safety_controls,
+                get_performance_analytics,
+                get_event_processor
             )
+            from ..storage.repositories import get_transaction_repository
             
-            logger.info("Autotrade integration instance created successfully")
+            # Get database session first
+            from ..storage.database import get_db_session
             
+            async for session in get_db_session():
+                # Initialize repositories with session
+                transaction_repo = TransactionRepository(session)
+                
+                # Initialize other dependencies (these don't require sessions)
+                trade_executor = await get_trade_executor()
+                risk_manager = await get_risk_manager()
+                safety_controls = await get_safety_controls()
+                performance_analytics = await get_performance_analytics()
+                event_processor = await get_event_processor()
+                
+                # Create the integration with all dependencies
+                _autotrade_integration = AutotradeIntegration(
+                    trade_executor=trade_executor,
+                    risk_manager=risk_manager,
+                    safety_controls=safety_controls,
+                    performance_analytics=performance_analytics,
+                    transaction_repo=transaction_repo,
+                    event_processor=event_processor
+                )
+                break  # Exit after first successful initialization
+                
         except Exception as e:
-            logger.error(f"Failed to create autotrade integration: {e}")
+            logger.error(f"Failed to initialize autotrade integration: {e}", exc_info=True)
             raise
     
     return _autotrade_integration

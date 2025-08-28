@@ -14,6 +14,7 @@ from enum import Enum
 
 from fastapi import APIRouter, HTTPException, status, Query
 from pydantic import BaseModel, Field, field_validator
+from typing import Dict, List, Optional, Any
 
 logger = logging.getLogger(__name__)
 
@@ -935,3 +936,28 @@ async def get_trigger_conditions() -> List[Dict[str, str]]:
             "description": "Trigger on price momentum signals"
         }
     ]
+
+
+def get_builtin_preset(preset_id: str) -> Optional[PresetDetail]:
+    """
+    Get a built-in preset by ID.
+    
+    Args:
+        preset_id: Built-in preset identifier
+        
+    Returns:
+        PresetDetail if found, None otherwise
+    """
+    built_in_presets = _get_built_in_presets()
+    return built_in_presets.get(preset_id)
+
+
+def get_all_builtin_presets() -> Dict[str, PresetDetail]:
+    """
+    Get all built-in presets.
+    
+    Returns:
+        Dictionary of built-in presets
+    """
+    return _get_built_in_presets()
+
