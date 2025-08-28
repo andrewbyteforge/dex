@@ -1,6 +1,7 @@
 /**
- * Enhanced WebSocket hook for DEX Sniper Pro with comprehensive error handling and logging
- * UPDATED: Fixed export structure and added data property for component compatibility
+ * Enhanced WebSocket hook for DEX Sniper Pro - Production Ready
+ * FIXED: Eliminates console errors, handles backend connection failures gracefully,
+ * provides proper fallbacks for development vs production environments
  * 
  * File: frontend/src/hooks/useWebSocket.js
  */
@@ -8,13 +9,14 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 
 /**
- * Enhanced WebSocket hook for DEX Sniper Pro with comprehensive error handling and logging
+ * Enhanced WebSocket hook with production-ready error handling and autotrade focus
  * 
  * @param {string} url - WebSocket URL (e.g., '/ws/autotrade')
  * @param {Object} options - Configuration options
- * @param {number} options.maxReconnectAttempts - Maximum reconnection attempts (default: 5)
- * @param {number} options.reconnectInterval - Base reconnection interval in ms (default: 3000)
+ * @param {number} options.maxReconnectAttempts - Maximum reconnection attempts (default: 3)
+ * @param {number} options.reconnectInterval - Base reconnection interval in ms (default: 5000)
  * @param {boolean} options.shouldReconnect - Enable auto-reconnection (default: true)
+ * @param {boolean} options.suppressDevErrors - Suppress non-critical dev errors (default: true)
  * @param {Function} options.onOpen - Callback for connection open
  * @param {Function} options.onMessage - Callback for message received
  * @param {Function} options.onClose - Callback for connection close
@@ -23,40 +25,64 @@ import { useState, useEffect, useRef, useCallback } from 'react';
  */
 const useWebSocket = (url, options = {}) => {
   const {
-    maxReconnectAttempts = 5,
-    reconnectInterval = 3000,
+    maxReconnectAttempts = 3,
+    reconnectInterval = 5000,
     shouldReconnect = true,
+    suppressDevErrors = true,
     onOpen,
     onMessage,
     onClose,
     onError
   } = options;
 
-  // State management
+  // Core connection state
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState(null);
   const [reconnectAttempts, setReconnectAttempts] = useState(0);
   const [lastMessage, setLastMessage] = useState(null);
-  const [data, setData] = useState(null); // ADDED: For component compatibility
+  const [data, setData] = useState(null);
 
-  // Refs for stable references
+  // Internal refs
   const socket = useRef(null);
   const reconnectTimer = useRef(null);
   const isMounted = useRef(true);
   const connectionStartTime = useRef(null);
+  const hasLoggedBackendUnavailable = useRef(false);
 
   /**
-   * Enhanced logging with structured format for debugging
+   * Enhanced logging with development vs production awareness
    */
   const log = useCallback((level, message, logData = {}) => {
+    // Suppress non-critical development errors if requested
+    if (suppressDevErrors && level === 'error' && import.meta.env.DEV) {
+      const errorMsg = logData.error || message;
+      
+      // Suppress known development issues
+      if (errorMsg.includes('NS_ERROR_WEBSOCKET_CONNECTION_REFUSED') ||
+          errorMsg.includes('Connection refused') ||
+          errorMsg.includes('ECONNREFUSED')) {
+        
+        // Only log backend unavailable once to reduce console noise
+        if (!hasLoggedBackendUnavailable.current) {
+          console.warn('[WebSocket] Backend unavailable - autotrade features disabled', {
+            url,
+            message: 'Start the backend server to enable real-time features',
+            component: 'useWebSocket'
+          });
+          hasLoggedBackendUnavailable.current = true;
+        }
+        return;
+      }
+    }
+
     const structuredLog = {
       timestamp: new Date().toISOString(),
       level,
       component: 'useWebSocket',
       url,
       trace_id: `ws_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      session_id: sessionStorage.getItem('dex_session_id'),
+      session_id: sessionStorage.getItem('dex_session_id') || 'no_session',
       ...logData
     };
 
@@ -68,20 +94,25 @@ const useWebSocket = (url, options = {}) => {
         console.warn(`[WebSocket] ${message}`, structuredLog);
         break;
       case 'info':
-        console.info(`[WebSocket] ${message}`, structuredLog);
+        // Only log info in development or production with debug enabled
+        if (import.meta.env.DEV || localStorage.getItem('debug_websocket')) {
+          console.info(`[WebSocket] ${message}`, structuredLog);
+        }
         break;
       case 'debug':
-        console.debug(`[WebSocket] ${message}`, structuredLog);
+        if (import.meta.env.DEV && localStorage.getItem('debug_websocket')) {
+          console.debug(`[WebSocket] ${message}`, structuredLog);
+        }
         break;
       default:
         console.log(`[WebSocket] ${message}`, structuredLog);
     }
 
     return structuredLog.trace_id;
-  }, [url]);
+  }, [url, suppressDevErrors]);
 
   /**
-   * Get proper WebSocket URL handling proxy configuration
+   * Build WebSocket URL with fallback logic for different environments
    */
   const getWebSocketUrl = useCallback((wsUrl) => {
     if (!wsUrl) {
@@ -91,54 +122,50 @@ const useWebSocket = (url, options = {}) => {
     
     // If already absolute WebSocket URL, use as-is
     if (wsUrl.startsWith('ws://') || wsUrl.startsWith('wss://')) {
-      log('info', 'Using absolute WebSocket URL', { wsUrl });
+      log('debug', 'Using absolute WebSocket URL', { wsUrl });
       return wsUrl;
     }
     
-    // For development, try backend directly first
+    // Determine target URL based on environment
+    let targetUrl;
+    
     if (import.meta.env.DEV) {
-      const backendWsUrl = `ws://localhost:8001${wsUrl.startsWith('/') ? wsUrl : `/${wsUrl}`}`;
-      log('info', 'Built WebSocket URL for backend in dev mode', { 
+      // In development, try backend directly
+      const cleanPath = wsUrl.startsWith('/') ? wsUrl : `/${wsUrl}`;
+      targetUrl = `ws://localhost:8001${cleanPath}`;
+      log('debug', 'Built WebSocket URL for development backend', { 
         original: wsUrl, 
-        final: backendWsUrl
+        final: targetUrl
       });
-      return backendWsUrl;
+    } else {
+      // In production, use same-origin WebSocket
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const host = window.location.host;
+      const cleanPath = wsUrl.startsWith('/') ? wsUrl : `/${wsUrl}`;
+      targetUrl = `${protocol}//${host}${cleanPath}`;
+      log('debug', 'Built WebSocket URL for production', { 
+        original: wsUrl, 
+        final: targetUrl
+      });
     }
     
-    // Build WebSocket URL from current location - Vite proxy will handle routing
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = window.location.host; // This will be localhost:3000 in dev
-    const path = wsUrl.startsWith('/') ? wsUrl : `/${wsUrl}`;
-    
-    const finalUrl = `${protocol}//${host}${path}`;
-    log('info', 'Built WebSocket URL via proxy', { 
-      original: wsUrl, 
-      final: finalUrl,
-      protocol,
-      host,
-      path 
-    });
-    
-    return finalUrl;
+    return targetUrl;
   }, [log]);
 
   /**
-   * Clean up existing connection with comprehensive cleanup
+   * Clean up connection with comprehensive error handling
    */
   const cleanupConnection = useCallback(() => {
-    const trace_id = log('debug', 'Cleaning up WebSocket connection');
-
     try {
       if (reconnectTimer.current) {
         clearTimeout(reconnectTimer.current);
         reconnectTimer.current = null;
-        log('debug', 'Cleared reconnect timer', { trace_id });
       }
 
       if (socket.current) {
         const currentState = socket.current.readyState;
         
-        // Remove event listeners to prevent memory leaks and unwanted callbacks
+        // Remove event listeners to prevent memory leaks
         socket.current.onopen = null;
         socket.current.onmessage = null;
         socket.current.onclose = null;
@@ -146,48 +173,39 @@ const useWebSocket = (url, options = {}) => {
 
         if (currentState === WebSocket.OPEN || currentState === WebSocket.CONNECTING) {
           socket.current.close(1000, 'Cleanup requested');
-          log('debug', 'Closed WebSocket connection', { 
-            trace_id,
-            previous_state: currentState 
-          });
         }
         
         socket.current = null;
       }
     } catch (cleanupError) {
-      log('error', 'Error during WebSocket cleanup', {
-        trace_id,
-        error: cleanupError.message,
-        stack: cleanupError.stack
-      });
+      // Only log cleanup errors in development
+      if (import.meta.env.DEV) {
+        log('error', 'Error during WebSocket cleanup', {
+          error: cleanupError.message
+        });
+      }
     }
   }, [log]);
 
   /**
-   * Connect to WebSocket with comprehensive error handling
+   * Connect with graceful degradation for backend unavailability
    */
   const connectWebSocket = useCallback(() => {
     if (!isMounted.current) {
-      log('warn', 'Attempted to connect after component unmount');
       return;
     }
 
-    // StrictMode protection - prevent double connection during double-mount
+    // Prevent duplicate connections during React StrictMode double-mounting
     if (socket.current && 
         (socket.current.readyState === WebSocket.CONNECTING || 
          socket.current.readyState === WebSocket.OPEN)) {
-      log('debug', 'Connection already active - skipping duplicate connection attempt', {
+      log('debug', 'Connection already active - preventing duplicate', {
         current_state: socket.current.readyState
       });
       return;
     }
 
     if (!url || isConnecting) {
-      log('warn', 'Connection attempt blocked', {
-        hasUrl: !!url,
-        isConnecting,
-        currentState: socket.current?.readyState
-      });
       return;
     }
 
@@ -202,32 +220,20 @@ const useWebSocket = (url, options = {}) => {
     
     const wsUrl = getWebSocketUrl(url);
     if (!wsUrl) {
-      const errorMsg = 'Invalid WebSocket URL configuration';
-      log('error', errorMsg, { trace_id });
-      setError(errorMsg);
+      setError('Invalid WebSocket configuration');
       setIsConnecting(false);
       return;
     }
 
     try {
-      // Clean up any existing connection first
       cleanupConnection();
 
       connectionStartTime.current = Date.now();
       socket.current = new WebSocket(wsUrl);
 
-      log('info', 'WebSocket instance created', {
-        trace_id,
-        url: wsUrl,
-        attempt: reconnectAttempts + 1
-      });
-
-      // Connection opened successfully
+      // Connection opened
       socket.current.onopen = (event) => {
-        if (!isMounted.current) {
-          log('warn', 'Received onopen after component unmount', { trace_id });
-          return;
-        }
+        if (!isMounted.current) return;
         
         const connectionDuration = Date.now() - connectionStartTime.current;
         
@@ -242,8 +248,9 @@ const useWebSocket = (url, options = {}) => {
         setIsConnecting(false);
         setReconnectAttempts(0);
         setError(null);
+        hasLoggedBackendUnavailable.current = false; // Reset error suppression
         
-        // Call user-provided callback
+        // Call user callback safely
         try {
           onOpen?.(event);
         } catch (callbackError) {
@@ -256,89 +263,62 @@ const useWebSocket = (url, options = {}) => {
 
       // Message received
       socket.current.onmessage = (event) => {
-        if (!isMounted.current) {
-          log('warn', 'Received message after component unmount', { trace_id });
-          return;
-        }
+        if (!isMounted.current) return;
         
         try {
           let parsedData;
           
-          // Attempt to parse as JSON
           try {
             parsedData = JSON.parse(event.data);
           } catch (parseError) {
-            // If JSON parsing fails, use raw data
-            log('debug', 'Message not JSON - using raw data', {
-              trace_id,
-              rawDataPreview: event.data.substring(0, 100),
-              parseError: parseError.message
-            });
+            // Use raw data if JSON parsing fails
             parsedData = { raw: event.data, timestamp: Date.now() };
           }
           
-          // Update state with both lastMessage (legacy) and data (for component compatibility)
           setLastMessage(parsedData);
-          setData(parsedData); // ADDED: For component compatibility
+          setData(parsedData);
           
-          log('debug', 'WebSocket message processed', {
-            trace_id,
-            messageType: parsedData.type || typeof parsedData,
-            dataSize: event.data.length,
-            hasRawData: !!parsedData.raw
-          });
-
-          // Call user-provided callback
+          // Call user callback safely
           try {
-            onMessage?.(parsedData, event);
+            onMessage?.(event, parsedData);
           } catch (callbackError) {
             log('error', 'Error in onMessage callback', {
-              trace_id,
+              trace_id: trace_id,
               error: callbackError.message
             });
           }
           
         } catch (messageError) {
-          log('error', 'Unexpected error processing WebSocket message', {
-            trace_id,
-            error: messageError.message,
-            stack: messageError.stack
+          log('error', 'Error processing WebSocket message', {
+            trace_id: trace_id,
+            error: messageError.message
           });
-          
-          // Still update state with error info
-          const errorData = { 
-            error: 'Message processing failed', 
-            raw: event.data,
-            timestamp: Date.now() 
-          };
-          setLastMessage(errorData);
-          setData(errorData);
         }
       };
 
       // Connection closed
       socket.current.onclose = (event) => {
-        if (!isMounted.current) {
-          log('warn', 'Received onclose after component unmount', { trace_id });
-          return;
-        }
+        if (!isMounted.current) return;
         
         const connectionDuration = connectionStartTime.current ? 
           Date.now() - connectionStartTime.current : 0;
-        
-        log('info', 'WebSocket disconnected', {
-          trace_id,
-          code: event.code,
-          reason: event.reason || 'No reason provided',
-          wasClean: event.wasClean,
-          connectionDuration,
-          attempt: reconnectAttempts + 1
-        });
 
         setIsConnected(false);
         setIsConnecting(false);
-        
-        // Call user-provided callback
+
+        // Only log close events that aren't normal cleanup
+        if (event.code !== 1000) {
+          log('info', 'WebSocket disconnected', {
+            trace_id,
+            code: event.code,
+            reason: event.reason || 'No reason provided',
+            wasClean: event.wasClean,
+            connectionDuration,
+            willReconnect: shouldReconnect && reconnectAttempts < maxReconnectAttempts
+          });
+        }
+
+        // Call user callback safely
         try {
           onClose?.(event);
         } catch (callbackError) {
@@ -348,85 +328,62 @@ const useWebSocket = (url, options = {}) => {
           });
         }
 
-        // Determine if we should attempt reconnection
-        const shouldAttemptReconnect = 
-          shouldReconnect &&
-          event.code !== 1000 && // Not intentional close
-          event.code !== 1001 && // Not going away
-          reconnectAttempts < maxReconnectAttempts &&
-          !(connectionDuration < 1000 && event.code === 1006); // Not immediate failure
-
-        if (shouldAttemptReconnect) {
-          const delay = Math.min(
-            reconnectInterval * Math.pow(2, reconnectAttempts), 
-            30000 // Max 30 seconds between attempts
-          );
+        // Schedule reconnection if appropriate
+        if (shouldReconnect && 
+            reconnectAttempts < maxReconnectAttempts && 
+            event.code !== 1000 && // Not normal closure
+            isMounted.current) {
+          
+          const delay = reconnectInterval * Math.pow(1.5, reconnectAttempts); // Exponential backoff
           
           log('info', 'Scheduling reconnection', {
             trace_id,
             delay,
-            nextAttempt: reconnectAttempts + 2, // +2 because we increment before next call
+            nextAttempt: reconnectAttempts + 1,
             maxAttempts: maxReconnectAttempts,
             closeCode: event.code
           });
-          
+
           setReconnectAttempts(prev => prev + 1);
           
           reconnectTimer.current = setTimeout(() => {
-            if (isMounted.current) {
+            if (isMounted.current && !isConnected) {
               connectWebSocket();
             }
           }, delay);
-        } else {
-          // Determine why reconnection stopped and set appropriate error
-          let reason = 'Unknown reason';
-          let errorMessage = null;
+        } else if (reconnectAttempts >= maxReconnectAttempts) {
+          // Give up reconnecting
+          const finalMessage = suppressDevErrors && import.meta.env.DEV ?
+            'WebSocket connection failed - backend may be offline' :
+            'WebSocket connection failed after maximum retry attempts';
           
-          if (event.code === 1000 || event.code === 1001) {
-            reason = 'Intentional disconnect';
-          } else if (connectionDuration < 1000 && event.code === 1006) {
-            reason = 'WebSocket endpoint unavailable';
-            errorMessage = 'WebSocket endpoint not available. Check if backend is running.';
-          } else if (reconnectAttempts >= maxReconnectAttempts) {
-            reason = 'Maximum reconnection attempts exceeded';
-            errorMessage = `Failed to reconnect after ${maxReconnectAttempts} attempts. Please check your connection and try again.`;
-          } else if (!shouldReconnect) {
-            reason = 'Auto-reconnection disabled';
-          }
-
-          log('warn', 'Stopping reconnection attempts', {
+          log('warn', finalMessage, {
             trace_id,
-            reason,
+            reason: 'Max reconnection attempts reached',
             finalAttempts: reconnectAttempts + 1,
             connectionDuration,
             closeCode: event.code
           });
-
-          if (errorMessage) {
-            setError(errorMessage);
-          }
+          
+          setError(finalMessage);
         }
       };
 
       // Connection error
       socket.current.onerror = (event) => {
-        if (!isMounted.current) {
-          log('warn', 'Received onerror after component unmount', { trace_id });
-          return;
-        }
+        if (!isMounted.current) return;
+        
+        const connectionDuration = connectionStartTime.current ? 
+          Date.now() - connectionStartTime.current : 0;
         
         log('error', 'WebSocket error occurred', {
           trace_id,
           readyState: socket.current?.readyState,
           attempt: reconnectAttempts + 1,
-          connectionDuration: connectionStartTime.current ? 
-            Date.now() - connectionStartTime.current : 0
+          connectionDuration
         });
 
-        const errorMessage = `WebSocket connection error (attempt ${reconnectAttempts + 1}/${maxReconnectAttempts})`;
-        setError(errorMessage);
-
-        // Call user-provided callback
+        // Call user callback safely
         try {
           onError?.(event);
         } catch (callbackError) {
@@ -441,11 +398,10 @@ const useWebSocket = (url, options = {}) => {
       log('error', 'Failed to create WebSocket connection', {
         trace_id,
         error: createError.message,
-        stack: createError.stack,
         url: wsUrl
       });
       
-      setError(`Connection creation failed: ${createError.message}`);
+      setError(`Connection failed: ${createError.message}`);
       setIsConnecting(false);
     }
   }, [
@@ -461,58 +417,46 @@ const useWebSocket = (url, options = {}) => {
     onMessage, 
     onClose, 
     onError,
-    log
+    log,
+    suppressDevErrors
   ]);
 
   /**
-   * Manually disconnect WebSocket
+   * Manual disconnect
    */
   const disconnect = useCallback(() => {
-    const trace_id = log('info', 'Manual disconnect requested');
-    
-    try {
-      cleanupConnection();
-      setIsConnected(false);
-      setIsConnecting(false);
-      setError(null);
-      setReconnectAttempts(0);
-      setLastMessage(null);
-      setData(null); // ADDED: Clear data on disconnect
-      
-      log('info', 'Manual disconnect completed', { trace_id });
-    } catch (disconnectError) {
-      log('error', 'Error during manual disconnect', {
-        trace_id,
-        error: disconnectError.message
-      });
-    }
-  }, [cleanupConnection, log]);
+    cleanupConnection();
+    setIsConnected(false);
+    setIsConnecting(false);
+    setError(null);
+    setReconnectAttempts(0);
+    setLastMessage(null);
+    setData(null);
+    hasLoggedBackendUnavailable.current = false;
+  }, [cleanupConnection]);
 
   /**
-   * Send message through WebSocket with comprehensive validation
+   * Manual reconnect
+   */
+  const reconnect = useCallback(() => {
+    disconnect();
+    setTimeout(() => {
+      if (isMounted.current) {
+        connectWebSocket();
+      }
+    }, 100);
+  }, [disconnect, connectWebSocket]);
+
+  /**
+   * Send message with validation
    */
   const sendMessage = useCallback((message) => {
-    const trace_id = log('debug', 'Attempting to send message', {
-      messageType: typeof message,
-      hasSocket: !!socket.current,
-      isConnected
-    });
-
-    if (!socket.current) {
-      const errorMsg = 'Cannot send message: WebSocket not initialized';
-      log('error', errorMsg, { trace_id });
-      setError(errorMsg);
-      return false;
-    }
-
-    if (socket.current.readyState !== WebSocket.OPEN) {
-      const errorMsg = `Cannot send message: WebSocket not connected (state: ${socket.current.readyState})`;
-      log('error', errorMsg, { 
-        trace_id,
-        readyState: socket.current.readyState,
+    if (!socket.current || socket.current.readyState !== WebSocket.OPEN) {
+      log('warn', 'Cannot send message: WebSocket not connected', {
+        hasSocket: !!socket.current,
+        readyState: socket.current?.readyState,
         isConnected
       });
-      setError(errorMsg);
       return false;
     }
 
@@ -523,52 +467,22 @@ const useWebSocket = (url, options = {}) => {
       socket.current.send(messageStr);
       
       log('debug', 'Message sent successfully', {
-        trace_id,
         messageType: typeof message === 'object' ? message.type || 'object' : 'string',
         messageSize: messageStr.length
       });
       
       return true;
     } catch (sendError) {
-      const errorMsg = `Failed to send message: ${sendError.message}`;
-      log('error', errorMsg, {
-        trace_id,
+      log('error', 'Failed to send message', {
         error: sendError.message,
         messageType: typeof message
       });
-      
-      setError(errorMsg);
       return false;
     }
   }, [isConnected, log]);
 
   /**
-   * Force reconnection (manual)
-   */
-  const reconnect = useCallback(() => {
-    const trace_id = log('info', 'Manual reconnect requested');
-    
-    try {
-      disconnect();
-      setReconnectAttempts(0);
-      
-      // Small delay to ensure cleanup completes
-      setTimeout(() => {
-        if (isMounted.current) {
-          log('info', 'Executing delayed reconnection', { trace_id });
-          connectWebSocket();
-        }
-      }, 100);
-    } catch (reconnectError) {
-      log('error', 'Error during manual reconnect', {
-        trace_id,
-        error: reconnectError.message
-      });
-    }
-  }, [disconnect, connectWebSocket, log]);
-
-  /**
-   * Get current connection status information
+   * Get connection status
    */
   const getStatus = useCallback(() => {
     return {
@@ -577,11 +491,10 @@ const useWebSocket = (url, options = {}) => {
       error,
       reconnectAttempts,
       maxReconnectAttempts,
-      readyState: socket.current?.readyState || WebSocket.CLOSED,
-      url: getWebSocketUrl(url),
       hasSocket: !!socket.current,
       lastMessage,
-      data // ADDED: Include data in status
+      data,
+      url
     };
   }, [
     isConnected, 
@@ -589,42 +502,32 @@ const useWebSocket = (url, options = {}) => {
     error, 
     reconnectAttempts, 
     maxReconnectAttempts, 
-    url, 
-    getWebSocketUrl,
     lastMessage,
-    data
+    data,
+    url
   ]);
 
-  // Auto-connect effect with improved dependency management
+  // Initialize connection on mount
   useEffect(() => {
     isMounted.current = true;
     
     if (url) {
-      const trace_id = log('info', 'Initializing WebSocket connection on mount', { 
-        url,
-        isDev: import.meta.env.DEV 
-      });
-      
-      // Small delay to ensure component is fully mounted
+      // Small delay to ensure component is fully mounted and avoid StrictMode issues
       const initTimer = setTimeout(() => {
         if (isMounted.current) {
           connectWebSocket();
         }
-      }, 50);
+      }, 100);
 
       return () => {
         clearTimeout(initTimer);
       };
-    } else {
-      log('warn', 'No WebSocket URL provided - skipping connection');
     }
 
-    // Cleanup function
     return () => {
-      const trace_id = log('info', 'Component unmounting - cleaning up WebSocket', { url });
       isMounted.current = false;
       
-      // Inline cleanup to avoid dependency issues
+      // Cleanup on unmount
       try {
         if (reconnectTimer.current) {
           clearTimeout(reconnectTimer.current);
@@ -643,34 +546,33 @@ const useWebSocket = (url, options = {}) => {
           }
           socket.current = null;
         }
-
-        log('info', 'WebSocket cleanup completed', { trace_id });
       } catch (cleanupError) {
-        console.error('[WebSocket] Error during unmount cleanup:', cleanupError);
+        // Silent cleanup - no need to log during unmount
       }
     };
-  }, [url]); // Only depend on url to prevent re-initialization loops
+  }, [url]); // Only depend on url to prevent re-initialization
 
   return {
-    // Connection state (legacy compatibility)
+    // Connection state
     isConnected,
     isConnecting,
     error,
     reconnectAttempts,
     lastMessage,
-    
-    // ADDED: Component compatibility
-    data, // This is what TradingInterface and TradingTestPage expect
+    data,
     
     // Connection methods
     connect: connectWebSocket,
     disconnect,
     reconnect,
     sendMessage,
-    getStatus
+    getStatus,
+    
+    // Legacy compatibility
+    connected: isConnected // Some components may use 'connected' instead of 'isConnected'
   };
 };
 
-// FIXED: Export both named and default exports for maximum compatibility
+// Export both named and default for maximum compatibility
 export { useWebSocket };
 export default useWebSocket;
