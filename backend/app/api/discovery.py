@@ -421,3 +421,74 @@ async def get_discovery_health() -> Dict[str, Any]:
 
 
 logger.info("Minimal Discovery API with mock data initialized")
+
+
+@router.post("/test-discovery")
+async def trigger_test_discovery() -> Dict[str, Any]:
+    """
+    Trigger a test discovery run for development and debugging.
+    
+    Returns:
+        Dictionary with test discovery results and status
+    """
+    try:
+        logger.info("Test discovery triggered from API")
+        
+        # Mock discovery results for minimal implementation
+        test_pairs = [
+            {
+                "address": "0x1234567890abcdef1234567890abcdef12345678",
+                "symbol": "TESTTOKEN",
+                "name": "Test Token",
+                "chain": "ethereum",
+                "dex": "uniswap_v2",
+                "liquidity_usd": 50000.0,
+                "volume_24h": 25000.0,
+                "price_change_24h": 5.5,
+                "discovered_at": datetime.utcnow().isoformat(),
+                "risk_score": 0.3,
+                "opportunity_score": 0.7
+            },
+            {
+                "address": "0xabcdef1234567890abcdef1234567890abcdef12",
+                "symbol": "MOCKPAIR",
+                "name": "Mock Pair Token",
+                "chain": "bsc",
+                "dex": "pancakeswap",
+                "liquidity_usd": 75000.0,
+                "volume_24h": 35000.0,
+                "price_change_24h": -2.1,
+                "discovered_at": datetime.utcnow().isoformat(),
+                "risk_score": 0.2,
+                "opportunity_score": 0.8
+            }
+        ]
+        
+        logger.info(f"Test discovery generated {len(test_pairs)} mock pairs")
+        
+        return {
+            "status": "success",
+            "message": "Test discovery completed successfully",
+            "timestamp": datetime.utcnow().isoformat(),
+            "pairs_discovered": len(test_pairs),
+            "pairs": test_pairs,
+            "mode": "test",
+            "chains_monitored": ["ethereum", "bsc", "polygon"],
+            "discovery_metrics": {
+                "scan_duration_ms": 850,
+                "pairs_scanned": 1250,
+                "pairs_filtered": len(test_pairs),
+                "success_rate": 100.0
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Test discovery failed: {e}", exc_info=True)
+        return {
+            "status": "error",
+            "message": f"Test discovery failed: {str(e)}",
+            "timestamp": datetime.utcnow().isoformat(),
+            "pairs_discovered": 0,
+            "pairs": [],
+            "mode": "test"
+        }
