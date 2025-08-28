@@ -37,6 +37,10 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
     const [discoveryLoading, setDiscoveryLoading] = useState(false);
     const [discoveryResult, setDiscoveryResult] = useState(null);
     
+    // Test discovery UI state - UPDATED
+    const [testDiscoveryResults, setTestDiscoveryResults] = useState(null);
+    const [showTestResults, setShowTestResults] = useState(false);
+    
     // Component lifecycle management
     const [shouldConnect, setShouldConnect] = useState(true);
     const [wsKey] = useState(() => Date.now());
@@ -209,6 +213,9 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
     /**
      * SECURITY: Load wallet approval status
      */
+/**
+ * SECURITY: Load wallet approval status - FIXED approval validation
+ */
     const loadWalletApprovalStatus = useCallback(async () => {
         if (!backendAvailable || !walletConnectedFixed) return;
 
@@ -223,37 +230,51 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
             if (response.ok) {
                 const data = await response.json();
                 
-                // DEBUG: Log the actual approval structure
-                console.log('Full wallet status response:', data);
-                console.log('Approvals object:', data.approvals);
-                if (data.approvals) {
-                    console.log('Approval keys:', Object.keys(data.approvals));
-                    console.log('Looking for chain:', currentChainFixed?.toLowerCase());
-                    console.log('Ethereum approval:', data.approvals['ethereum']);
-                    console.log('Has ethereum key?', 'ethereum' in data.approvals);
-                }
-                
                 // Map the response properly
                 const mappedData = {
                     ...data,
                     approved_wallets: data.approvals || {},
-                    daily_spending: {}
+                    daily_spending: data.daily_spending || {}
                 };
                 
                 setWalletApprovalStatus(mappedData);
                 
-                // Check multiple ways for approval
+                // FIXED: Check approval based on chain-protocol mapping instead of direct chain lookup
                 let hasApprovalForChain = false;
-                if (data.approvals) {
-                    // Check if there's ANY approval data for this wallet + funded
-                    const approvalKeys = Object.keys(data.approvals);
-                    hasApprovalForChain = approvalKeys.length > 0 && data.wallet_funded;
+                if (data.approvals && data.wallet_funded) {
+                    // Define chain to protocol mappings
+                    const chainProtocolMappings = {
+                        'ethereum': ['uniswap_v2', 'uniswap_v3', 'sushiswap', 'curve', 'balancer'],
+                        'bsc': ['pancakeswap', 'bakeryswap', 'apeswap', 'biswap'],
+                        'base': ['uniswap_v3', 'aerodrome', 'swapbased', 'baseswap'],
+                        'polygon': ['quickswap', 'sushiswap', 'curve', 'balancer'],
+                        'arbitrum': ['uniswap_v3', 'sushiswap', 'camelot', 'trader_joe'],
+                        'solana': ['raydium', 'orca', 'jupiter']
+                    };
+                    
+                    const currentChainLower = currentChainFixed?.toLowerCase();
+                    const expectedProtocols = chainProtocolMappings[currentChainLower] || [];
+                    const approvedProtocols = Object.keys(data.approvals);
+                    
+                    // Check if any protocol for the current chain is approved
+                    hasApprovalForChain = expectedProtocols.some(protocol => 
+                        approvedProtocols.includes(protocol)
+                    );
+                    
+                    logMessage('debug', 'Approval validation details', {
+                        current_chain: currentChainLower,
+                        expected_protocols: expectedProtocols,
+                        approved_protocols: approvedProtocols,
+                        has_matching_approval: hasApprovalForChain,
+                        wallet_funded: data.wallet_funded
+                    });
                 }
                 
                 setCanStartAutotrade(hasApprovalForChain);
                 
                 logMessage('info', 'Wallet approval status loaded', {
-                    approved_chains: Object.keys(data.approvals || {}),
+                    approved_protocols: Object.keys(data.approvals || {}),
+                    current_chain: currentChainFixed,
                     can_start_autotrade: hasApprovalForChain,
                     wallet_funded: data.wallet_funded
                 });
@@ -262,6 +283,14 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
             logMessage('debug', 'Could not load wallet approval status', { error: error.message });
         }
     }, [backendAvailable, walletConnectedFixed, currentChainFixed, logMessage]);
+
+
+
+
+
+
+
+
 
     /**
      * Load AI intelligence data from API
@@ -851,40 +880,72 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
     }, [backendAvailable, logMessage, logError, loadInitialData]);
 
     /**
-     * Trigger backend AI test discovery (calls POST /api/v1/discovery/test-discovery)
+     * Trigger test discovery with FIXED data parsing - UPDATED
      */
     const triggerTestDiscovery = useCallback(async () => {
-        if (!backendAvailable) {
-            setDiscoveryResult({ type: 'danger', text: 'Backend unavailable - cannot trigger discovery' });
-            return;
-        }
-        setDiscoveryLoading(true);
-        setDiscoveryResult(null);
         try {
-            const res = await fetch(`${API_BASE_URL}/api/v1/discovery/test-discovery`, {
+            logMessage('info', 'Triggering test discovery...');
+            setDiscoveryLoading(true);
+            
+            const response = await fetch(`${API_BASE_URL}/api/v1/discovery/test-discovery`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${localStorage.getItem('auth_token') || ''}`
-                }
+                },
             });
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok || data.success === false) {
-                throw new Error(data.error || `HTTP ${res.status} ${res.statusText}`);
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
             }
-            setDiscoveryResult({ type: 'success', text: data.message || 'Test discovery triggered successfully' });
+
+            const data = await response.json();
             logMessage('info', 'Triggered test discovery', { response: data });
-            // Optionally refresh AI panel shortly after
-            setTimeout(() => {
-                if (mountedRef.current) loadAIIntelligenceData();
-            }, 1500);
-        } catch (err) {
-            setDiscoveryResult({ type: 'danger', text: `Failed to trigger discovery: ${err.message}` });
-            logError('trigger_test_discovery', err);
+            
+            // FIXED: Parse the response correctly based on backend structure
+            const processedResult = {
+                success: data.success || false,
+                message: data.message || 'Discovery completed',
+                status: data.success ? 'success' : 'error',
+                pairs_discovered: data.scan_results?.pairs_found || data.pairs?.length || 0,
+                scan_duration_ms: data.scan_results?.scan_duration_ms || 0,
+                success_rate: data.scan_results?.success_rate || 100,
+                pairs: (data.pairs || []).map(pair => ({
+                    symbol: `${pair.token0?.symbol || 'UNKNOWN'}/${pair.token1?.symbol || 'UNKNOWN'}`,
+                    name: pair.token0?.name || 'Unknown Token',
+                    chain: pair.chain,
+                    dex: pair.dex,
+                    pair_address: pair.pair_address,
+                    liquidity_usd: parseFloat(pair.liquidity_eth || 0) * 2000, // Rough conversion
+                    volume_24h: parseFloat(pair.metadata?.volume_24h || 0),
+                    price_change_24h: parseFloat(pair.metadata?.price_change_24h || 0),
+                    risk_score: (pair.risk_score || 50) / 100, // Convert from percentage to decimal
+                    token0: pair.token0,
+                    token1: pair.token1,
+                    metadata: pair.metadata
+                }))
+            };
+            
+            // Update UI state with processed results
+            setTestDiscoveryResults(processedResult);
+            setShowTestResults(true);
+            
+            // Show success alert
+            alert(`Test Discovery Success!\nFound ${processedResult.pairs_discovered} pairs in ${processedResult.scan_duration_ms}ms`);
+            
+        } catch (error) {
+            logMessage('error', '[Autotrade:trigger_test_discovery]', {
+                operation: 'trigger_test_discovery',
+                error: error.message,
+                stack: error.stack || '',
+                context: {}
+            });
+            
+            // Show error alert
+            alert(`Test Discovery Failed: ${error.message}`);
         } finally {
             setDiscoveryLoading(false);
         }
-    }, [backendAvailable, logMessage, logError, loadAIIntelligenceData]);
+    }, [logMessage]);
 
     /**
      * Handle wallet approval completion
@@ -1312,6 +1373,83 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
                 </Alert>
             )}
 
+            {/* Test Discovery Results Display - FIXED */}
+            {showTestResults && testDiscoveryResults && (
+                <Card className="mb-3">
+                    <Card.Header className="d-flex justify-content-between align-items-center">
+                        <h6 className="mb-0">Test Discovery Results</h6>
+                        <Button 
+                            variant="outline-secondary" 
+                            size="sm" 
+                            onClick={() => setShowTestResults(false)}
+                        >
+                            ×
+                        </Button>
+                    </Card.Header>
+                    <Card.Body>
+                        <Row className="mb-3">
+                            <Col md={3}>
+                                <strong>Status:</strong> <Badge bg={testDiscoveryResults.success ? 'success' : 'danger'}>
+                                    {testDiscoveryResults.status || 'Unknown'}
+                                </Badge>
+                            </Col>
+                            <Col md={3}>
+                                <strong>Pairs Found:</strong> {testDiscoveryResults.pairs_discovered || 0}
+                            </Col>
+                            <Col md={3}>
+                                <strong>Scan Duration:</strong> {testDiscoveryResults.scan_duration_ms || 0}ms
+                            </Col>
+                            <Col md={3}>
+                                <strong>Success Rate:</strong> {testDiscoveryResults.success_rate || 0}%
+                            </Col>
+                        </Row>
+                        
+                        {testDiscoveryResults.pairs && testDiscoveryResults.pairs.length > 0 && (
+                            <div>
+                                <h6>Discovered Pairs:</h6>
+                                {testDiscoveryResults.pairs.map((pair, index) => (
+                                    <Card key={index} className="mb-2" style={{ fontSize: '0.9em' }}>
+                                        <Card.Body className="py-2">
+                                            <Row>
+                                                <Col md={4}>
+                                                    <strong>{pair.symbol || 'UNKNOWN/UNKNOWN'}</strong> ({pair.name || 'Unknown'})
+                                                    <br />
+                                                    <small className="text-muted">{pair.chain} • {pair.dex}</small>
+                                                </Col>
+                                                <Col md={2}>
+                                                    <small>Liquidity</small>
+                                                    <br />
+                                                    <strong>${(pair.liquidity_usd || 0).toLocaleString()}</strong>
+                                                </Col>
+                                                <Col md={2}>
+                                                    <small>Volume 24h</small>
+                                                    <br />
+                                                    <strong>${(pair.volume_24h || 0).toLocaleString()}</strong>
+                                                </Col>
+                                                <Col md={2}>
+                                                    <small>Price Change</small>
+                                                    <br />
+                                                    <span className={(pair.price_change_24h || 0) >= 0 ? 'text-success' : 'text-danger'}>
+                                                        {(pair.price_change_24h || 0) > 0 ? '+' : ''}{(pair.price_change_24h || 0).toFixed(2)}%
+                                                    </span>
+                                                </Col>
+                                                <Col md={2}>
+                                                    <small>Risk Score</small>
+                                                    <br />
+                                                    <Badge bg={(pair.risk_score || 0.5) < 0.3 ? 'success' : (pair.risk_score || 0.5) < 0.6 ? 'warning' : 'danger'}>
+                                                        {((pair.risk_score || 0.5) * 100).toFixed(0)}%
+                                                    </Badge>
+                                                </Col>
+                                            </Row>
+                                        </Card.Body>
+                                    </Card>
+                                ))}
+                            </div>
+                        )}
+                    </Card.Body>
+                </Card>
+            )}
+
             {/* SECURITY: Wallet Security Status */}
             {renderWalletSecurityStatus()}
 
@@ -1431,7 +1569,7 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
                                             >
                                                 <Activity size={16} className="me-1" /> View Monitor
                                             </Button>
-                                            {/* NEW: Trigger test discovery */}
+                                            {/* FIXED: Trigger test discovery with corrected loading state */}
                                             <Button
                                                 variant="outline-success"
                                                 size="sm"
@@ -1439,9 +1577,15 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
                                                 onClick={triggerTestDiscovery}
                                             >
                                                 {discoveryLoading ? (
-                                                    <><Spinner animation="border" size="sm" className="me-1" /> Triggering...</>
+                                                    <>
+                                                        <Spinner animation="border" size="sm" className="me-1" />
+                                                        Testing...
+                                                    </>
                                                 ) : (
-                                                    <><Brain size={16} className="me-1" /> Trigger Test Discovery (AI)</>
+                                                    <>
+                                                        <Brain size={16} className="me-1" />
+                                                        Trigger Test Discovery
+                                                    </>
                                                 )}
                                             </Button>
                                         </div>
@@ -1523,105 +1667,103 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
                     isRunning={isRunning}
                     wsConnected={wsConnected}
                     aiIntelligenceData={aiIntelligenceData}
-                />
-            )}
-
-            {/* Security Warning Modal */}
-            <Modal show={showSecurityWarningModal} onHide={() => setShowSecurityWarningModal(false)} size="lg">
-                <Modal.Header closeButton>
-                    <Modal.Title>
-                        <Shield className="me-2 text-warning" />
-                        Wallet Approval Required
-                    </Modal.Title>
-                </Modal.Header>
-                <Modal.Body>
-                    <Alert variant="warning" className="mb-4">
-                        <strong>Security Check:</strong> Your wallet needs approval before autotrade can execute trades with your funds.
-                    </Alert>
-                    
-                    <p>
-                        To start autotrade in <strong>{pendingStartMode}</strong> mode, you must first approve your wallet 
-                        and set spending limits. This ensures you maintain full control over your funds.
-                    </p>
-                    
-                    <div className="bg-light p-3 rounded mb-3">
-                        <h6>Why wallet approval is required:</h6>
-                        <ul className="mb-0">
-                            <li>Set daily and per-trade spending limits</li>
-                            <li>Prevent unauthorized or excessive trading</li>
-                            <li>Maintain audit trail of all approved activities</li>
-                            <li>Enable emergency stop functionality</li>
-                        </ul>
-                    </div>
-                </Modal.Body>
-                <Modal.Footer>
-                    <Button 
-                        variant="secondary" 
-                        onClick={() => {
-                            setShowSecurityWarningModal(false);
-                            setPendingStartMode(null);
-                        }}
-                    >
-                        Cancel
-                    </Button>
-                    <Button 
-                        variant="primary" 
-                        onClick={() => {
-                            setShowSecurityWarningModal(false);
-                            setShowWalletApprovalModal(true);
-                        }}
-                    >
-                        <Shield size={16} className="me-1" />
-                        Approve Wallet
-                    </Button>
-                </Modal.Footer>
-            </Modal>
-
-            {/* Wallet Approval Modal */}
-            <Modal show={showWalletApprovalModal} onHide={() => setShowWalletApprovalModal(false)} size="xl">
-                <Modal.Header closeButton>
-                    <Modal.Title>
-                        <Shield className="me-2" />
-                        Wallet Security Management
-                    </Modal.Title>
-                </Modal.Header>
-                <Modal.Body className="p-0">
-                    <WalletApproval 
-                        connectedWallet={{ address: walletAddressFixed, chain: currentChainFixed }}
-                        onApprovalComplete={handleWalletApprovalComplete}
                     />
-                </Modal.Body>
-            </Modal>
+           )}
 
-            {/* Emergency Stop Modal */}
-            <Modal show={showEmergencyModal} onHide={() => setShowEmergencyModal(false)}>
-                <Modal.Header closeButton>
-                    <Modal.Title className="text-danger">
-                        <AlertTriangle className="me-2" />
-                        Emergency Stop
-                    </Modal.Title>
-                </Modal.Header>
-                <Modal.Body>
-                    <p>
-                        This will immediately stop all autotrade operations and cancel pending orders. 
-                        This action cannot be undone.
-                    </p>
-                    <p className="text-muted small">
-                        Use this only in emergency situations where you need to halt all trading immediately.
-                    </p>
-                </Modal.Body>
-                <Modal.Footer>
-                    <Button variant="secondary" onClick={() => setShowEmergencyModal(false)}>
-                        Cancel
-                    </Button>
-                    <Button variant="danger" onClick={handleEmergencyStop}>
-                        <Square className="me-1" />
-                        Execute Emergency Stop
-                    </Button>
-                </Modal.Footer>
-            </Modal>
-        </Container>
-    );
+           {/* Security Warning Modal */}
+           <Modal show={showSecurityWarningModal} onHide={() => setShowSecurityWarningModal(false)} size="lg">
+               <Modal.Header closeButton>
+                   <Modal.Title>
+                       <Shield className="me-2 text-warning" />
+                       Wallet Approval Required
+                   </Modal.Title>
+               </Modal.Header>
+               <Modal.Body>
+                   <Alert variant="warning" className="mb-4">
+                       <strong>Security Check:</strong> Your wallet needs approval before autotrade can execute trades with your funds.
+                   </Alert>
+                   
+                   <p>
+                       To start autotrade in <strong>{pendingStartMode}</strong> mode, you must first approve your wallet 
+                       and set spending limits. This ensures you maintain full control over your funds.
+                   </p>
+                   
+                   <div className="bg-light p-3 rounded mb-3">
+                       <h6>Why wallet approval is required:</h6>
+                       <ul className="mb-0">
+                           <li>Set daily and per-trade spending limits</li>
+                           <li>Prevent unauthorized or excessive trading</li>
+                           <li>Maintain audit trail of all approved activities</li>
+                           <li>Enable emergency stop functionality</li>
+                       </ul>
+                   </div>
+               </Modal.Body>
+               <Modal.Footer>
+                   <Button variant="secondary" onClick={() => setShowSecurityWarningModal(false)}>
+                       Close
+                   </Button>
+                   <Button variant="primary" onClick={() => {
+                       setShowSecurityWarningModal(false);
+                       setShowWalletApprovalModal(true);
+                   }}>
+                       Approve Wallet
+                   </Button>
+               </Modal.Footer>
+           </Modal>
+
+           {/* Wallet Approval Modal */}
+           <Modal 
+               show={showWalletApprovalModal} 
+               onHide={() => setShowWalletApprovalModal(false)}
+               size="xl"
+           >
+               <Modal.Header closeButton>
+                   <Modal.Title>
+                       <Shield className="me-2 text-primary" />
+                       Wallet Security & Approval
+                   </Modal.Title>
+               </Modal.Header>
+               <Modal.Body>
+                   <WalletApproval 
+                       connectedWallet={{ address: walletAddressFixed, chain: currentChainFixed }}
+                       onApprovalComplete={handleWalletApprovalComplete}
+                       embedded={true}
+                   />
+               </Modal.Body>
+           </Modal>
+
+           {/* Emergency Stop Confirmation */}
+           <Modal
+               show={showEmergencyModal}
+               onHide={() => setShowEmergencyModal(false)}
+               centered
+           >
+               <Modal.Header closeButton>
+                   <Modal.Title>
+                       <Square className="me-2 text-danger" />
+                       Confirm Emergency Stop
+                   </Modal.Title>
+               </Modal.Header>
+               <Modal.Body>
+                   <Alert variant="danger">
+                       <strong>Are you sure?</strong> This will immediately halt the autotrade engine,
+                       clear the queue, and stop all operations.
+                   </Alert>
+                   <div className="small text-muted">
+                       You can restart the engine later from this dashboard.
+                   </div>
+               </Modal.Body>
+               <Modal.Footer>
+                   <Button variant="secondary" onClick={() => setShowEmergencyModal(false)}>
+                       Cancel
+                   </Button>
+                   <Button variant="danger" onClick={handleEmergencyStop}>
+                       Execute Emergency Stop
+                   </Button>
+               </Modal.Footer>
+           </Modal>
+       </Container>
+   );
 };
 
 export default Autotrade;

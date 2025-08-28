@@ -257,6 +257,17 @@ def register_core_routers(app: FastAPI) -> None:
     except Exception as e:
         logger.error(f"Failed to include Intelligence API router: {e}")
     
+    # Add Discovery router - NEW ADDITION
+    try:
+        from ..api.discovery import router as discovery_router
+        app.include_router(discovery_router)
+        logger.info("Discovery API router included successfully")
+        routers_registered += 1
+    except ImportError as e:
+        logger.warning(f"Discovery API router not available: {e}")
+    except Exception as e:
+        logger.error(f"Failed to include Discovery API router: {e}")
+    
     # Add core endpoints router
     try:
         from ..api.core_endpoints import router as core_router
