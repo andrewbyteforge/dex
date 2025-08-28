@@ -282,138 +282,133 @@ export const useWallet = (options = {}) => {
     }
   }, [persistConnection, walletAddress, walletType, selectedChain]);
 
+  /**
+   * Restore wallet connection with debouncing to prevent race conditions
+   */
+  const restoreWalletConnection = useCallback(async (persistedData, parentTrace) => {
+    // Prevent multiple simultaneous restore attempts
+    if (restoreInProgressRef.current) {
+        logWalletEvent('debug', 'Wallet restore already in progress - skipping', { parentTrace });
+        return false;
+    }
 
+    // Clear any pending restore timeout
+    if (restoreTimeoutRef.current) {
+        clearTimeout(restoreTimeoutRef.current);
+    }
 
+    return new Promise((resolve) => {
+        // Debounce restore attempts
+        restoreTimeoutRef.current = setTimeout(async () => {
+            if (!mountedRef.current) {
+                resolve(false);
+                return;
+            }
+            
+            restoreInProgressRef.current = true;
+            
+            try {
+                const { walletAddress: restoredAddress, walletType: restoredType, selectedChain: restoredChain } = persistedData;
+                
+                const trace_id = logWalletEvent('debug', 'Attempting to restore wallet connection', {
+                    wallet_address: restoredAddress,
+                    chain: restoredChain,
+                    wallet_type: restoredType,
+                    parent_trace: parentTrace
+                });
 
+                // Determine if this is a Solana wallet
+                const isSolanaWallet = restoredType === 'phantom' || restoredType === 'solflare' || restoredChain === 'solana';
+                
+                let result;
+                if (isSolanaWallet) {
+                    if (!solanaWalletService || typeof solanaWalletService.checkConnection !== 'function') {
+                        throw new Error('Solana wallet service not available');
+                    }
+                    result = await solanaWalletService.checkConnection(restoredAddress);
+                } else {
+                    if (!walletService || typeof walletService.checkConnection !== 'function') {
+                        throw new Error('EVM wallet service not available');
+                    }
+                    result = await walletService.checkConnection(restoredAddress, restoredChain);
+                }
 
+                console.log('🔍 [DEBUG] checkConnection result:', result);
+                console.log('🔍 [DEBUG] result.success:', result?.success);
+                console.log('🔍 [DEBUG] result.connected:', result?.connected);
 
+                logWalletEvent('debug', 'Connection check result detailed', {
+                    raw_result: result,
+                    has_result: !!result,
+                    result_success: result?.success,
+                    result_connected: result?.connected,
+                    trace_id
+                });
 
-
-
-    const restoreWalletConnection = useCallback(async (persistedData, parentTrace) => {
-      // Prevent multiple simultaneous restore attempts
-      if (restoreInProgressRef.current) {
-          logWalletEvent('debug', 'Wallet restore already in progress - skipping', { parentTrace });
-          return false;
-      }
-
-      // Clear any pending restore timeout
-      if (restoreTimeoutRef.current) {
-          clearTimeout(restoreTimeoutRef.current);
-      }
-
-      return new Promise((resolve) => {
-          // Debounce restore attempts
-          restoreTimeoutRef.current = setTimeout(async () => {
-              if (!mountedRef.current) {
-                  resolve(false);
-                  return;
-              }
-              
-              restoreInProgressRef.current = true;
-              
-              try {
-                  const { walletAddress: restoredAddress, walletType: restoredType, selectedChain: restoredChain } = persistedData;
-                  
-                  const trace_id = logWalletEvent('debug', 'Attempting to restore wallet connection', {
-                      wallet_address: restoredAddress,
-                      chain: restoredChain,
-                      wallet_type: restoredType,
-                      parent_trace: parentTrace
-                  });
-
-                  // Determine if this is a Solana wallet
-                  const isSolanaWallet = restoredType === 'phantom' || restoredType === 'solflare' || restoredChain === 'solana';
-                  
-                  let result;
-                  if (isSolanaWallet) {
-                      if (!solanaWalletService || typeof solanaWalletService.checkConnection !== 'function') {
-                          throw new Error('Solana wallet service not available');
-                      }
-                      result = await solanaWalletService.checkConnection(restoredAddress);
-                  } else {
-                      if (!walletService || typeof walletService.checkConnection !== 'function') {
-                          throw new Error('EVM wallet service not available');
-                      }
-                      result = await walletService.checkConnection(restoredAddress, restoredChain);
-                  }
-
-                  console.log('🔍 [DEBUG] checkConnection result:', result);
-                  console.log('🔍 [DEBUG] result.success:', result?.success);
-                  console.log('🔍 [DEBUG] result.connected:', result?.connected);
-
-                  logWalletEvent('debug', 'Connection check result detailed', {
-                      raw_result: result,
-                      has_result: !!result,
-                      result_success: result?.success,
-                      result_connected: result?.connected,
-                      trace_id
-                  });
-
-                  if (result?.success && result?.connected) {
-                      // Update state with restored connection
-                      if (mountedRef.current) {
-                          setWalletAddress(result.address || restoredAddress);
-                          setIsConnected(true);
-                          setWalletType(restoredType);
-                          setSelectedChain(result.chain || restoredChain);
-                          setNetworkStatus('connected');
-                          setConnectionError(null);
-                          setIsConnecting(false);
-                          
-                          logWalletEvent('info', 'Wallet connection restored successfully', {
-                              wallet_address: result.address || restoredAddress,
-                              chain: result.chain || restoredChain,
-                              wallet_type: restoredType,
-                              trace_id
-                          });
-                          
-                          resolve(true);
-                      }
-                  } else {
-                      logWalletEvent('warn', 'Wallet connection could not be restored', {
-                          wallet_address: restoredAddress,
-                          chain: restoredChain,
-                          wallet_type: restoredType,
-                          result,
-                          trace_id
-                      });
-                      
-                      // Clear invalid persisted data
-                      if (persistConnection) {
-                          try {
-                              localStorage.removeItem('dex_wallet_connection');
-                          } catch (e) {
-                              logWalletEvent('warn', 'Failed to clear invalid connection data', { error: e.message, trace_id });
-                          }
-                      }
-                      
-                      resolve(false);
-                  }
-              } catch (error) {
-                  logWalletEvent('error', 'Restore wallet connection failed', {
-                      error: error.message,
-                      wallet_address: persistedData.walletAddress,
-                      chain: persistedData.selectedChain,
-                      wallet_type: persistedData.walletType
-                  });
-                  
-                  // Clear invalid persisted data on error
-                  if (persistConnection) {
-                      try {
-                          localStorage.removeItem('dex_wallet_connection');
-                      } catch (e) {
-                          logWalletEvent('warn', 'Failed to clear connection data after error', { error: e.message });
-                      }
-                  }
-                  
-                  resolve(false);
-              } finally {
-                  restoreInProgressRef.current = false;
-              }
-          }, 100); // 100ms debounce
-      });
-  }, [persistConnection]); // Only depend on persistConnection, not undefined functions
+                if (result?.success && result?.connected) {
+                    // Update state with restored connection
+                    if (mountedRef.current) {
+                        setWalletAddress(result.address || restoredAddress);
+                        setIsConnected(true);
+                        setWalletType(restoredType);
+                        setSelectedChain(result.chain || restoredChain);
+                        setNetworkStatus('connected');
+                        setConnectionError(null);
+                        setIsConnecting(false);
+                        
+                        logWalletEvent('info', 'Wallet connection restored successfully', {
+                            wallet_address: result.address || restoredAddress,
+                            chain: result.chain || restoredChain,
+                            wallet_type: restoredType,
+                            trace_id
+                        });
+                        
+                        resolve(true);
+                    }
+                } else {
+                    logWalletEvent('warn', 'Wallet connection could not be restored', {
+                        wallet_address: restoredAddress,
+                        chain: restoredChain,
+                        wallet_type: restoredType,
+                        result,
+                        trace_id
+                    });
+                    
+                    // Clear invalid persisted data
+                    if (persistConnection) {
+                        try {
+                            localStorage.removeItem('dex_wallet_connection');
+                        } catch (e) {
+                            logWalletEvent('warn', 'Failed to clear invalid connection data', { error: e.message, trace_id });
+                        }
+                    }
+                    
+                    resolve(false);
+                }
+            } catch (error) {
+                logWalletEvent('error', 'Restore wallet connection failed', {
+                    error: error.message,
+                    wallet_address: persistedData.walletAddress,
+                    chain: persistedData.selectedChain,
+                    wallet_type: persistedData.walletType
+                });
+                
+                // Clear invalid persisted data on error
+                if (persistConnection) {
+                    try {
+                        localStorage.removeItem('dex_wallet_connection');
+                    } catch (e) {
+                        logWalletEvent('warn', 'Failed to clear connection data after error', { error: e.message });
+                    }
+                }
+                
+                resolve(false);
+            } finally {
+                restoreInProgressRef.current = false;
+            }
+        }, 100); // 100ms debounce
+    });
+  }, [persistConnection]);
 
   /**
    * Load persisted connection state from localStorage with enhanced validation
@@ -519,96 +514,7 @@ export const useWallet = (options = {}) => {
       
       return false;
     }
-  }, [persistConnection, autoConnect, walletAddress, walletType, selectedChain, restoreWalletConnection]); // eslint-disable-line react-hooks/exhaustive-deps
-  /**
-   * Perform the actual wallet restore (migrated from previous restoreConnection)
-   */
-  const performWalletRestore = useCallback(async (persistedData, parentTrace) => {
-      const { walletAddress, walletType, selectedChain, connectedAt } = persistedData;
-      
-      const trace_id = generateTraceId();
-      logMessage('debug', 'Attempting to restore wallet connection', {
-          wallet_address: walletAddress,
-          chain: selectedChain,
-          wallet_type: walletType,
-          parent_trace: parentTrace
-      });
-
-      try {
-          // Determine if this is a Solana wallet
-          const isSolanaWallet = walletType === 'phantom' || walletType === 'solflare' || selectedChain === 'solana';
-          
-          let result;
-          if (isSolanaWallet) {
-              const solService = await getSolanaWalletService();
-              result = await solService.checkConnection(walletAddress);
-          } else {
-              const evmService = await getWalletService();
-              result = await evmService.checkConnection(walletAddress, selectedChain);
-          }
-
-          logMessage('debug', 'Connection check result detailed', {
-              wallet_address: state.walletAddress,
-              chain: state.selectedChain,
-              wallet_type: state.walletType,
-              raw_result: result,
-              has_result: !!result,
-              result_success: result?.success,
-              result_connected: result?.connected
-          });
-
-          if (result?.success && result?.connected) {
-              // Update state with restored connection
-              const newState = {
-                  ...state,
-                  walletAddress: result.address || walletAddress,
-                  isConnected: true,
-                  walletType,
-                  selectedChain: result.chain || selectedChain,
-                  connectionStatus: 'connected',
-                  error: null,
-                  isConnecting: false
-              };
-              
-              setState(newState);
-              
-              // Persist the restored state
-              persistConnection(newState);
-              
-              logMessage('info', 'Wallet connection restored successfully', {
-                  wallet_address: newState.walletAddress,
-                  chain: newState.selectedChain,
-                  wallet_type: newState.walletType
-              });
-          } else {
-              logMessage('warn', 'Wallet connection could not be restored', {
-                  wallet_address: walletAddress,
-                  chain: selectedChain,
-                  wallet_type: walletType,
-                  result
-              });
-              
-              // Clear invalid persisted data
-              clearPersistedConnection();
-          }
-      } catch (error) {
-          logError('restore_wallet_connection', error, {
-              wallet_address: walletAddress,
-              chain: selectedChain,
-              wallet_type: walletType
-          });
-          
-          // Clear invalid persisted data on error
-          clearPersistedConnection();
-      }
-  }, [state, setState, persistConnection, clearPersistedConnection, logMessage, logError]);
-
-
-
-
-
-
-
+  }, [persistConnection, autoConnect, walletAddress, walletType, selectedChain, restoreWalletConnection]);
 
   /**
    * Refresh wallet balances with enhanced error handling
@@ -1143,71 +1049,20 @@ export const useWallet = (options = {}) => {
         throw new Error('Wallet service chain switching not available');
       }
 
-      // CRITICAL DEBUG: Call the service and get detailed result
-      console.log('🔍 [DEBUG] About to call walletService.switchChain with:', newChain);
       const result = await walletService.switchChain(newChain);
-      console.log('🔍 [DEBUG] Raw result from walletService.switchChain:', result);
-      console.log('🔍 [DEBUG] Result type:', typeof result);
-      console.log('🔍 [DEBUG] Result JSON:', JSON.stringify(result, null, 2));
-      console.log('🔍 [DEBUG] Result.success:', result?.success);
-      console.log('🔍 [DEBUG] Success type:', typeof result?.success);
-      console.log('🔍 [DEBUG] Success === true:', result?.success === true);
-      console.log('🔍 [DEBUG] Success == true:', result?.success == true);
-      console.log('🔍 [DEBUG] Truthiness of success:', !!result?.success);
 
-      logWalletEvent('debug', 'Chain switch result received - ENHANCED DEBUG', {
+      logWalletEvent('debug', 'Chain switch result received', {
         result,
         result_type: typeof result,
         has_success: result ? ('success' in result) : false,
         success_value: result ? result.success : 'no success property',
-        success_type: result ? typeof result.success : 'no success property type',
-        success_strict_equal: result ? (result.success === true) : 'no result',
-        success_loose_equal: result ? (result.success == true) : 'no result',
-        success_truthy: result ? !!result.success : 'no result',
-        has_error: result ? ('error' in result) : false,
-        error_value: result ? result.error : 'no error property',
-        result_keys: result ? Object.keys(result) : 'no result',
-        result_json: result ? JSON.stringify(result) : 'no result',
         wallet_address: walletAddress,
         wallet_type: walletType,
         chain: selectedChain,
-        mounted_ref_status: mountedRef.current,
         trace_id
       });
 
-      // Try multiple validation approaches
-      let validationPassed = false;
-      let validationMethod = 'none';
-
-      if (result && result.success === true) {
-        validationPassed = true;
-        validationMethod = 'strict_equality';
-      } else if (result && result.success == true) {
-        validationPassed = true;
-        validationMethod = 'loose_equality';
-      } else if (result && !!result.success) {
-        validationPassed = true;
-        validationMethod = 'truthy';
-      }
-
-      console.log('🔍 [DEBUG] Validation result:', validationPassed, 'Method:', validationMethod);
-      console.log('🔍 [DEBUG] mountedRef.current:', mountedRef.current);
-
-      // STRICTMODE FIX: Always update state if validation passed - don't check mountedRef
-      if (validationPassed) {
-        console.log('🔍 [DEBUG] Validation PASSED, updating state (StrictMode safe)...');
-        
-        logWalletEvent('debug', 'Updating chain state - StrictMode safe', {
-          from_chain: selectedChain,
-          to_chain: newChain,
-          wallet_address: walletAddress,
-          wallet_type: walletType,
-          chain: selectedChain,
-          mounted_ref_was: mountedRef.current,
-          validation_method: validationMethod,
-          trace_id
-        });
-        
+      if (result && result.success) {
         // React state setters are always safe to call - they handle StrictMode internally
         setSelectedChain(newChain);
         
@@ -1236,14 +1091,12 @@ export const useWallet = (options = {}) => {
           }
         }
 
-        logWalletEvent('info', 'Chain switched successfully - StrictMode compatible', {
+        logWalletEvent('info', 'Chain switched successfully', {
           from_chain: selectedChain,
           to_chain: newChain,
           wallet_type: walletType,
           wallet_address: walletAddress,
           chain: newChain,
-          validation_method: validationMethod,
-          strict_mode_safe: true,
           trace_id
         });
 
@@ -1251,26 +1104,16 @@ export const useWallet = (options = {}) => {
         setTimeout(() => {
           if (mountedRef.current) {
             refreshBalances();
-          } else {
-            logWalletEvent('debug', 'Skipped balance refresh - component unmounted', {
-              wallet_address: walletAddress,
-              wallet_type: walletType,
-              chain: newChain,
-              trace_id
-            });
           }
         }, 500);
 
         return { success: true };
 
       } else {
-        console.log('🔍 [DEBUG] Validation FAILED');
-        const errorMsg = result?.error || `Chain switch validation failed - result: ${JSON.stringify(result)}`;
+        const errorMsg = result?.error || `Chain switch failed - result: ${JSON.stringify(result)}`;
         logWalletEvent('error', 'Chain switch failed with service error', {
           error: errorMsg,
           result,
-          validation_passed: validationPassed,
-          validation_method: validationMethod,
           wallet_address: walletAddress,
           wallet_type: walletType,
           chain: selectedChain,
@@ -1280,8 +1123,6 @@ export const useWallet = (options = {}) => {
       }
 
     } catch (error) {
-      console.log('🔍 [DEBUG] Exception in switchChain:', error);
-      
       logWalletEvent('error', 'Chain switch operation failed', {
         from_chain: selectedChain,
         to_chain: newChain,
