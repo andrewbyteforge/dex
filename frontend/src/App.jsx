@@ -2,6 +2,7 @@
  * Enhanced main App component for DEX Sniper Pro with centralized state management and wallet integration.
  * Removes redundant WebSocket connections to prevent connection churn.
  * UPDATED: Removed TradingTestPage to eliminate /ws/test connections and console errors.
+ * UPDATED: Added integrated WalletConnect to desktop Navbar with connect/disconnect/error handlers.
  *
  * File: frontend/src/App.jsx
  */
@@ -124,7 +125,11 @@ const MobileLayout = ({
   onTabChange, 
   systemHealth,
   showHealthBadge = true,
-  wallet
+  wallet,
+  // NEW: handlers from App for WalletConnect
+  onWalletConnect,
+  onWalletDisconnect,
+  onWalletError
 }) => {
   const [isMobile, setIsMobile] = useState(false);
   const [isTablet, setIsTablet] = useState(false);
@@ -389,7 +394,20 @@ const MobileLayout = ({
             })}
           </Nav>
 
-          {/* Wallet Connect in Navbar */}
+          {/* Integrated Wallet Connection */}
+          <Nav className="d-flex align-items-center me-3">
+            <div className="me-3">
+              <WalletConnect 
+                selectedChain={wallet?.selectedChain || 'ethereum'}
+                onChainChange={wallet?.switchChain}
+                onWalletConnect={onWalletConnect}
+                onWalletDisconnect={onWalletDisconnect}
+                onError={onWalletError}
+              />
+            </div>
+          </Nav>
+
+          {/* Wallet/Health badges */}
           <div className="d-flex align-items-center">
             {wallet && wallet.isConnected && (
               <Badge bg="success" className="me-2">
@@ -397,7 +415,7 @@ const MobileLayout = ({
               </Badge>
             )}
             {showHealthBadge && (
-              <Badge bg={getHealthVariant()}>
+              <Badge bg={systemHealth?.healthy ? 'success' : 'danger'}>
                 {systemHealth?.healthy ? 'System OK' : 'System Error'}
               </Badge>
             )}
@@ -493,6 +511,7 @@ const MobileLayout = ({
 /**
  * Main App Component with centralized state management, wallet integration, and comprehensive error handling
  * UPDATED: Removed TradingTestPage to eliminate test WebSocket connections
+ * UPDATED: Added wallet connect/disconnect/error handlers and passed to MobileLayout for WalletConnect.
  */
 function App() {
   const [systemHealth, setSystemHealth] = useState(null);
@@ -789,6 +808,42 @@ function App() {
     }
   }, [systemHealth, logMessage]);
 
+  // NEW: Wallet connect/disconnect/error handlers wired to WalletConnect
+  const handleWalletConnect = useCallback(
+    async (providerType) => {
+      try {
+        await wallet.connect?.(providerType);
+        logMessage('info', 'Wallet connected', {
+          provider: providerType,
+          wallet_type: wallet.walletType,
+          selected_chain: wallet.selectedChain
+        });
+      } catch (error) {
+        logMessage('error', 'Wallet connect failed', { error: error?.message || String(error) });
+      }
+    },
+    [wallet, logMessage]
+  );
+
+  const handleWalletDisconnect = useCallback(
+    async () => {
+      try {
+        await wallet.disconnect?.();
+        logMessage('info', 'Wallet disconnected');
+      } catch (error) {
+        logMessage('error', 'Wallet disconnect failed', { error: error?.message || String(error) });
+      }
+    },
+    [wallet, logMessage]
+  );
+
+  const handleWalletError = useCallback(
+    (error) => {
+      logMessage('error', 'Wallet error (WalletConnect)', { error: error?.message || String(error) });
+    },
+    [logMessage]
+  );
+
   // UPDATED: Tab change handler - Removed 'trading-test' from validTabs array
   const handleTabChange = useCallback((newTab) => {
     try {
@@ -829,6 +884,10 @@ function App() {
         systemHealth={systemHealth}
         showHealthBadge={true}
         wallet={wallet}
+        // Pass wallet handlers to MobileLayout so the desktop Navbar can render WalletConnect
+        onWalletConnect={handleWalletConnect}
+        onWalletDisconnect={handleWalletDisconnect}
+        onWalletError={handleWalletError}
       >
         {renderContent()}
       </MobileLayout>
