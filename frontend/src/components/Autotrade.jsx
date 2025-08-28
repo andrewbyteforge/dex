@@ -7,7 +7,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Container, Row, Col, Card, Button, Badge, Alert, Spinner, Nav, Modal, ProgressBar } from 'react-bootstrap';
-import { Play, Pause, Square, Activity, AlertTriangle, Wifi, WifiOff, RefreshCw, Settings, Brain, Shield, Wallet, CheckCircle } from 'lucide-react';
+import { Play, Pause, Square, Activity, AlertTriangle, Wifi, WifiOff, RefreshCw, Settings, Brain, Shield, CheckCircle } from 'lucide-react';
 
 import AutotradeConfig from './AutotradeConfig';
 import AutotradeMonitor from './AutotradeMonitor';
@@ -32,6 +32,10 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
     const [showSecurityWarningModal, setShowSecurityWarningModal] = useState(false);
     const [lastUpdate, setLastUpdate] = useState(null);
     const [backendAvailable, setBackendAvailable] = useState(true);
+
+    // Test discovery trigger feedback
+    const [discoveryLoading, setDiscoveryLoading] = useState(false);
+    const [discoveryResult, setDiscoveryResult] = useState(null);
     
     // Component lifecycle management
     const [shouldConnect, setShouldConnect] = useState(true);
@@ -136,7 +140,7 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
         checkWalletState();
         
         // Also check periodically to catch delayed updates
-        const interval = setInterval(checkWalletState, 1000);
+        const interval = setInterval(checkWalletState, 5000);
         return () => clearInterval(interval);
     }, [walletConnected, walletAddress, currentChain]);
 
@@ -219,30 +223,45 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
             if (response.ok) {
                 const data = await response.json();
                 
-                // FIX: Map the backend response to the expected format
+                // DEBUG: Log the actual approval structure
+                console.log('Full wallet status response:', data);
+                console.log('Approvals object:', data.approvals);
+                if (data.approvals) {
+                    console.log('Approval keys:', Object.keys(data.approvals));
+                    console.log('Looking for chain:', currentChainFixed?.toLowerCase());
+                    console.log('Ethereum approval:', data.approvals['ethereum']);
+                    console.log('Has ethereum key?', 'ethereum' in data.approvals);
+                }
+                
+                // Map the response properly
                 const mappedData = {
                     ...data,
-                    approved_wallets: data.approvals || {},  // Use 'approvals' from backend
-                    daily_spending: {}  // Add if needed
+                    approved_wallets: data.approvals || {},
+                    daily_spending: {}
                 };
                 
                 setWalletApprovalStatus(mappedData);
                 
-                // Check if current chain has approved wallet
-                const hasApprovalForChain = (data.approvals && data.approvals[currentChainFixed?.toLowerCase()]) !== undefined;
+                // Check multiple ways for approval
+                let hasApprovalForChain = false;
+                if (data.approvals) {
+                    // Check if there's ANY approval data for this wallet + funded
+                    const approvalKeys = Object.keys(data.approvals);
+                    hasApprovalForChain = approvalKeys.length > 0 && data.wallet_funded;
+                }
                 
                 setCanStartAutotrade(hasApprovalForChain);
                 
                 logMessage('info', 'Wallet approval status loaded', {
                     approved_chains: Object.keys(data.approvals || {}),
-                    can_start_autotrade: hasApprovalForChain
+                    can_start_autotrade: hasApprovalForChain,
+                    wallet_funded: data.wallet_funded
                 });
             }
         } catch (error) {
             logMessage('debug', 'Could not load wallet approval status', { error: error.message });
         }
     }, [backendAvailable, walletConnectedFixed, currentChainFixed, logMessage]);
-
 
     /**
      * Load AI intelligence data from API
@@ -832,6 +851,42 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
     }, [backendAvailable, logMessage, logError, loadInitialData]);
 
     /**
+     * Trigger backend AI test discovery (calls POST /api/v1/discovery/test-discovery)
+     */
+    const triggerTestDiscovery = useCallback(async () => {
+        if (!backendAvailable) {
+            setDiscoveryResult({ type: 'danger', text: 'Backend unavailable - cannot trigger discovery' });
+            return;
+        }
+        setDiscoveryLoading(true);
+        setDiscoveryResult(null);
+        try {
+            const res = await fetch(`${API_BASE_URL}/api/v1/discovery/test-discovery`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${localStorage.getItem('auth_token') || ''}`
+                }
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data.success === false) {
+                throw new Error(data.error || `HTTP ${res.status} ${res.statusText}`);
+            }
+            setDiscoveryResult({ type: 'success', text: data.message || 'Test discovery triggered successfully' });
+            logMessage('info', 'Triggered test discovery', { response: data });
+            // Optionally refresh AI panel shortly after
+            setTimeout(() => {
+                if (mountedRef.current) loadAIIntelligenceData();
+            }, 1500);
+        } catch (err) {
+            setDiscoveryResult({ type: 'danger', text: `Failed to trigger discovery: ${err.message}` });
+            logError('trigger_test_discovery', err);
+        } finally {
+            setDiscoveryLoading(false);
+        }
+    }, [backendAvailable, logMessage, logError, loadAIIntelligenceData]);
+
+    /**
      * Handle wallet approval completion
      */
     const handleWalletApprovalComplete = useCallback(async (result) => {
@@ -1245,6 +1300,18 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
                 </Alert>
             )}
 
+            {/* Discovery result toast-ish */}
+            {discoveryResult && (
+                <Alert 
+                    variant={discoveryResult.type} 
+                    onClose={() => setDiscoveryResult(null)} 
+                    dismissible 
+                    className="mb-3"
+                >
+                    {discoveryResult.text}
+                </Alert>
+            )}
+
             {/* SECURITY: Wallet Security Status */}
             {renderWalletSecurityStatus()}
 
@@ -1363,6 +1430,19 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
                                                 disabled={!backendAvailable}
                                             >
                                                 <Activity size={16} className="me-1" /> View Monitor
+                                            </Button>
+                                            {/* NEW: Trigger test discovery */}
+                                            <Button
+                                                variant="outline-success"
+                                                size="sm"
+                                                disabled={!backendAvailable || discoveryLoading}
+                                                onClick={triggerTestDiscovery}
+                                            >
+                                                {discoveryLoading ? (
+                                                    <><Spinner animation="border" size="sm" className="me-1" /> Triggering...</>
+                                                ) : (
+                                                    <><Brain size={16} className="me-1" /> Trigger Test Discovery (AI)</>
+                                                )}
                                             </Button>
                                         </div>
                                     </Col>
