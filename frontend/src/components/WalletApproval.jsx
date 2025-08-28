@@ -32,7 +32,20 @@ const WalletApproval = ({ connectedWallet, onApprovalComplete }) => {
     const [walletStatus, setWalletStatus] = useState({
         approved_wallets: {},
         daily_spending: {},
-        pending_approvals: []
+        spending_limits: {},
+        pending_approvals: [],
+        success: true,
+        wallet_funded: false,
+        native_balance: "0",
+        native_symbol: "ETH",
+        usd_value: "0",
+        requires_funding: false,
+        minimum_required: "0",
+        approvals: {},
+        approval_count: 0,
+        total_protocols: 0,
+        needs_approvals: false,
+        timestamp: new Date().toISOString()
     });
     
     const [loading, setLoading] = useState(false);
@@ -73,7 +86,15 @@ const WalletApproval = ({ connectedWallet, onApprovalComplete }) => {
             }
 
             const data = await response.json();
-            setWalletStatus(data);
+            
+            // Transform the API response to match component expectations
+            setWalletStatus({
+                approved_wallets: {},  // Empty for now since API doesn't provide this
+                daily_spending: {},
+                spending_limits: {},
+                pending_approvals: [],
+                ...data  // Include all other fields from API
+            });
 
         } catch (error) {
             console.error('Failed to load wallet status:', error);
@@ -205,7 +226,8 @@ const WalletApproval = ({ connectedWallet, onApprovalComplete }) => {
      * Format currency values
      */
     const formatCurrency = (amount) => {
-        return new Decimal(amount || 0).toFixed(2);
+        const value = parseFloat(amount || 0);
+        return value.toFixed(2);
     };
 
     /**

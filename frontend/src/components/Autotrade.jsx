@@ -7,7 +7,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Container, Row, Col, Card, Button, Badge, Alert, Spinner, Nav, Modal, ProgressBar } from 'react-bootstrap';
-import { Play, Pause, Square, Activity, AlertTriangle, Wifi, WifiOff, RefreshCw, Settings, Brain, Shield, Wallet, CheckCircle, XCircle, DollarSign } from 'lucide-react';
+import { Play, Pause, Square, Activity, AlertTriangle, Wifi, WifiOff, RefreshCw, Settings, Brain, Shield, Wallet, CheckCircle } from 'lucide-react';
 
 import AutotradeConfig from './AutotradeConfig';
 import AutotradeMonitor from './AutotradeMonitor';
@@ -15,14 +15,14 @@ import AdvancedOrders from './AdvancedOrders';
 import AIIntelligenceDisplay from './AIIntelligenceDisplay';
 import WalletApproval from './WalletApproval';
 import useWebSocket from '../hooks/useWebSocket';
-import useWallet from '../hooks/useWallet';
+import { useWallet } from '../hooks/useWallet';
 
 const API_BASE_URL = 'http://localhost:8001';
 
 /**
  * Enhanced Autotrade dashboard component with secure wallet funding
  */
-const Autotrade = () => {
+const Autotrade = ({ connectedWallet, systemHealth }) => {
     // UI State management
     const [activeTab, setActiveTab] = useState('overview');
     const [loading, setLoading] = useState(false);
@@ -80,12 +80,70 @@ const Autotrade = () => {
     const [retryCount, setRetryCount] = useState(0);
     const MAX_RETRY_ATTEMPTS = 3;
 
-    // Wallet integration
+    // Wallet integration - Fixed property names
     const { 
         isConnected: walletConnected,
+        walletAddress: walletAddress,
+        selectedChain: currentChain
+    } = useWallet();
+
+    // FIX: Check both the hook state AND localStorage for connection status
+    // This handles cases where the hook hasn't synchronized yet
+    const [walletStateFixed, setWalletStateFixed] = useState({
+        connected: walletConnected,
         address: walletAddress,
         chain: currentChain
-    } = useWallet();
+    });
+
+    // Update the fixed state whenever wallet state or localStorage changes
+    useEffect(() => {
+        const checkWalletState = () => {
+            // First check the hook state
+            if (walletConnected && walletAddress) {
+                setWalletStateFixed({
+                    connected: true,
+                    address: walletAddress,
+                    chain: currentChain
+                });
+                return;
+            }
+            
+            // Fallback to localStorage if hook reports disconnected
+            const persistedConnection = localStorage.getItem('dex_wallet_connection');
+            if (persistedConnection) {
+                try {
+                    const parsed = JSON.parse(persistedConnection);
+                    if (parsed.walletAddress) {
+                        setWalletStateFixed({
+                            connected: true,
+                            address: parsed.walletAddress,
+                            chain: parsed.selectedChain || 'ethereum'
+                        });
+                    }
+                } catch (e) {
+                    // Keep current state if parse fails
+                }
+            } else if (!walletConnected) {
+                // Only set disconnected if both sources agree
+                setWalletStateFixed({
+                    connected: false,
+                    address: null,
+                    chain: 'ethereum'
+                });
+            }
+        };
+
+        checkWalletState();
+        
+        // Also check periodically to catch delayed updates
+        const interval = setInterval(checkWalletState, 1000);
+        return () => clearInterval(interval);
+    }, [walletConnected, walletAddress, currentChain]);
+
+    // Use the fixed values throughout the component
+    const walletConnectedFixed = walletStateFixed.connected;
+    const walletAddressFixed = walletStateFixed.address;
+    const currentChainFixed = walletStateFixed.chain;
 
     /**
      * Production-ready logging with environment awareness
@@ -148,7 +206,7 @@ const Autotrade = () => {
      * SECURITY: Load wallet approval status
      */
     const loadWalletApprovalStatus = useCallback(async () => {
-        if (!backendAvailable || !walletConnected) return;
+        if (!backendAvailable || !walletConnectedFixed) return;
 
         try {
             const response = await fetch(`${API_BASE_URL}/api/v1/wallet-funding/wallet-status`, {
@@ -160,21 +218,31 @@ const Autotrade = () => {
 
             if (response.ok) {
                 const data = await response.json();
-                setWalletApprovalStatus(data);
+                
+                // FIX: Map the backend response to the expected format
+                const mappedData = {
+                    ...data,
+                    approved_wallets: data.approvals || {},  // Use 'approvals' from backend
+                    daily_spending: {}  // Add if needed
+                };
+                
+                setWalletApprovalStatus(mappedData);
                 
                 // Check if current chain has approved wallet
-                const hasApprovalForChain = data.approved_wallets[currentChain?.toLowerCase()] !== undefined;
+                const hasApprovalForChain = (data.approvals && data.approvals[currentChainFixed?.toLowerCase()]) !== undefined;
+                
                 setCanStartAutotrade(hasApprovalForChain);
                 
                 logMessage('info', 'Wallet approval status loaded', {
-                    approved_chains: Object.keys(data.approved_wallets),
+                    approved_chains: Object.keys(data.approvals || {}),
                     can_start_autotrade: hasApprovalForChain
                 });
             }
         } catch (error) {
             logMessage('debug', 'Could not load wallet approval status', { error: error.message });
         }
-    }, [backendAvailable, walletConnected, currentChain, logMessage]);
+    }, [backendAvailable, walletConnectedFixed, currentChainFixed, logMessage]);
+
 
     /**
      * Load AI intelligence data from API
@@ -555,7 +623,7 @@ const Autotrade = () => {
                 reason: event.reason 
             });
         },
-        onError: (event) => {
+        onError: () => {
             logMessage('warn', 'Autotrade WebSocket error occurred');
         }
     });
@@ -564,12 +632,12 @@ const Autotrade = () => {
      * SECURITY: Check wallet approval before starting autotrade
      */
     const checkWalletApprovalAndStart = useCallback(async (mode = 'standard') => {
-        if (!walletConnected || !walletAddress) {
+        if (!walletConnectedFixed || !walletAddressFixed) {
             setError('Please connect your wallet first');
             return;
         }
 
-        if (!currentChain) {
+        if (!currentChainFixed) {
             setError('Unable to determine current blockchain');
             return;
         }
@@ -583,7 +651,7 @@ const Autotrade = () => {
 
         // Wallet is approved, proceed with start
         await startAutotradeSecure(mode);
-    }, [walletConnected, walletAddress, currentChain, canStartAutotrade]);
+    }, [walletConnectedFixed, walletAddressFixed, currentChainFixed, canStartAutotrade]);
 
     /**
      * SECURITY: Start autotrade with wallet approval verification
@@ -605,8 +673,8 @@ const Autotrade = () => {
 
         try {
             logMessage('info', `Starting secure autotrade in ${mode} mode`, {
-                wallet_address: walletAddress,
-                chain: currentChain
+                wallet_address: walletAddressFixed,
+                chain: currentChainFixed
             });
             
             const response = await fetch(`${API_BASE_URL}/api/v1/autotrade/start`, {
@@ -617,8 +685,8 @@ const Autotrade = () => {
                 },
                 body: JSON.stringify({
                     mode: mode,
-                    wallet_address: walletAddress,
-                    chain: currentChain
+                    wallet_address: walletAddressFixed,
+                    chain: currentChainFixed
                 })
             });
 
@@ -643,7 +711,7 @@ const Autotrade = () => {
                 status: result.status,
                 message: result.message,
                 trace_id: result.trace_id,
-                wallet_address: walletAddress
+                wallet_address: walletAddressFixed
             });
 
             // Update state
@@ -667,7 +735,7 @@ const Autotrade = () => {
                 setLoading(false);
             }
         }
-    }, [backendAvailable, canStartAutotrade, walletAddress, currentChain, logMessage, logError, loadInitialData]);
+    }, [backendAvailable, canStartAutotrade, walletAddressFixed, currentChainFixed, logMessage, logError, loadInitialData]);
 
     /**
      * Stop autotrade engine
@@ -803,12 +871,12 @@ const Autotrade = () => {
      * Watch for wallet changes and update approval status
      */
     useEffect(() => {
-        if (walletConnected && walletAddress) {
+        if (walletConnectedFixed && walletAddressFixed) {
             loadWalletApprovalStatus();
         } else {
             setCanStartAutotrade(false);
         }
-    }, [walletConnected, walletAddress, currentChain, loadWalletApprovalStatus]);
+    }, [walletConnectedFixed, walletAddressFixed, currentChainFixed, loadWalletApprovalStatus]);
 
     /**
      * Render connection status indicator
@@ -836,7 +904,7 @@ const Autotrade = () => {
      * Render wallet security status
      */
     const renderWalletSecurityStatus = () => {
-        if (!walletConnected) {
+        if (!walletConnectedFixed) {
             return (
                 <Alert variant="warning" className="mb-4">
                     <Shield size={18} className="me-2" />
@@ -846,12 +914,12 @@ const Autotrade = () => {
         }
 
         if (!canStartAutotrade) {
-            const currentApproval = walletApprovalStatus.approved_wallets[currentChain?.toLowerCase()];
+            const currentApproval = walletApprovalStatus?.approved_wallets?.[currentChainFixed?.toLowerCase()];
             
             return (
                 <Alert variant="info" className="mb-4">
                     <Shield size={18} className="me-2" />
-                    <strong>Wallet Security:</strong> Your wallet needs approval for autotrade on {currentChain}.
+                    <strong>Wallet Security:</strong> Your wallet needs approval for autotrade on {currentChainFixed}.
                     {currentApproval && (
                         <div className="mt-1 small">
                             Wallet approved but may have expired. Please check approval status.
@@ -870,8 +938,8 @@ const Autotrade = () => {
             );
         }
 
-        const currentApproval = walletApprovalStatus.approved_wallets[currentChain?.toLowerCase()];
-        const dailySpending = parseFloat(walletApprovalStatus.daily_spending[currentChain?.toLowerCase()] || 0);
+        const currentApproval = walletApprovalStatus?.approved_wallets?.[currentChainFixed?.toLowerCase()];
+        const dailySpending = parseFloat(walletApprovalStatus?.daily_spending?.[currentChainFixed?.toLowerCase()] || 0);
         const dailyLimit = parseFloat(currentApproval?.daily_limit_usd || 0);
         const spendingPercentage = dailyLimit > 0 ? Math.min((dailySpending / dailyLimit) * 100, 100) : 0;
 
@@ -884,7 +952,7 @@ const Autotrade = () => {
                             <strong>Wallet Approved</strong>
                         </div>
                         <div className="small text-muted mt-1">
-                            {walletAddress?.slice(0, 8)}...{walletAddress?.slice(-6)} on {currentChain}
+                            {walletAddressFixed?.slice(0, 8)}...{walletAddressFixed?.slice(-6)} on {currentChainFixed}
                         </div>
                         <div className="mt-2">
                             <div className="d-flex justify-content-between small mb-1">
@@ -971,7 +1039,7 @@ const Autotrade = () => {
                             <Button 
                                 variant="success" 
                                 onClick={() => checkWalletApprovalAndStart('standard')} 
-                                disabled={loading || !backendAvailable || !walletConnected}
+                                disabled={loading || !backendAvailable || !walletConnectedFixed}
                                 size="sm"
                             >
                                 {loading ? (
@@ -984,7 +1052,7 @@ const Autotrade = () => {
                             <Button 
                                 variant="outline-success" 
                                 onClick={() => checkWalletApprovalAndStart('conservative')} 
-                                disabled={loading || !backendAvailable || !walletConnected}
+                                disabled={loading || !backendAvailable || !walletConnectedFixed}
                                 size="sm"
                             >
                                 <Play size={16} className="me-1" /> Conservative
@@ -993,7 +1061,7 @@ const Autotrade = () => {
                             <Button 
                                 variant="outline-warning" 
                                 onClick={() => checkWalletApprovalAndStart('aggressive')} 
-                                disabled={loading || !backendAvailable || !walletConnected}
+                                disabled={loading || !backendAvailable || !walletConnectedFixed}
                                 size="sm"
                             >
                                 <Play size={16} className="me-1" /> Aggressive
@@ -1263,7 +1331,7 @@ const Autotrade = () => {
                                             <li>WebSocket: {wsConnected ? 'Connected' : 'Disconnected'}</li>
                                             <li>Engine: {isRunning ? `Running (${engineMode})` : 'Stopped'}</li>
                                             <li>Backend: {backendAvailable ? 'Available' : 'Offline'}</li>
-                                            <li>Wallet: {walletConnected ? `Connected (${currentChain})` : 'Not Connected'}</li>
+                                            <li>Wallet: {walletConnectedFixed ? `Connected (${currentChainFixed})` : 'Not Connected'}</li>
                                             <li>Security: {canStartAutotrade ? 'Approved' : 'Approval Required'}</li>
                                             <li>Queue Size: {autotradeStatus.queue_size || 0}</li>
                                             <li>AI Analysis: {aiStats.pairs_analyzed || 0} pairs analyzed</li>
@@ -1339,7 +1407,7 @@ const Autotrade = () => {
 
             {activeTab === 'wallet-security' && (
                 <WalletApproval 
-                    connectedWallet={{ address: walletAddress, chain: currentChain }}
+                    connectedWallet={{ address: walletAddressFixed, chain: currentChainFixed }}
                     onApprovalComplete={handleWalletApprovalComplete}
                 />
             )}
@@ -1439,7 +1507,7 @@ const Autotrade = () => {
                 </Modal.Header>
                 <Modal.Body className="p-0">
                     <WalletApproval 
-                        connectedWallet={{ address: walletAddress, chain: currentChain }}
+                        connectedWallet={{ address: walletAddressFixed, chain: currentChainFixed }}
                         onApprovalComplete={handleWalletApprovalComplete}
                     />
                 </Modal.Body>

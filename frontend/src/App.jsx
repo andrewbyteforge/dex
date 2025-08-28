@@ -666,7 +666,7 @@ function App() {
           return <TradingInterface />;
 
         case 'autotrade':
-          return <Autotrade wallet={wallet} systemHealth={systemHealth} />;
+          return <Autotrade connectedWallet={wallet} systemHealth={systemHealth} />;
 
         case 'discovery':
           return <PairDiscovery selectedChain={wallet.selectedChain || "ethereum"} />;
