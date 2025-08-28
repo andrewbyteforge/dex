@@ -367,7 +367,7 @@ class BehavioralScoringEngine:
         total_weight = sum(adjusted_weights.values())
         if total_weight > 0:
             for dimension in adjusted_weights:
-                adjusted_weights[dimension] = adjusted_weights[dimension] * 100 / total_weight
+                adjusted_weights[dimension] = adjusted_weights[dimension] * Decimal('100') / total_weight
         
         return ScoringWeights(
             weights=adjusted_weights,
