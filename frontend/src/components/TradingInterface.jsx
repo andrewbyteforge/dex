@@ -36,7 +36,7 @@ const TradingInterface = () => {
     isConnected: wsConnected, 
     data: wsData, 
     sendMessage 
-  } = useWebSocket('/ws/trading', {
+  } = useWebSocket('/ws/autotrade', {
     shouldReconnect: true,
     maxReconnectAttempts: 3
   });

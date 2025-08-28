@@ -325,15 +325,14 @@ const Autotrade = () => {
   /**
    * Production WebSocket connection to /ws/autotrade endpoint
    */
+  // Fixed:
   const { 
     isConnected: wsConnected, 
     isConnecting: wsConnecting,
+    sendMessage,
     error: wsError,
-    reconnectAttempts: wsReconnectAttempts,
-    sendMessage
-  } = useWebSocket(
-    backendAvailable && shouldConnect ? '/ws/autotrade' : null, 
-    {
+    reconnectAttempts: wsReconnectAttempts
+  } = useWebSocket(shouldConnect ? '/ws/autotrade' : null, {
       maxReconnectAttempts: 3,
       reconnectInterval: 5000,
       shouldReconnect: shouldConnect && backendAvailable,
