@@ -5,20 +5,20 @@ Automated trade decision engine with queue management and execution.
 """
 
 from __future__ import annotations
-
+from typing import Dict, List, Optional, Set, Tuple
 import asyncio
 import logging
 from datetime import datetime, timedelta
 from decimal import Decimal
 from enum import Enum
 from typing import Dict, List, Optional, Set, Tuple
-
+# from ..storage.repositories import TransactionRepository  # Removed to avoid BaseRepository session dependency
 from pydantic import BaseModel, Field
 
 # FIXED: Changed to relative imports instead of absolute imports
 from ..api.analytics import PerformanceAnalytics
 from ..api.presets import get_builtin_preset
-from ..storage.repositories import TransactionRepository
+
 from ..strategy.risk_manager import RiskManager
 from ..strategy.safety_controls import SafetyControls
 
@@ -116,13 +116,15 @@ class AutotradeEngine:
     
     Manages opportunity discovery, filtering, prioritization, and execution.
     """
+
+    from typing import Dict, List, Optional, Set, Tuple, Any
     
     def __init__(
         self,
         risk_manager: RiskManager,
         safety_controls: SafetyControls,
         performance_analytics: PerformanceAnalytics,
-        transaction_repo: TransactionRepository
+        transaction_repo: Optional[Any] = None   # Make optional
     ) -> None:
         """
         Initialize autotrade engine.
@@ -131,12 +133,12 @@ class AutotradeEngine:
             risk_manager: Risk assessment service
             safety_controls: Safety controls and circuit breakers
             performance_analytics: Performance tracking
-            transaction_repo: Transaction repository
+            transaction_repo: Transaction repository (optional during development)
         """
         self.risk_manager = risk_manager
         self.safety_controls = safety_controls
         self.performance_analytics = performance_analytics
-        self.transaction_repo = transaction_repo
+        self.transaction_repo = transaction_repo  # Can be None
         
         # Engine state
         self.mode = AutotradeMode.DISABLED
