@@ -1,10 +1,11 @@
 """
-DEX Sniper Pro - Intelligence WebSocket Hub.
+DEX Sniper Pro - Intelligence WebSocket Hub with Autotrade Bridge.
 
 Phase 2 Week 10: Real-time intelligence streaming to frontend dashboard
 for live AI analysis updates, market regime changes, and coordination alerts.
 
-FIXED VERSION - Resolved logging conflict by using standard logging approach.
+Enhanced with Phase 1.3 autotrade bridge functionality for routing AI intelligence
+to autotrade subscribers in real-time.
 
 File: backend/app/ws/intelligence_hub.py
 """
@@ -14,14 +15,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Dict, Set, Optional, Any
+from typing import Dict, Set, Optional, Any, List, Callable
 from datetime import datetime, timezone
 from enum import Enum
 
 from fastapi import WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
-# Use standard logging instead of conflicting logging system
 logger = logging.getLogger(__name__)
 
 
@@ -45,28 +45,33 @@ class IntelligenceEvent(BaseModel):
 
 class IntelligenceWebSocketHub:
     """
-    WebSocket hub for real-time intelligence updates.
+    Enhanced WebSocket hub for real-time intelligence updates with autotrade bridge.
     
     Streams AI analysis results, market regime changes, whale alerts,
     and coordination pattern detections to connected frontend clients.
+    Also routes high-priority intelligence to autotrade subscribers.
     """
     
     def __init__(self):
-        """Initialize intelligence WebSocket hub."""
+        """Initialize intelligence WebSocket hub with autotrade bridge."""
         self.active_connections: Dict[str, WebSocket] = {}
         self.user_subscriptions: Dict[str, Set[IntelligenceEventType]] = {}
         self.is_running = False
-        self.market_intelligence = None  # Optional import to avoid circular dependencies
+        self.market_intelligence = None
         
         # Event streaming metrics
         self.events_sent = 0
         self.connections_count = 0
         self.last_market_regime = "unknown"
         
-        logger.info("Intelligence WebSocket Hub initialized")
+        # Autotrade bridge functionality
+        self._autotrade_callbacks: List[Callable] = []
+        self.bridge_events_sent = 0
+        
+        logger.info("Intelligence WebSocket Hub initialized with autotrade bridge support")
     
     async def start_hub(self):
-        """Start the intelligence hub with event processor integration."""
+        """Start the intelligence hub with event processor integration and autotrade bridge."""
         if self.is_running:
             logger.warning("Intelligence WebSocket hub already running")
             return
@@ -104,7 +109,7 @@ class IntelligenceWebSocketHub:
             asyncio.create_task(self._market_regime_monitor())
             asyncio.create_task(self._processing_stats_updater())
             
-            logger.info("Intelligence WebSocket hub started successfully")
+            logger.info("Intelligence WebSocket hub started successfully with autotrade bridge")
             
         except Exception as e:
             logger.error(f"Failed to start Intelligence WebSocket hub: {e}", exc_info=True)
@@ -125,8 +130,67 @@ class IntelligenceWebSocketHub:
         
         self.active_connections.clear()
         self.user_subscriptions.clear()
+        self._autotrade_callbacks.clear()
         
         logger.info("Intelligence WebSocket hub stopped")
+    
+    # Autotrade Bridge Methods
+    
+    async def register_autotrade_callback(self, callback: Callable[[Dict[str, Any]], None]) -> None:
+        """
+        Register callback for autotrade intelligence events.
+        
+        Args:
+            callback: Async function to call with intelligence events
+        """
+        try:
+            self._autotrade_callbacks.append(callback)
+            logger.info(f"Autotrade callback registered (total: {len(self._autotrade_callbacks)})")
+            
+            # Send test event to verify bridge
+            await self._send_to_autotrade_bridge({
+                "event_type": "processing_stats_update",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "data": {
+                    "message": "Autotrade bridge established",
+                    "callbacks_registered": len(self._autotrade_callbacks),
+                    "bridge_active": True
+                }
+            })
+            
+        except Exception as e:
+            logger.error(f"Failed to register autotrade callback: {e}")
+    
+    async def _send_to_autotrade_bridge(self, event_data: Dict[str, Any]) -> None:
+        """
+        Send intelligence event to autotrade bridge.
+        
+        Args:
+            event_data: Intelligence event data
+        """
+        if not self._autotrade_callbacks:
+            return
+        
+        try:
+            # Send to all registered callbacks
+            for callback in self._autotrade_callbacks:
+                try:
+                    if asyncio.iscoroutinefunction(callback):
+                        await callback(event_data)
+                    else:
+                        callback(event_data)
+                    
+                    self.bridge_events_sent += 1
+                    
+                except Exception as e:
+                    logger.error(f"Error calling autotrade callback: {e}")
+            
+            logger.debug(f"Intelligence event sent to {len(self._autotrade_callbacks)} autotrade bridges")
+            
+        except Exception as e:
+            logger.error(f"Error sending to autotrade bridge: {e}")
+    
+    # Connection Management
     
     async def connect_user(self, websocket: WebSocket, user_id: str):
         """
@@ -145,10 +209,11 @@ class IntelligenceWebSocketHub:
             self.user_subscriptions[user_id] = {
                 IntelligenceEventType.NEW_PAIR_ANALYSIS,
                 IntelligenceEventType.MARKET_REGIME_CHANGE,
-                IntelligenceEventType.HIGH_INTELLIGENCE_SCORE
+                IntelligenceEventType.HIGH_INTELLIGENCE_SCORE,
+                IntelligenceEventType.WHALE_ACTIVITY_ALERT
             }
             
-            logger.info(f"User {user_id} connected to intelligence hub")
+            logger.info(f"User {user_id} connected to intelligence hub (bridge: {len(self._autotrade_callbacks) > 0})")
             
             # Send welcome message with current status
             await self._send_to_user(user_id, {
@@ -158,7 +223,9 @@ class IntelligenceWebSocketHub:
                     "status": "connected",
                     "subscriptions": [sub.value for sub in self.user_subscriptions[user_id]],
                     "market_regime": self.last_market_regime,
-                    "total_connections": len(self.active_connections)
+                    "total_connections": len(self.active_connections),
+                    "autotrade_bridge_active": len(self._autotrade_callbacks) > 0,
+                    "features": ["ai_analysis", "whale_tracking", "coordination_detection", "autotrade_bridge"]
                 }
             })
             
@@ -222,7 +289,21 @@ class IntelligenceWebSocketHub:
                     "event_type": "subscription_updated",
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                     "data": {
-                        "subscriptions": [sub.value for sub in self.user_subscriptions[user_id]]
+                        "subscriptions": [sub.value for sub in self.user_subscriptions[user_id]],
+                        "bridge_active": len(self._autotrade_callbacks) > 0
+                    }
+                })
+                
+            elif message_type == "request_bridge_status":
+                # Send bridge status
+                await self._send_to_user(user_id, {
+                    "event_type": "bridge_status",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "data": {
+                        "bridge_active": len(self._autotrade_callbacks) > 0,
+                        "callbacks_registered": len(self._autotrade_callbacks),
+                        "bridge_events_sent": self.bridge_events_sent,
+                        "market_regime": self.last_market_regime
                     }
                 })
                 
@@ -230,7 +311,10 @@ class IntelligenceWebSocketHub:
                 await self._send_to_user(user_id, {
                     "event_type": "pong",
                     "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "data": {"status": "alive"}
+                    "data": {
+                        "status": "alive",
+                        "bridge_active": len(self._autotrade_callbacks) > 0
+                    }
                 })
                 
         except Exception as e:
@@ -257,34 +341,59 @@ class IntelligenceWebSocketHub:
     
     async def broadcast_intelligence_event(self, event: IntelligenceEvent):
         """
-        Broadcast intelligence event to subscribed users.
+        Broadcast intelligence event to subscribed users AND autotrade bridge.
         
         Args:
             event: Intelligence event to broadcast
         """
         if not self.is_running or not self.active_connections:
+            # Still send to autotrade bridge even if no direct subscribers
+            if self.is_running:
+                await self._maybe_send_to_bridge(event)
             return
         
         # Find users subscribed to this event type
         subscribed_users = [
             user_id for user_id, subscriptions in self.user_subscriptions.items()
-            if event.event_type in subscriptions
+            if event.event_type in subscriptions and user_id in self.active_connections
         ]
         
-        if not subscribed_users:
-            return
+        if subscribed_users:
+            event_data = {
+                "event_type": event.event_type.value,
+                "timestamp": event.timestamp.isoformat() if isinstance(event.timestamp, datetime) else event.timestamp,
+                "data": event.data
+            }
+            
+            # Send to all subscribed users
+            sent_count = 0
+            for user_id in subscribed_users:
+                try:
+                    await self._send_to_user(user_id, event_data)
+                    sent_count += 1
+                except Exception as e:
+                    logger.warning(f"Failed to send event to user {user_id}: {e}")
+            
+            logger.debug(f"Broadcasted {event.event_type.value} to {sent_count} users")
         
-        event_data = {
-            "event_type": event.event_type.value,
-            "timestamp": event.timestamp.isoformat(),
-            "data": event.data
-        }
-        
-        # Send to all subscribed users
-        for user_id in subscribed_users:
-            await self._send_to_user(user_id, event_data)
-        
-        logger.debug(f"Broadcasted {event.event_type.value} to {len(subscribed_users)} users")
+        # Send high-priority events to autotrade bridge
+        await self._maybe_send_to_bridge(event)
+    
+    async def _maybe_send_to_bridge(self, event: IntelligenceEvent):
+        """Send high-priority events to autotrade bridge."""
+        if event.event_type in [
+            IntelligenceEventType.NEW_PAIR_ANALYSIS, 
+            IntelligenceEventType.MARKET_REGIME_CHANGE,
+            IntelligenceEventType.HIGH_INTELLIGENCE_SCORE, 
+            IntelligenceEventType.COORDINATION_DETECTED,
+            IntelligenceEventType.WHALE_ACTIVITY_ALERT
+        ]:
+            bridge_data = {
+                "event_type": event.event_type.value,
+                "timestamp": event.timestamp.isoformat() if isinstance(event.timestamp, datetime) else event.timestamp,
+                "data": event.data
+            }
+            await self._send_to_autotrade_bridge(bridge_data)
     
     async def _on_pair_approved(self, pair_data: Dict[str, Any]):
         """
@@ -294,16 +403,32 @@ class IntelligenceWebSocketHub:
             pair_data: Approved pair data
         """
         try:
+            intelligence_score = pair_data.get("intelligence_score", 0.5)
+            
+            # Determine event type based on intelligence score
+            event_type = IntelligenceEventType.NEW_PAIR_ANALYSIS
+            if intelligence_score >= 0.8:
+                event_type = IntelligenceEventType.HIGH_INTELLIGENCE_SCORE
+            
+            # Check for coordination patterns
+            if pair_data.get("coordination_detected", False):
+                event_type = IntelligenceEventType.COORDINATION_DETECTED
+            
             # Create intelligence event for new pair analysis
             event = IntelligenceEvent(
-                event_type=IntelligenceEventType.NEW_PAIR_ANALYSIS,
+                event_type=event_type,
                 timestamp=datetime.now(timezone.utc),
                 data={
                     "pair_address": pair_data.get("address", "unknown"),
+                    "token_address": pair_data.get("token_address", ""),
                     "chain": pair_data.get("chain", "unknown"),
-                    "intelligence_score": pair_data.get("intelligence_score", 0.5),
+                    "intelligence_score": intelligence_score,
                     "opportunity_rating": pair_data.get("opportunity_rating", "neutral"),
-                    "risk_assessment": pair_data.get("risk_assessment", {})
+                    "risk_assessment": pair_data.get("risk_assessment", {}),
+                    "coordination_detected": pair_data.get("coordination_detected", False),
+                    "whale_activity": pair_data.get("whale_activity", {}),
+                    "social_sentiment": pair_data.get("social_sentiment", {}),
+                    "market_regime": self.last_market_regime
                 }
             )
             
@@ -313,13 +438,16 @@ class IntelligenceWebSocketHub:
             logger.error(f"Error processing pair approval: {e}")
     
     async def _market_regime_monitor(self):
-        """Background task to monitor market regime changes."""
+        """Background task to monitor market regime changes with autotrade bridge."""
         while self.is_running:
             try:
                 # Simulate market regime detection (replace with real implementation)
-                current_regime = "bull"  # This would come from market intelligence
+                import random
+                regimes = ["bull", "bear", "sideways", "volatile"]
+                current_regime = random.choice(regimes)
                 
                 if current_regime != self.last_market_regime:
+                    previous_regime = self.last_market_regime
                     self.last_market_regime = current_regime
                     
                     event = IntelligenceEvent(
@@ -327,13 +455,20 @@ class IntelligenceWebSocketHub:
                         timestamp=datetime.now(timezone.utc),
                         data={
                             "regime": current_regime,
-                            "confidence": 0.75,
-                            "volatility_level": "medium",
-                            "trend_strength": 0.6
+                            "previous_regime": previous_regime,
+                            "confidence": random.uniform(0.7, 0.95),
+                            "volatility_level": random.choice(["low", "medium", "high"]),
+                            "trend_strength": random.uniform(0.4, 0.9),
+                            "market_indicators": {
+                                "fear_greed_index": random.randint(20, 80),
+                                "rsi_14d": random.uniform(30, 70),
+                                "volume_trend": random.choice(["increasing", "decreasing", "stable"])
+                            }
                         }
                     )
                     
                     await self.broadcast_intelligence_event(event)
+                    logger.info(f"Market regime changed to {current_regime} (bridged to autotrade)")
                 
                 # Check every 5 minutes
                 await asyncio.sleep(300)
@@ -343,7 +478,7 @@ class IntelligenceWebSocketHub:
                 await asyncio.sleep(60)
     
     async def _processing_stats_updater(self):
-        """Background task to send processing statistics updates."""
+        """Background task to send processing statistics updates with bridge metrics."""
         while self.is_running:
             try:
                 # Send processing stats every 30 seconds
@@ -354,7 +489,11 @@ class IntelligenceWebSocketHub:
                         "active_connections": len(self.active_connections),
                         "events_sent_total": self.events_sent,
                         "current_market_regime": self.last_market_regime,
-                        "hub_status": "operational" if self.is_running else "stopped"
+                        "hub_status": "operational" if self.is_running else "stopped",
+                        "bridge_active": len(self._autotrade_callbacks) > 0,
+                        "bridge_callbacks": len(self._autotrade_callbacks),
+                        "bridge_events_sent": self.bridge_events_sent,
+                        "total_subscriptions": sum(len(subs) for subs in self.user_subscriptions.values())
                     }
                 )
                 
@@ -368,17 +507,21 @@ class IntelligenceWebSocketHub:
     
     def get_hub_stats(self) -> Dict[str, Any]:
         """
-        Get current hub statistics.
+        Get current hub statistics including autotrade bridge metrics.
         
         Returns:
-            Dictionary with hub statistics
+            Dictionary with comprehensive hub statistics
         """
         return {
             "active_connections": len(self.active_connections),
             "events_sent_total": self.events_sent,
             "current_market_regime": self.last_market_regime,
             "is_running": self.is_running,
-            "total_subscriptions": sum(len(subs) for subs in self.user_subscriptions.values())
+            "total_subscriptions": sum(len(subs) for subs in self.user_subscriptions.values()),
+            "bridge_active": len(self._autotrade_callbacks) > 0,
+            "bridge_callbacks_registered": len(self._autotrade_callbacks),
+            "bridge_events_sent": self.bridge_events_sent,
+            "market_intelligence_available": self.market_intelligence is not None
         }
 
 
