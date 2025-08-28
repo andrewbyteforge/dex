@@ -170,7 +170,7 @@ class WebSocketHub:
             bool: True if connection successful
         """
         try:
-            await websocket.accept()
+            # await websocket.accept()
             
             now = datetime.now(timezone.utc)
             connection = ClientConnection(
@@ -207,6 +207,14 @@ class WebSocketHub:
             logger.error(f"Failed to connect WebSocket client {client_id}: {e}")
             return False
     
+
+
+
+
+
+
+
+
     async def disconnect_client(self, client_id: str, reason: str = "Unknown") -> None:
         """
         Disconnect a WebSocket client and cleanup.

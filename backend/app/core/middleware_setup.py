@@ -240,7 +240,7 @@ def register_core_routers(app: FastAPI) -> None:
         app.include_router(api_router, prefix="/api/v1")
         logger.info("Main API router included successfully")
         routers_registered += 1
-        return  # If main router works, we're done
+        
         
     except ImportError as e:
         logger.error(f"Failed to import main API router: {e}")
