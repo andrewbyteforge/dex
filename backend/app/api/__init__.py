@@ -63,6 +63,23 @@ logger.info("Attempting to register wallet router...")
 wallet_success = _register_router("wallet", description="Wallet Management")
 logger.info(f"Wallet router registration result: {wallet_success}")
 
+# Register wallet funding router - NEW ADDITION
+logger.info("Attempting to register wallet funding router...")
+wallet_funding_success = _register_router("wallet_funding", description="Wallet Funding & Approvals")
+logger.info(f"Wallet funding router registration result: {wallet_funding_success}")
+
+# Direct wallet funding router registration with error details
+logger.info("Attempting direct wallet funding router registration...")
+try:
+    from .wallet_funding import router as wallet_funding_router
+    api_router.include_router(wallet_funding_router)
+    logger.info("✅ Wallet funding router registered directly")
+    wallet_funding_success = True
+except Exception as e:
+    logger.error(f"❌ Direct wallet funding registration failed: {e}")
+    logger.error(f"   Error type: {type(e).__name__}")
+    wallet_funding_success = False
+
 # Register quotes router with token resolution - CRITICAL FOR TRADING
 logger.info("Attempting to register quotes router with token resolution...")
 quotes_success = _register_router("quotes", description="Price Quotes with Token Resolution")
@@ -114,6 +131,7 @@ logger.info("=" * 60)
 logger.info(f"📊 Total registered routes: {total_routes}")
 logger.info(f"🎯 Quotes router enabled: {quotes_success}")
 logger.info(f"💰 Wallet router enabled: {wallet_success}")
+logger.info(f"🔐 Wallet funding router enabled: {wallet_funding_success}")
 logger.info(f"📋 Ledger router enabled: {ledger_success}")
 logger.info("📋 Key endpoints available:")
 
@@ -122,6 +140,7 @@ key_endpoints = [
     "/quotes/aggregate",
     "/quotes/health", 
     "/wallets/register",
+    "/wallet-funding/wallet-status",
     "/health",
     "/risk/assess",
     "/ledger/positions",
@@ -146,5 +165,11 @@ if ledger_success:
     logger.info("🔧 Features: Position tracking, transaction history, portfolio summary")
 else:
     logger.error("🚨 PORTFOLIO LIMITED: Ledger router failed - portfolio will use demo data")
+
+if wallet_funding_success:
+    logger.info("🔐 WALLET FUNDING: Approval system enabled for autotrade operations")
+    logger.info("🔧 Features: Spending limits, approval management, funding status")
+else:
+    logger.error("🚨 WALLET FUNDING LIMITED: Approval system failed - autotrade may be restricted")
     
 logger.info("=" * 60)

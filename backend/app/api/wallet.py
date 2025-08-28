@@ -832,3 +832,66 @@ async def check_connection(
             "message": "Connection check failed",
             "trace_id": trace_id
         })
+    
+
+@router.get("/funding/wallet-status")
+async def get_wallet_funding_status(
+    x_trace_id: Optional[str] = Header(None, alias="X-Trace-ID")
+):
+    """Get wallet funding and approval status for autotrade interface."""
+    trace_id = x_trace_id or generate_trace_id()
+    start_time = datetime.now(timezone.utc)
+    
+    try:
+        log_wallet_operation('info', 'Wallet funding status check',
+            trace_id=trace_id
+        )
+        
+        # Mock wallet funding status - replace with real logic
+        funding_status = {
+            "success": True,
+            "wallet_funded": True,
+            "native_balance": "1.500000",
+            "native_symbol": "ETH",
+            "usd_value": "2847.50",
+            "requires_funding": False,
+            "minimum_required": "0.100000",
+            "approvals": {
+                "uniswap_v2": {"approved": True, "allowance": "unlimited"},
+                "uniswap_v3": {"approved": False, "allowance": "0"},
+                "pancakeswap": {"approved": True, "allowance": "1000.00"}
+            },
+            "approval_count": 2,
+            "total_protocols": 3,
+            "needs_approvals": True,
+            "trace_id": trace_id,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+        
+        duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+        
+        log_wallet_operation('info', 'Wallet funding status completed',
+            trace_id=trace_id,
+            wallet_funded=funding_status["wallet_funded"],
+            approval_count=funding_status["approval_count"],
+            duration_ms=round(duration_ms, 2)
+        )
+        
+        return funding_status
+        
+    except Exception as e:
+        duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+        
+        log_wallet_operation('error', 'Wallet funding status check failed',
+            trace_id=trace_id,
+            error=str(e),
+            error_type=type(e).__name__,
+            duration_ms=round(duration_ms, 2),
+            exc_info=True
+        )
+        
+        raise HTTPException(status_code=500, detail={
+            "success": False,
+            "message": "Failed to check wallet funding status",
+            "trace_id": trace_id
+        })
