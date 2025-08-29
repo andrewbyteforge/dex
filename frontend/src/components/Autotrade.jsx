@@ -17,6 +17,13 @@ import WalletApproval from './WalletApproval';
 import useWebSocket from '../hooks/useWebSocket';
 import { useWallet } from '../hooks/useWallet';
 
+// Production polling configuration
+const POLLING_INTERVALS = {
+    AUTOTRADE_STATUS: process.env.NODE_ENV === 'development' ? 5000 : 10000, // 5s dev, 10s prod
+    METRICS: process.env.NODE_ENV === 'development' ? 3000 : 15000,          // 3s dev, 15s prod
+    AI_DATA: process.env.NODE_ENV === 'development' ? 5000 : 20000           // 5s dev, 20s prod
+};
+
 const API_BASE_URL = 'http://localhost:8001';
 
 /**
@@ -508,20 +515,34 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
     /**
      * Load initial data on mount with proper cleanup for StrictMode
      */
+/**
+ * Production polling with proper intervals instead of aggressive loading
+ */
     useEffect(() => {
-        // Create AbortController for this effect
-        const abortController = new AbortController();
-        
-        // Only load if we have backend available
-        if (backendAvailable) {
-            loadInitialData(abortController.signal);
-        }
-        
-        // Cleanup function to abort requests when effect re-runs or component unmounts
-        return () => {
-            abortController.abort('Effect cleanup');
+        if (!backendAvailable) return;
+
+        // Single consolidated polling function
+        const pollData = async () => {
+            if (!mountedRef.current) return;
+            
+            try {
+                const abortController = new AbortController();
+                await loadInitialData(abortController.signal);
+            } catch (error) {
+                logMessage('error', 'Polling failed', { error: error.message });
+            }
         };
-    }, [backendAvailable]); // Only depend on backendAvailable - removes loadInitialData from deps
+
+        // PRODUCTION: Use 10-second intervals instead of aggressive loading
+        const pollInterval = setInterval(pollData, 10000); // 10 seconds
+        
+        // Initial load
+        pollData();
+
+        return () => {
+            clearInterval(pollInterval);
+        };
+    }, [backendAvailable]); // Only depend on backendAvailable
 
 
 

@@ -46,12 +46,11 @@ function Dashboard() {
   });
 
   useEffect(() => {
-    // Load initial dashboard data
-    loadDashboardData();
-    
-    // Set up refresh interval
-    const interval = setInterval(loadDashboardData, 5000);
-    return () => clearInterval(interval);
+      loadDashboardData();
+      
+      // PRODUCTION: Increase from 5s to 30s for dashboard data
+      const interval = setInterval(loadDashboardData, 30000); // 30 seconds
+      return () => clearInterval(interval);
   }, []);
 
   const loadDashboardData = async () => {
