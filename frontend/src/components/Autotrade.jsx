@@ -498,39 +498,40 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
      * CRITICAL FIX: Polling setup with no function dependencies
      * This prevents the effect from re-running when functions are recreated
      */
+/**
+ * CRITICAL FIX: Polling setup with no function dependencies
+ * This prevents the effect from re-running when functions are recreated
+ */
     useEffect(() => {
+        // Create abort controller for cleanup
+        const abortController = new AbortController();
+        const timeouts = [];
+        
         // Skip if backend unavailable or WebSocket connected
         if (!backendAvailable || wsConnected) {
-            if (pollingSetupRef.current.isSetup) {
-                logMessage('debug', 'Clearing polling due to conditions', {
-                    backendAvailable,
-                    wsConnected
-                });
-                
-                // Clear all intervals
-                Object.keys(pollingIntervalsRef.current).forEach(key => {
-                    if (pollingIntervalsRef.current[key]) {
-                        clearInterval(pollingIntervalsRef.current[key]);
-                        pollingIntervalsRef.current[key] = null;
-                    }
-                });
-                
-                pollingSetupRef.current.isSetup = false;
-                pollingSetupRef.current.teardownTime = Date.now();
-            }
-            return;
-        }
-
-        // Prevent duplicate setup
-        if (pollingSetupRef.current.isSetup) {
-            logMessage('warn', 'Polling already setup, skipping', {
-                setupTime: pollingSetupRef.current.setupTime,
-                intervals: Object.keys(pollingIntervalsRef.current).filter(k => pollingIntervalsRef.current[k] !== null)
+            // Clear any existing intervals
+            Object.keys(pollingIntervalsRef.current).forEach(key => {
+                if (pollingIntervalsRef.current[key]) {
+                    clearInterval(pollingIntervalsRef.current[key]);
+                    pollingIntervalsRef.current[key] = null;
+                }
             });
             return;
         }
 
-        logMessage('info', 'Setting up polling intervals', {
+        // Prevent duplicate setup
+        if (pollingIntervalsRef.current.status || 
+            pollingIntervalsRef.current.settings || 
+            pollingIntervalsRef.current.metrics || 
+            pollingIntervalsRef.current.ai) {
+            console.warn('[Autotrade] Polling intervals already exist, skipping setup', {
+                existing: Object.keys(pollingIntervalsRef.current).filter(k => pollingIntervalsRef.current[k])
+            });
+            return;
+        }
+
+        console.log('[Autotrade] Setting up polling intervals', {
+            timestamp: new Date().toISOString(),
             intervals: {
                 status: POLLING_INTERVALS.AUTOTRADE_STATUS,
                 settings: POLLING_INTERVALS.AUTOTRADE_SETTINGS,
@@ -539,77 +540,87 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
             }
         });
 
-        // Use a setup delay to prevent immediate polling on mount
-        const setupDelay = setTimeout(() => {
-            if (!mountedRef.current) return;
+        // Setup with delay to prevent immediate polling
+        const setupTimeout = setTimeout(() => {
+            if (abortController.signal.aborted) return;
             
-            // Initial load with staggered starts
-            apiHandlersRef.current.loadStatus();
-            setTimeout(() => apiHandlersRef.current.loadSettings(), 500);
-            setTimeout(() => apiHandlersRef.current.loadMetrics(), 1000);
-            setTimeout(() => apiHandlersRef.current.loadAIIntelligenceData(), 1500);
-
-            // Set up intervals with staggered starts to prevent simultaneous calls
-            setTimeout(() => {
-                if (mountedRef.current && !pollingIntervalsRef.current.status) {
-                    pollingIntervalsRef.current.status = setInterval(
-                        apiHandlersRef.current.loadStatus,
-                        POLLING_INTERVALS.AUTOTRADE_STATUS
-                    );
-                    logMessage('debug', 'Status polling started', {
-                        interval: POLLING_INTERVALS.AUTOTRADE_STATUS
-                    });
+            // Initial loads with staggering
+            apiHandlersRef.current.loadStatus?.();
+            
+            timeouts.push(setTimeout(() => {
+                if (!abortController.signal.aborted) {
+                    apiHandlersRef.current.loadSettings?.();
                 }
-            }, 2000);
-
-            setTimeout(() => {
-                if (mountedRef.current && !pollingIntervalsRef.current.settings) {
-                    pollingIntervalsRef.current.settings = setInterval(
-                        apiHandlersRef.current.loadSettings,
-                        POLLING_INTERVALS.AUTOTRADE_SETTINGS
-                    );
-                    logMessage('debug', 'Settings polling started', {
-                        interval: POLLING_INTERVALS.AUTOTRADE_SETTINGS
-                    });
+            }, 1000));
+            
+            timeouts.push(setTimeout(() => {
+                if (!abortController.signal.aborted) {
+                    apiHandlersRef.current.loadMetrics?.();
                 }
-            }, 3000);
-
-            setTimeout(() => {
-                if (mountedRef.current && !pollingIntervalsRef.current.metrics) {
-                    pollingIntervalsRef.current.metrics = setInterval(
-                        apiHandlersRef.current.loadMetrics,
-                        POLLING_INTERVALS.AUTOTRADE_METRICS
-                    );
-                    logMessage('debug', 'Metrics polling started', {
-                        interval: POLLING_INTERVALS.AUTOTRADE_METRICS
-                    });
+            }, 2000));
+            
+            timeouts.push(setTimeout(() => {
+                if (!abortController.signal.aborted) {
+                    apiHandlersRef.current.loadAIIntelligenceData?.();
                 }
-            }, 4000);
+            }, 3000));
 
-            setTimeout(() => {
-                if (mountedRef.current && !pollingIntervalsRef.current.ai) {
-                    pollingIntervalsRef.current.ai = setInterval(
-                        apiHandlersRef.current.loadAIIntelligenceData,
-                        POLLING_INTERVALS.AI_DATA
-                    );
-                    logMessage('debug', 'AI polling started', {
-                        interval: POLLING_INTERVALS.AI_DATA
-                    });
+            // Set up intervals with staggered starts
+            timeouts.push(setTimeout(() => {
+                if (!abortController.signal.aborted && !pollingIntervalsRef.current.status) {
+                    pollingIntervalsRef.current.status = setInterval(() => {
+                        if (apiHandlersRef.current.loadStatus) {
+                            apiHandlersRef.current.loadStatus();
+                        }
+                    }, POLLING_INTERVALS.AUTOTRADE_STATUS);
+                    console.log('[Autotrade] Status polling started');
                 }
-            }, 5000);
+            }, 5000));
 
-            pollingSetupRef.current.isSetup = true;
-            pollingSetupRef.current.setupTime = Date.now();
-        }, 1000);
+            timeouts.push(setTimeout(() => {
+                if (!abortController.signal.aborted && !pollingIntervalsRef.current.settings) {
+                    pollingIntervalsRef.current.settings = setInterval(() => {
+                        if (apiHandlersRef.current.loadSettings) {
+                            apiHandlersRef.current.loadSettings();
+                        }
+                    }, POLLING_INTERVALS.AUTOTRADE_SETTINGS);
+                    console.log('[Autotrade] Settings polling started');
+                }
+            }, 6000));
+
+            timeouts.push(setTimeout(() => {
+                if (!abortController.signal.aborted && !pollingIntervalsRef.current.metrics) {
+                    pollingIntervalsRef.current.metrics = setInterval(() => {
+                        if (apiHandlersRef.current.loadMetrics) {
+                            apiHandlersRef.current.loadMetrics();
+                        }
+                    }, POLLING_INTERVALS.AUTOTRADE_METRICS);
+                    console.log('[Autotrade] Metrics polling started');
+                }
+            }, 7000));
+
+            timeouts.push(setTimeout(() => {
+                if (!abortController.signal.aborted && !pollingIntervalsRef.current.ai) {
+                    pollingIntervalsRef.current.ai = setInterval(() => {
+                        if (apiHandlersRef.current.loadAIIntelligenceData) {
+                            apiHandlersRef.current.loadAIIntelligenceData();
+                        }
+                    }, POLLING_INTERVALS.AI_DATA);
+                    console.log('[Autotrade] AI polling started');
+                }
+            }, 8000));
+        }, 2000);
 
         // Cleanup function
         return () => {
-            clearTimeout(setupDelay);
-            
-            logMessage('debug', 'Polling cleanup triggered', {
-                wasSetup: pollingSetupRef.current.isSetup,
-                activeIntervals: Object.keys(pollingIntervalsRef.current).filter(k => pollingIntervalsRef.current[k] !== null)
+            console.log('[Autotrade] Cleaning up polling intervals', {
+                timestamp: new Date().toISOString(),
+                active: Object.keys(pollingIntervalsRef.current).filter(k => pollingIntervalsRef.current[k])
             });
+            
+            abortController.abort();
+            clearTimeout(setupTimeout);
+            timeouts.forEach(t => clearTimeout(t));
             
             // Clear all intervals
             Object.keys(pollingIntervalsRef.current).forEach(key => {
@@ -618,11 +629,8 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
                     pollingIntervalsRef.current[key] = null;
                 }
             });
-            
-            pollingSetupRef.current.isSetup = false;
-            pollingSetupRef.current.teardownTime = Date.now();
         };
-    }, [backendAvailable, wsConnected, logMessage]); // Only depend on state, not functions
+    }, [backendAvailable, wsConnected]); // ONLY these dependencies, NO function refs
 
     /**
      * Load wallet approval status (stable reference)
