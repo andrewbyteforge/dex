@@ -64,6 +64,30 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
         total_profit_usd: 0,
         last_updated: null
     });
+
+
+    // Missing autotrade settings state declaration
+    const [autotradeSettings, setAutotradeSettings] = useState({
+        strategy: 'conservative',
+        max_position_size_usd: 100,
+        slippage_tolerance: 0.5,
+        gas_price_strategy: 'standard',
+        risk_score_threshold: 70,
+        daily_budget_usd: 1000,
+        enabled_chains: ['ethereum', 'base', 'bsc'],
+        blacklist_tokens: [],
+        whitelist_protocols: []
+    });
+
+
+    // Missing performance metrics state declaration  
+    const [performanceMetrics, setPerformanceMetrics] = useState({
+        opportunities_found: 0,
+        opportunities_executed: 0,
+        success_rate: 0,
+        total_profit_usd: 0,
+        last_updated: null
+    });
     
     // Secure wallet funding state
     const [walletApprovalStatus, setWalletApprovalStatus] = useState({
@@ -344,124 +368,169 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
     /**
      * Load initial autotrade data with comprehensive error handling
      */
-    const loadInitialData = useCallback(async (isRetry = false) => {
+/**
+ * Load initial data with AbortController to prevent duplicate API calls during StrictMode
+ */
+/**
+ * Load initial data with AbortController to prevent duplicate API calls during StrictMode
+ */
+    const loadInitialData = useCallback(async (signal) => {
         if (!mountedRef.current) return;
+        
+        // Prevent multiple simultaneous loads
+        if (loading) {
+            logMessage('debug', 'LoadInitialData already in progress - skipping', {
+                is_mounted: mountedRef.current,
+                backend_available: backendAvailable
+            });
+            return;
+        }
+
+        setLoading(true);
+        setError(null);
 
         try {
-            if (!isRetry) {
-                setLoading(true);
-                setError(null);
-            }
-
-            logMessage('info', 'Loading initial autotrade data', { 
-                isRetry, 
-                attempt: retryCount + 1,
-                backendAvailable 
+            logMessage('info', 'Loading initial autotrade data', {
+                backend_available: backendAvailable,
+                wallet_connected: !!connectedWallet,
+                trace_id: `load-${Date.now()}`
             });
 
-            // Create abort controller for timeout handling
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 10000);
-
-            try {
-                const statusResponse = await fetch(`${API_BASE_URL}/api/v1/autotrade/status`, {
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Accept': 'application/json'
-                    },
-                    signal: controller.signal
-                });
-
-                clearTimeout(timeoutId);
-
-                if (!statusResponse.ok) {
-                    if (statusResponse.status >= 500) {
-                        throw new Error(`Server error: ${statusResponse.status}`);
-                    } else if (statusResponse.status === 404) {
-                        throw new Error('Autotrade API endpoint not found');
-                    } else {
-                        throw new Error(`API Error: ${statusResponse.status} ${statusResponse.statusText}`);
+            // All API calls use the same AbortController signal
+            const promises = [
+                fetch(`${API_BASE_URL}/api/v1/autotrade/status`, {
+                    method: 'GET',
+                    headers: { 'Content-Type': 'application/json' },
+                    signal // Pass abort signal to prevent zombie requests
+                }).then(async (response) => {
+                    if (!response.ok) {
+                        throw new Error(`Status fetch failed: ${response.status}`);
                     }
-                }
+                    return response.json();
+                }).then((data) => {
+                    if (mountedRef.current && !signal?.aborted) {
+                        setAutotradeStatus(data);
+                        setEngineMode(data.mode || 'disabled');
+                    }
+                    return data;
+                }),
 
-                const statusData = await statusResponse.json();
-                
-                if (!mountedRef.current) return;
+                fetch(`${API_BASE_URL}/api/v1/autotrade/settings`, {
+                    method: 'GET', 
+                    headers: { 'Content-Type': 'application/json' },
+                    signal
+                }).then(async (response) => {
+                    if (response.status === 404) {
+                        // Settings endpoint not implemented yet - use defaults
+                        const defaultSettings = {
+                            max_concurrent_trades: 5,
+                            max_queue_size: 50,
+                            opportunity_timeout_minutes: 10,
+                            execution_batch_size: 3
+                        };
+                        if (mountedRef.current && !signal?.aborted) {
+                            setAutotradeSettings(defaultSettings);
+                        }
+                        return defaultSettings;
+                    }
+                    if (!response.ok) {
+                        throw new Error(`Settings fetch failed: ${response.status}`);
+                    }
+                    return response.json();
+                }).then((data) => {
+                    if (mountedRef.current && !signal?.aborted) {
+                        setAutotradeSettings(data);
+                    }
+                    return data;
+                }),
 
-                // Update state with fetched data
-                setAutotradeStatus(statusData);
-                setEngineMode(statusData.mode || 'disabled');
-                setIsRunning(statusData.is_running || false);
-                
-                if (statusData.metrics) {
-                    setMetrics(prev => ({
-                        ...prev,
-                        ...statusData.metrics,
-                        last_updated: new Date().toISOString()
-                    }));
-                }
+                fetch(`${API_BASE_URL}/api/v1/autotrade/metrics`, {
+                    method: 'GET',
+                    headers: { 'Content-Type': 'application/json' },
+                    signal
+                }).then(async (response) => {
+                    if (!response.ok) {
+                        throw new Error(`Metrics fetch failed: ${response.status}`);
+                    }
+                    return response.json();
+                }).then((data) => {
+                    if (mountedRef.current && !signal?.aborted) {
+                        setPerformanceMetrics(data);
+                    }
+                    return data;
+                })
+            ];
 
-                setBackendAvailable(true);
-                setRetryCount(0);
+            // Wait for all API calls to complete
+            const [statusData, settingsData, metricsData] = await Promise.all(promises);
+
+            if (mountedRef.current && !signal?.aborted) {
                 setLastUpdate(new Date());
-
-                logMessage('info', 'Initial data loaded successfully', {
-                    mode: statusData.mode,
-                    running: statusData.is_running,
-                    queueSize: statusData.queue_size || 0
-                });
-
-                // Load AI intelligence data
-                await loadAIIntelligenceData();
+                setBackendAvailable(true);
                 
-                // SECURITY: Load wallet approval status
-                await loadWalletApprovalStatus();
-
-            } catch (fetchError) {
-                clearTimeout(timeoutId);
-                throw fetchError;
+                logMessage('info', 'Initial data loaded successfully', {
+                    status_mode: statusData?.mode,
+                    settings_count: Object.keys(settingsData || {}).length,
+                    metrics_available: !!metricsData,
+                    trace_id: `load-${Date.now()}`
+                });
             }
 
         } catch (error) {
-            logError('load_initial_data', error);
-
-            if (!mountedRef.current) return;
-
-            // Handle different error types
-            if (error.name === 'AbortError') {
-                setError('Request timeout - backend may be slow or unavailable');
-            } else if (error.message.includes('NetworkError') || error.message.includes('Failed to fetch')) {
-                setBackendAvailable(false);
-                setError('Backend unavailable - autotrade features disabled');
-            } else {
-                setError(`Failed to load autotrade data: ${error.message}`);
+            // Handle abort gracefully - this is expected during StrictMode cleanup
+            if (error.name === 'AbortError' || signal?.aborted) {
+                logMessage('debug', 'LoadInitialData aborted (expected during StrictMode)', {
+                    error: error.name,
+                    signal_aborted: signal?.aborted,
+                    mounted: mountedRef.current
+                });
+                return; // Don't set error state for aborted requests
             }
 
-            // Implement retry logic for transient errors
-            if (retryCount < MAX_RETRY_ATTEMPTS && 
-                !error.message.includes('404') && 
-                !error.message.includes('NetworkError')) {
+            if (mountedRef.current) {
+                const errorMessage = error.message || 'Failed to load initial data';
+                setError(errorMessage);
+                setBackendAvailable(false);
                 
-                const delay = Math.min(2000 * Math.pow(2, retryCount), 10000);
-                logMessage('info', `Retrying in ${delay}ms`, { 
-                    attempt: retryCount + 1, 
-                    maxAttempts: MAX_RETRY_ATTEMPTS 
+                logError('load_initial_data', error, {
+                    backend_url: API_BASE_URL,
+                    mounted: mountedRef.current,
+                    signal_aborted: signal?.aborted
                 });
-
-                setRetryCount(prev => prev + 1);
-                
-                retryTimeoutRef.current = setTimeout(() => {
-                    if (mountedRef.current) {
-                        loadInitialData(true);
-                    }
-                }, delay);
             }
         } finally {
-            if (mountedRef.current) {
+            if (mountedRef.current && !signal?.aborted) {
                 setLoading(false);
             }
         }
-    }, [retryCount, backendAvailable, logMessage, logError, loadAIIntelligenceData, loadWalletApprovalStatus]);
+    }, [backendAvailable, connectedWallet, loading, logMessage, logError]);
+
+    /**
+     * Load initial data on mount with proper cleanup for StrictMode
+     */
+    useEffect(() => {
+        // Create AbortController for this effect
+        const abortController = new AbortController();
+        
+        // Only load if we have backend available
+        if (backendAvailable) {
+            loadInitialData(abortController.signal);
+        }
+        
+        // Cleanup function to abort requests when effect re-runs or component unmounts
+        return () => {
+            abortController.abort('Effect cleanup');
+        };
+    }, [backendAvailable]); // Only depend on backendAvailable - removes loadInitialData from deps
+
+
+
+
+
+
+
+
+
 
     /**
      * Handle WebSocket message processing with AI intelligence support
