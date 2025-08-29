@@ -6,9 +6,7 @@ abuse detection, and detailed monitoring capabilities.
 
 File: backend/app/middleware/rate_limiting.py
 """
-
 from __future__ import annotations
-
 import asyncio
 import logging
 import time
@@ -59,154 +57,214 @@ class RateLimitStatus(BaseModel):
     retry_after: Optional[int] = None
 
 
+"""
+Fallback, in-memory rate limiter middleware with burst support.
+
+File: app/core/middleware/rate_limiter.py
+"""
+
+
+
+import logging
+import time
+from collections import defaultdict, deque
+from typing import DefaultDict, Deque
+
+from fastapi import HTTPException, Request, status
+from starlette.middleware.base import BaseHTTPMiddleware
+
+logger = logging.getLogger(__name__)
+
+
 class FallbackRateLimiter(BaseHTTPMiddleware):
     """
     Fallback in-memory rate limiter when Redis is unavailable.
-    
-    Provides basic rate limiting with configurable limits per IP address
-    and comprehensive logging for security monitoring.
+
+    Provides basic rate limiting with configurable limits per IP address,
+    burst allowance, standard headers, and logging for security monitoring.
     """
-    
-    def __init__(self, app, calls_per_minute: int = 60):
+
+    def __init__(
+        self,
+        app,
+        calls_per_minute: int = 60,
+        burst_allowance: int = 10,
+    ) -> None:
         """
-        Initialize fallback rate limiter.
-        
+        Initialize fallback rate limiter with burst support.
+
         Args:
             app: FastAPI application
             calls_per_minute: Maximum requests per minute per IP
+            burst_allowance: Additional requests allowed in short bursts
         """
         super().__init__(app)
-        self.calls_per_minute = calls_per_minute
-        self.clients = defaultdict(deque)
-        logger.info(f"Fallback rate limiter initialized: {calls_per_minute} calls/minute per IP")
-    
+        self.calls_per_minute = int(calls_per_minute)
+        self.burst_allowance = int(burst_allowance)
+        self.effective_limit = self.calls_per_minute + self.burst_allowance
+        self.clients: DefaultDict[str, Deque[float]] = defaultdict(deque)
+
+        logger.info(
+            "Fallback rate limiter initialized: %s/min + %s burst per IP "
+            "(effective=%s)",
+            self.calls_per_minute,
+            self.burst_allowance,
+            self.effective_limit,
+        )
+
     async def dispatch(self, request: Request, call_next):
         """
         Process request with rate limiting.
-        
-        Args:
-            request: FastAPI request
-            call_next: Next middleware in chain
-            
-        Returns:
-            Response with rate limit headers
+
+        Adds X-RateLimit-* headers on responses. If the limit is exceeded,
+        returns HTTP 429 with retry headers.
         """
         try:
-            # Get client IP address
             client_ip = self._get_client_ip(request)
-            
-            # Skip rate limiting for health checks and docs
+
+            # Skip rate limiting for health/docs and known utility routes
             if self._should_skip_rate_limit(request):
                 return await call_next(request)
-            
-            # Perform rate limit check
+
+            # Perform rate limit check against effective limit
             if not self._check_rate_limit(client_ip, request):
                 logger.warning(
-                    f"Fallback rate limit exceeded for {client_ip}",
+                    "Fallback rate limit exceeded for %s",
+                    client_ip,
                     extra={
-                        'extra_data': {
-                            'client_ip': client_ip,
-                            'path': request.url.path,
-                            'method': request.method,
-                            'user_agent': request.headers.get('User-Agent', 'unknown'),
-                            'limit': self.calls_per_minute,
-                            'limiter_type': 'fallback_memory'
+                        "extra_data": {
+                            "client_ip": client_ip,
+                            "path": request.url.path,
+                            "method": request.method,
+                            "user_agent": request.headers.get(
+                                "User-Agent", "unknown"
+                            ),
+                            "limit_base": self.calls_per_minute,
+                            "limit_burst": self.burst_allowance,
+                            "limit_effective": self.effective_limit,
+                            "limiter_type": "fallback_memory",
                         }
-                    }
+                    },
                 )
-                
+
                 raise HTTPException(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail=f"Rate limit exceeded: {self.calls_per_minute} requests per minute",
+                    detail=(
+                        "Rate limit exceeded: "
+                        f"{self.calls_per_minute}/min (+{self.burst_allowance} burst)"
+                    ),
                     headers={
                         "X-RateLimit-Limit": str(self.calls_per_minute),
+                        "X-RateLimit-Burst": str(self.burst_allowance),
+                        "X-RateLimit-Effective": str(self.effective_limit),
                         "X-RateLimit-Remaining": "0",
                         "X-RateLimit-Reset": str(int(time.time() + 60)),
-                        "Retry-After": "60"
-                    }
+                        "X-RateLimit-Type": "fallback-memory",
+                        "Retry-After": "60",
+                    },
                 )
-            
-            # Process the request
+
+            # Process downstream and attach headers
             response = await call_next(request)
-            
-            # Add rate limit headers
             remaining = self._get_remaining_requests(client_ip)
             response.headers["X-RateLimit-Limit"] = str(self.calls_per_minute)
+            response.headers["X-RateLimit-Burst"] = str(self.burst_allowance)
+            response.headers["X-RateLimit-Effective"] = str(self.effective_limit)
             response.headers["X-RateLimit-Remaining"] = str(remaining)
             response.headers["X-RateLimit-Reset"] = str(int(time.time() + 60))
             response.headers["X-RateLimit-Type"] = "fallback-memory"
-            
             return response
-            
+
         except HTTPException:
+            # Propagate intended 429s cleanly
             raise
-        except Exception as e:
-            logger.error(f"Fallback rate limiter error: {e}", exc_info=True)
-            # Allow request to proceed on rate limiter error
+        except Exception as exc:  # noqa: BLE001
+            # Fail-open: never block requests due to limiter errors
+            logger.error("Fallback rate limiter error: %s", exc, exc_info=True)
             return await call_next(request)
-    
+
+    # ---------- helpers ----------
+
     def _get_client_ip(self, request: Request) -> str:
-        """Extract client IP address from request."""
-        # Check X-Forwarded-For for proxy scenarios
-        forwarded_for = request.headers.get('X-Forwarded-For')
+        """Extract client IP address from headers or connection."""
+        forwarded_for = request.headers.get("X-Forwarded-For")
         if forwarded_for:
-            return forwarded_for.split(',')[0].strip()
-        
-        # Check X-Real-IP header
-        real_ip = request.headers.get('X-Real-IP')
+            return forwarded_for.split(",")[0].strip()
+
+        real_ip = request.headers.get("X-Real-IP")
         if real_ip:
             return real_ip.strip()
-        
-        # Fallback to direct client IP
+
         return request.client.host if request.client else "unknown"
-    
+
     def _should_skip_rate_limit(self, request: Request) -> bool:
-        """Check if request should skip rate limiting."""
-        skip_paths = [
-            "/health", "/ping", "/ready", "/docs", "/redoc", 
-            "/openapi.json", "/favicon.ico", "/api/routes"
-        ]
+        """Check if the path should skip rate limiting."""
+        skip_paths = {
+            "/health",
+            "/ping",
+            "/ready",
+            "/docs",
+            "/redoc",
+            "/openapi.json",
+            "/favicon.ico",
+            "/api/routes",
+        }
         return request.url.path in skip_paths
-    
+
     def _check_rate_limit(self, client_ip: str, request: Request) -> bool:
-        """Check if client is within rate limit."""
+        """
+        Check if client is within the effective limit (base + burst).
+
+        Returns:
+            True to allow, False if the request should be rejected.
+        """
         now = time.time()
-        minute_ago = now - 60
-        
-        # Clean old requests outside the time window
-        while self.clients[client_ip] and self.clients[client_ip][0] < minute_ago:
-            self.clients[client_ip].popleft()
-        
-        # Check if within limit
-        current_requests = len(self.clients[client_ip])
-        if current_requests >= self.calls_per_minute:
+        minute_ago = now - 60.0
+        q = self.clients[client_ip]
+
+        # Drop entries outside the 60s window
+        while q and q[0] < minute_ago:
+            q.popleft()
+
+        current_requests = len(q)
+        if current_requests >= self.effective_limit:
             return False
-        
-        # Record this request
-        self.clients[client_ip].append(now)
-        
-        # Log high usage for monitoring
-        if current_requests > self.calls_per_minute * 0.8:
+
+        # Record this request timestamp
+        q.append(now)
+
+        # Monitoring logs
+        if current_requests >= self.calls_per_minute:
             logger.info(
-                f"High API usage (fallback): {client_ip} at {current_requests}/{self.calls_per_minute}",
-                extra={
-                    'extra_data': {
-                        'client_ip': client_ip,
-                        'current_requests': current_requests,
-                        'limit': self.calls_per_minute,
-                        'path': request.url.path,
-                        'method': request.method,
-                        'limiter_type': 'fallback_memory'
-                    }
-                }
+                "Burst usage active: %s at %s/%s (path=%s, method=%s)",
+                client_ip,
+                current_requests,
+                self.effective_limit,
+                request.url.path,
+                request.method,
             )
-        
+        elif current_requests > int(self.calls_per_minute * 0.8):
+            logger.info(
+                "High usage (fallback): %s at %s/%s (path=%s, method=%s)",
+                client_ip,
+                current_requests,
+                self.calls_per_minute,
+                request.url.path,
+                request.method,
+            )
+
         return True
-    
+
     def _get_remaining_requests(self, client_ip: str) -> int:
-        """Get remaining requests for client."""
-        current_requests = len(self.clients[client_ip])
-        return max(0, self.calls_per_minute - current_requests)
+        """Remaining requests against the effective limit."""
+        used = len(self.clients[client_ip])
+        remaining = self.effective_limit - used
+        return max(0, remaining)
+
+
+
+
+
 
 
 class RedisRateLimiter:
@@ -274,31 +332,57 @@ class RedisRateLimiter:
     
     async def connect(self) -> bool:
         """
-        Connect to Redis server.
+        Connect to Redis server with settings-based disable check.
         
         Returns:
-            True if connection successful, False otherwise
+            True if connection successful or Redis disabled, False otherwise
         """
         try:
+            # Import here to avoid circular imports
+            from ..core.config import settings
+            
+            # Check if Redis is disabled in settings
+            if not getattr(settings, 'redis_enabled', False):
+                logger.info("Redis rate limiting disabled in settings, skipping connection")
+                self.connected = False
+                return False
+            
+            # Early return if already connected
+            if self.connected and self.redis_client:
+                try:
+                    await self.redis_client.ping()
+                    return True
+                except Exception:
+                    logger.warning("Existing Redis connection failed ping, reconnecting")
+                    self.connected = False
+            
+            logger.info(f"Attempting Redis connection to {self.redis_url[:30]}...")
+            
+            # Create Redis client with connection pool
             self.redis_client = redis.from_url(
                 self.redis_url,
-                decode_responses=True,
-                socket_connect_timeout=5,
-                socket_timeout=5,
-                health_check_interval=30
+                max_connections=getattr(settings, 'redis_max_connections', 10),
+                socket_connect_timeout=getattr(settings, 'redis_connection_timeout', 5),
+                socket_keepalive=True,
+                socket_keepalive_options={},
+                retry_on_timeout=True,
+                decode_responses=True
             )
             
-            # Test connection
-            await self.redis_client.ping()
+            # Test connection with timeout
+            await asyncio.wait_for(
+                self.redis_client.ping(), 
+                timeout=getattr(settings, 'redis_connection_timeout', 5)
+            )
+            
             self.connected = True
-            
-            logger.info(
-                f"Redis rate limiter connected successfully",
-                extra={'extra_data': {'redis_url': self.redis_url}}
-            )
-            
+            logger.info("Redis rate limiter connected successfully")
             return True
             
+        except asyncio.TimeoutError:
+            logger.error("Redis connection timeout")
+            self.connected = False
+            return False
         except Exception as e:
             logger.error(f"Redis connection failed: {e}")
             self.connected = False
@@ -617,12 +701,26 @@ async def rate_limit_middleware(request: Request, call_next):
     if request.url.path in ["/health", "/ping", "/ready"]:
         return await call_next(request)
     
-    # Check if Redis rate limiter is available
+    # Import settings to check if Redis is enabled
+    try:
+        from ..core.config import settings
+        redis_enabled = getattr(settings, 'redis_enabled', False)
+    except Exception:
+        redis_enabled = False
+    
+    # If Redis is disabled, skip Redis entirely and use fallback
+    if not redis_enabled:
+        logger.debug("Redis rate limiting disabled, allowing request")
+        response = await call_next(request)
+        response.headers["X-RateLimit-Status"] = "redis-disabled"
+        return response
+    
+    # Check if Redis rate limiter is available (only if Redis is enabled)
     if not redis_rate_limiter.connected:
-        # Try to reconnect
-        await redis_rate_limiter.connect()
+        # Try to reconnect ONLY ONCE per middleware instance
+        connection_success = await redis_rate_limiter.connect()
         
-        if not redis_rate_limiter.connected:
+        if not connection_success:
             # Fall back to allowing requests with warning
             logger.warning("Redis rate limiter unavailable, allowing requests")
             response = await call_next(request)
@@ -632,54 +730,61 @@ async def rate_limit_middleware(request: Request, call_next):
     # Get client identifier
     client_ip = get_remote_address(request)
     
-    # Check for abuse first
-    is_abusive = await redis_rate_limiter.check_abuse(client_ip)
-    if is_abusive:
-        logger.warning(f"Blocked abusive IP: {client_ip}")
-        raise HTTPException(
-            status_code=429,
-            detail="Too many requests - temporarily banned for abusive behavior",
-            headers={"Retry-After": "3600"}  # 1 hour
-        )
-    
-    # Determine rate limit category
-    category = redis_rate_limiter.get_rate_limit_category(request)
-    
-    # Check rate limits
-    identifier = get_rate_limit_key(request, RateLimitType.PER_IP)
-    is_allowed, status = await redis_rate_limiter.check_rate_limit(
-        request, identifier, category, increment=True
-    )
-    
-    # Block if rate limited
-    if not is_allowed:
-        headers = {
-            "X-RateLimit-Limit": str(status.limit),
-            "X-RateLimit-Remaining": str(status.remaining),
-            "X-RateLimit-Reset": str(int(status.reset_time.timestamp())),
-            "X-RateLimit-Type": "redis"
-        }
+    try:
+        # Check for abuse first
+        is_abusive = await redis_rate_limiter.check_abuse(client_ip)
+        if is_abusive:
+            logger.warning(f"Blocked abusive IP: {client_ip}")
+            raise HTTPException(
+                status_code=429,
+                detail="Too many requests - temporarily banned for abusive behavior",
+                headers={"Retry-After": "3600"}  # 1 hour
+            )
         
-        if status.retry_after:
-            headers["Retry-After"] = str(status.retry_after)
+        # Determine rate limit category
+        category = redis_rate_limiter.get_rate_limit_category(request)
         
-        raise HTTPException(
-            status_code=429,
-            detail=f"Rate limit exceeded. Try again in {status.retry_after or 60} seconds.",
-            headers=headers
+        # Check rate limits
+        identifier = get_rate_limit_key(request, RateLimitType.PER_IP)
+        is_allowed, status = await redis_rate_limiter.check_rate_limit(
+            request, identifier, category, increment=True
         )
-    
-    # Process request
-    response = await call_next(request)
-    
-    # Add rate limit headers to response
-    response.headers["X-RateLimit-Limit"] = str(status.limit)
-    response.headers["X-RateLimit-Remaining"] = str(status.remaining)
-    response.headers["X-RateLimit-Reset"] = str(int(status.reset_time.timestamp()))
-    response.headers["X-RateLimit-Type"] = "redis"
-    
-    return response
-
+        
+        # Block if rate limited
+        if not is_allowed:
+            headers = {
+                "X-RateLimit-Limit": str(status.limit),
+                "X-RateLimit-Remaining": str(status.remaining),
+                "X-RateLimit-Reset": str(int(status.reset_time.timestamp())),
+                "X-RateLimit-Type": "redis"
+            }
+            
+            if status.retry_after:
+                headers["Retry-After"] = str(status.retry_after)
+            
+            raise HTTPException(
+                status_code=429,
+                detail=f"Rate limit exceeded. Try again in {status.retry_after or 60} seconds.",
+                headers=headers
+            )
+        
+        # Process request
+        response = await call_next(request)
+        
+        # Add rate limit headers to response
+        response.headers["X-RateLimit-Limit"] = str(status.limit)
+        response.headers["X-RateLimit-Remaining"] = str(status.remaining)
+        response.headers["X-RateLimit-Reset"] = str(int(status.reset_time.timestamp()))
+        response.headers["X-RateLimit-Type"] = "redis"
+        
+        return response
+        
+    except Exception as e:
+        # If Redis operations fail, fall back gracefully
+        logger.error(f"Redis rate limiting failed: {e}")
+        response = await call_next(request)
+        response.headers["X-RateLimit-Status"] = "redis-error"
+        return response
 
 async def init_rate_limiter(redis_url: str = "redis://localhost:6379/1") -> bool:
     """

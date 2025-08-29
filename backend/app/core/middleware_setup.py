@@ -78,40 +78,7 @@ def setup_request_validation_middleware(app: FastAPI) -> None:
         raise
 
 
-def setup_rate_limiting_middleware(app: FastAPI) -> None:
-    """
-    Setup rate limiting middleware with Redis backend and fallback.
-    
-    Args:
-        app: FastAPI application instance
-    """
-    try:
-        from ..middleware.rate_limiting import (
-            rate_limit_middleware,
-            FallbackRateLimiter
-        )
-        
-        # Try to add Redis rate limiting middleware
-        try:
-            app.middleware("http")(rate_limit_middleware)
-            logger.info("Redis-backed rate limiting middleware added")
-        except Exception as e:
-            logger.error(f"Failed to add Redis rate limiting middleware: {e}")
-            # Add fallback rate limiter
-            app.add_middleware(FallbackRateLimiter, calls_per_minute=60)
-            logger.info("Added fallback rate limiting middleware")
-            
-    except ImportError as e:
-        logger.warning(f"Rate limiting middleware not available: {e}")
-        # Add basic fallback if available
-        try:
-            from ..middleware.rate_limiting import FallbackRateLimiter
-            app.add_middleware(FallbackRateLimiter, calls_per_minute=60)
-            logger.info("Added fallback in-memory rate limiting middleware")
-        except ImportError:
-            logger.warning("No rate limiting middleware available")
-    except Exception as e:
-        logger.error(f"Rate limiting middleware setup failed: {e}")
+
 
 
 def create_mock_intelligence_router() -> APIRouter:
@@ -214,8 +181,8 @@ def setup_middleware_stack(app: FastAPI) -> None:
     # 1. Request validation middleware (first - before rate limiting)
     setup_request_validation_middleware(app)
     
-    # 2. Rate limiting middleware  
-    setup_rate_limiting_middleware(app)
+    # 2. Rate limiting middleware - USE THE NEW ENHANCED VERSION
+    setup_enhanced_rate_limiting(app)
     
     # 3. CORS middleware (last middleware)
     setup_cors_middleware(app)
@@ -338,11 +305,65 @@ def register_core_routers(app: FastAPI) -> None:
     logger.info(f"Router registration completed: {routers_registered} routers loaded")
 
 
+def setup_enhanced_rate_limiting(app: FastAPI) -> None:
+    """
+    Set up rate limiting middleware with comprehensive development support.
+    
+    Args:
+        app: FastAPI application instance
+    """
+    try:
+        # Import settings to check configuration
+        from .config import settings
+        
+        # Check if rate limiting is completely disabled
+        if not getattr(settings, 'rate_limiting_enabled', True):
+            logger.info("Rate limiting completely disabled for development")
+            return
+        
+        # Check if Redis is enabled
+        if not getattr(settings, 'redis_enabled', False):
+            logger.info("Redis rate limiting disabled - using development-optimized fallback middleware")
+            
+            # Get development-adjusted rate limit
+            rate_limit = getattr(settings, 'fallback_rate_limit_per_minute', 300)
+            burst_allowance = getattr(settings, 'rate_limit_burst_allowance', 50)
+            
+            # Add development-optimized fallback rate limiter
+            from ..middleware.rate_limiting import FallbackRateLimiter
+            app.add_middleware(
+                FallbackRateLimiter, 
+                calls_per_minute=rate_limit,
+                burst_allowance=burst_allowance
+            )
+            
+            logger.info(f"Fallback rate limiter configured: {rate_limit}/min with {burst_allowance} burst allowance")
+            return
+        
+        # Redis is enabled - use full Redis middleware
+        from ..middleware.rate_limiting import rate_limit_middleware
+        
+        try:
+            app.middleware("http")(rate_limit_middleware)
+            logger.info("Redis-backed rate limiting middleware added")
+        except Exception as e:
+            logger.error(f"Failed to add Redis rate limiting middleware: {e}")
+            # Fall back to development-optimized limiter
+            rate_limit = getattr(settings, 'fallback_rate_limit_per_minute', 300)
+            from ..middleware.rate_limiting import FallbackRateLimiter
+            app.add_middleware(FallbackRateLimiter, calls_per_minute=rate_limit)
+            logger.info(f"Added fallback rate limiting middleware: {rate_limit}/min")
+            
+    except ImportError as e:
+        logger.warning(f"Rate limiting middleware not available: {e}")
+    except Exception as e:
+        logger.error(f"Rate limiting middleware setup failed: {e}")
+
 # Export all setup functions
 __all__ = [
     'setup_cors_middleware',
-    'setup_request_validation_middleware', 
-    'setup_rate_limiting_middleware',
+    'setup_request_validation_middleware',
+    'setup_enhanced_rate_limiting',
     'create_mock_intelligence_router',
     'get_intelligence_router',
     'setup_middleware_stack',
