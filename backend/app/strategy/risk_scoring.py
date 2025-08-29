@@ -1,671 +1,1053 @@
 """
-Advanced risk scoring system with multiple algorithms and validation layers.
+Risk scoring system for DEX Sniper Pro.
+
+Provides numerical risk assessment (0-100) based on multiple factors
+including liquidity, holder distribution, contract age, volume patterns,
+volatility, and security scan results.
 """
+
 from __future__ import annotations
 
-import math
-from decimal import Decimal
-from enum import Enum
-from typing import Dict, List, Optional, Tuple, Any
-from dataclasses import dataclass
-
 import logging
-from .risk_manager import RiskFactor, RiskLevel, RiskCategory
-from ..services.security_providers import SecurityProviderResult, AggregatedSecurityResult
+from decimal import Decimal
+from typing import Dict, List, Optional, Tuple
+from datetime import datetime, timedelta
+from dataclasses import dataclass, field
 
-logger = logging.getLogger(__name__)
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
-class ScoringMethod(str, Enum):
-    """Risk scoring methodologies."""
-    WEIGHTED_AVERAGE = "weighted_average"
-    BAYESIAN = "bayesian"
-    ENSEMBLE = "ensemble"
-    CONSERVATIVE = "conservative"
+@dataclass
+class RiskFactors:
+    """Container for all risk assessment factors."""
+    
+    liquidity_usd: Decimal = Decimal("0")
+    holder_count: int = 0
+    top_10_holders_percent: Decimal = Decimal("0")
+    contract_age_hours: int = 0
+    volume_24h: Decimal = Decimal("0")
+    volume_growth_rate: Decimal = Decimal("0")
+    price_volatility_24h: Decimal = Decimal("0")
+    buy_sell_ratio: Decimal = Decimal("1")
+    honeypot_detected: bool = False
+    ownership_renounced: bool = False
+    liquidity_locked: bool = False
+    liquidity_lock_duration_days: int = 0
+    buy_tax_percent: Decimal = Decimal("0")
+    sell_tax_percent: Decimal = Decimal("0")
+    max_wallet_percent: Decimal = Decimal("100")
+    security_score: int = 100  # External security API score
+    trades_24h: int = 0
+    unique_traders_24h: int = 0
+    largest_buy_usd: Decimal = Decimal("0")
+    largest_sell_usd: Decimal = Decimal("0")
+    
+    # Metadata
+    token_address: str = ""
+    chain: str = ""
+    timestamp: datetime = field(default_factory=datetime.utcnow)
+    data_sources: List[str] = field(default_factory=list)
 
 
 @dataclass
 class RiskScore:
-    """Comprehensive risk score with breakdown."""
-    overall_score: float  # 0.0 - 1.0
-    risk_level: RiskLevel
-    confidence: float  # 0.0 - 1.0
-    method_used: ScoringMethod
-    component_scores: Dict[str, float]
-    risk_factors: List[RiskFactor]
-    external_validation: Optional[AggregatedSecurityResult]
-    explanation: str
-    recommendations: List[str]
+    """Risk assessment result with detailed breakdown."""
+    
+    total_score: int  # 0-100, higher = riskier
+    risk_level: str  # "low", "medium", "high", "critical"
+    confidence: float  # 0-1, confidence in assessment
+    
+    # Component scores (all 0-100)
+    liquidity_score: int = 0
+    distribution_score: int = 0
+    age_score: int = 0
+    volume_score: int = 0
+    volatility_score: int = 0
+    security_score: int = 0
+    
+    # Detailed factors
+    factors: Optional[RiskFactors] = None
+    risk_reasons: List[str] = field(default_factory=list)
+    positive_signals: List[str] = field(default_factory=list)
+    
+    # Trading recommendation
+    recommendation: str = "avoid"  # "avoid", "monitor", "consider", "trade"
+    suggested_position_percent: Decimal = Decimal("0")  # % of allocated capital
+    suggested_slippage: Decimal = Decimal("1")  # %
+    
+    # Metadata
+    trace_id: str = ""
+    timestamp: datetime = field(default_factory=datetime.utcnow)
 
 
 class RiskScorer:
     """
-    Advanced risk scoring system with multiple algorithms.
+    Core risk scoring engine for token assessment.
     
-    Combines internal risk analysis with external provider validation
-    to produce comprehensive, calibrated risk scores.
+    Analyzes multiple factors to produce a comprehensive risk score
+    that guides trading decisions.
     """
     
-    def __init__(self):
-        """Initialize risk scorer."""
-        # Base scoring weights for different methods
-        self.scoring_weights = {
-            ScoringMethod.WEIGHTED_AVERAGE: {
-                RiskCategory.HONEYPOT: 2.0,
-                RiskCategory.TRADING_DISABLED: 2.0,
-                RiskCategory.TAX_EXCESSIVE: 1.5,
-                RiskCategory.OWNER_PRIVILEGES: 1.8,
-                RiskCategory.BLACKLIST_FUNCTION: 1.7,
-                RiskCategory.LP_UNLOCKED: 1.4,
-                RiskCategory.LIQUIDITY_LOW: 1.2,
-                RiskCategory.DEV_CONCENTRATION: 1.3,
-                RiskCategory.PROXY_CONTRACT: 1.0,
-                RiskCategory.CONTRACT_UNVERIFIED: 0.8,
-            }
-        }
-        
-        # Bayesian prior probabilities (based on historical data)
-        self.priors = {
-            RiskCategory.HONEYPOT: 0.05,  # 5% of tokens are honeypots
-            RiskCategory.TAX_EXCESSIVE: 0.15,  # 15% have high taxes
-            RiskCategory.LIQUIDITY_LOW: 0.30,  # 30% have low liquidity
-            RiskCategory.OWNER_PRIVILEGES: 0.25,  # 25% have owner privileges
-            RiskCategory.LP_UNLOCKED: 0.40,  # 40% don't lock LP
-            RiskCategory.PROXY_CONTRACT: 0.10,  # 10% are proxy contracts
-            RiskCategory.CONTRACT_UNVERIFIED: 0.20,  # 20% are unverified
-            RiskCategory.BLACKLIST_FUNCTION: 0.08,  # 8% have blacklist functions
-            RiskCategory.DEV_CONCENTRATION: 0.35,  # 35% have concentrated holdings
-            RiskCategory.TRADING_DISABLED: 0.02,  # 2% have trading disabled
-        }
-        
-        # Risk thresholds for different confidence levels
-        self.confidence_thresholds = {
-            0.9: {"low": 0.15, "medium": 0.35, "high": 0.65, "critical": 0.85},
-            0.8: {"low": 0.20, "medium": 0.40, "high": 0.70, "critical": 0.90},
-            0.7: {"low": 0.25, "medium": 0.45, "high": 0.75, "critical": 0.95},
-        }
-        
-        # External provider weights for validation
-        self.provider_weights = {
-            "honeypot_is": 1.0,
-            "gopluslab": 0.9,
-            "tokensniffer": 0.7,
-            "dextools": 0.6,
-        }
+    # Weight configuration for each factor (must sum to 1.0)
+    WEIGHTS = {
+        "liquidity": 0.20,
+        "distribution": 0.15,
+        "age": 0.10,
+        "volume": 0.15,
+        "volatility": 0.20,
+        "security": 0.20
+    }
     
-    def calculate_comprehensive_score(
+    # Risk thresholds
+    THRESHOLDS = {
+        "min_liquidity_usd": 10000,
+        "safe_liquidity_usd": 100000,
+        "min_holders": 50,
+        "safe_holders": 500,
+        "max_top10_percent": 50,
+        "min_age_hours": 24,
+        "safe_age_hours": 168,  # 7 days
+        "min_volume_24h": 5000,
+        "safe_volume_24h": 50000,
+        "max_volatility": 50,  # % in 24h
+        "max_tax": 10,  # % buy/sell tax
+        "min_trades_24h": 100,
+        "min_unique_traders": 30
+    }
+    
+    def __init__(self, trace_id: str = ""):
+        """
+        Initialize risk scorer.
+        
+        Args:
+            trace_id: Trace ID for logging correlation
+        """
+        self.trace_id = trace_id or f"risk_{datetime.utcnow().isoformat()}"
+        
+    async def calculate_risk_score(
         self,
-        risk_factors: List[RiskFactor],
-        external_validation: Optional[AggregatedSecurityResult] = None,
-        method: ScoringMethod = ScoringMethod.ENSEMBLE,
+        factors: RiskFactors,
+        strict_mode: bool = False
     ) -> RiskScore:
         """
-        Calculate comprehensive risk score using specified method.
+        Calculate comprehensive risk score from factors.
         
         Args:
-            risk_factors: List of internal risk factors
-            external_validation: External security provider results
-            method: Scoring method to use
+            factors: Risk factors to analyze
+            strict_mode: If True, apply stricter thresholds
             
         Returns:
-            RiskScore: Comprehensive risk assessment
+            RiskScore: Complete risk assessment
         """
-        logger.info(
-            f"Calculating risk score using {method.value} method",
-            extra={
-                'extra_data': {
-                    'risk_factor_count': len(risk_factors),
-                    'has_external_validation': external_validation is not None,
-                    'method': method.value,
+        try:
+            # Store factors for use in other methods
+            self._current_factors = factors
+            
+            logger.info(
+                "Calculating risk score",
+                extra={
+                    "trace_id": self.trace_id,
+                    "token_address": factors.token_address,
+                    "chain": factors.chain,
+                    "strict_mode": strict_mode
                 }
-            }
-        )
-        
-        # Calculate component scores
-        component_scores = self._calculate_component_scores(risk_factors)
-        
-        # Apply scoring method
-        if method == ScoringMethod.WEIGHTED_AVERAGE:
-            overall_score = self._weighted_average_score(risk_factors, component_scores)
-        elif method == ScoringMethod.BAYESIAN:
-            overall_score = self._bayesian_score(risk_factors, component_scores)
-        elif method == ScoringMethod.CONSERVATIVE:
-            overall_score = self._conservative_score(risk_factors, component_scores)
-        else:  # ENSEMBLE
-            overall_score = self._ensemble_score(risk_factors, component_scores)
-        
-        # Incorporate external validation
-        if external_validation:
-            overall_score = self._incorporate_external_validation(
-                overall_score, external_validation
             )
-        
-        # Determine confidence and risk level
-        confidence = self._calculate_confidence(risk_factors, external_validation)
-        risk_level = self._determine_risk_level(overall_score, confidence)
-        
-        # Generate explanation and recommendations
-        explanation = self._generate_explanation(
-            overall_score, risk_factors, external_validation, method
-        )
-        recommendations = self._generate_recommendations(overall_score, risk_level, risk_factors)
-        
-        return RiskScore(
-            overall_score=overall_score,
-            risk_level=risk_level,
-            confidence=confidence,
-            method_used=method,
-            component_scores=component_scores,
-            risk_factors=risk_factors,
-            external_validation=external_validation,
-            explanation=explanation,
-            recommendations=recommendations,
-        )
-    
-    def _calculate_component_scores(self, risk_factors: List[RiskFactor]) -> Dict[str, float]:
+            
+            # Calculate individual component scores
+            liquidity_score = self._score_liquidity(factors, strict_mode)
+            distribution_score = self._score_distribution(factors, strict_mode)
+            age_score = self._score_age(factors, strict_mode)
+            volume_score = self._score_volume(factors, strict_mode)
+            volatility_score = self._score_volatility(factors, strict_mode)
+            security_score = self._score_security(factors, strict_mode)
+            
+            # Calculate weighted total
+            total_score = int(
+                liquidity_score * self.WEIGHTS["liquidity"] +
+                distribution_score * self.WEIGHTS["distribution"] +
+                age_score * self.WEIGHTS["age"] +
+                volume_score * self.WEIGHTS["volume"] +
+                volatility_score * self.WEIGHTS["volatility"] +
+                security_score * self.WEIGHTS["security"]
+            )
+            
+            # Honeypot override - always maximum risk
+            if factors.honeypot_detected:
+                total_score = 100
+            
+            # Determine risk level
+            risk_level = self._get_risk_level(total_score)
+            
+            # Calculate confidence based on data completeness
+            confidence = self._calculate_confidence(factors)
+            
+            # Generate risk reasons and positive signals
+            risk_reasons = self._generate_risk_reasons(
+                factors, liquidity_score, distribution_score,
+                age_score, volume_score, volatility_score, security_score
+            )
+            
+            positive_signals = self._generate_positive_signals(
+                factors, liquidity_score, distribution_score,
+                age_score, volume_score, volatility_score, security_score
+            )
+            
+            # Generate trading recommendation
+            recommendation = self._get_recommendation(total_score, confidence, strict_mode)
+            
+            # Calculate suggested position size and slippage
+            suggested_position = self._calculate_position_size(total_score, factors)
+            suggested_slippage = self._calculate_slippage(volatility_score, liquidity_score)
+            
+            risk_score = RiskScore(
+                total_score=total_score,
+                risk_level=risk_level,
+                confidence=confidence,
+                liquidity_score=liquidity_score,
+                distribution_score=distribution_score,
+                age_score=age_score,
+                volume_score=volume_score,
+                volatility_score=volatility_score,
+                security_score=security_score,
+                factors=factors,
+                risk_reasons=risk_reasons,
+                positive_signals=positive_signals,
+                recommendation=recommendation,
+                suggested_position_percent=suggested_position,
+                suggested_slippage=suggested_slippage,
+                trace_id=self.trace_id
+            )
+            
+            logger.info(
+                "Risk score calculated",
+                extra={
+                    "trace_id": self.trace_id,
+                    "total_score": total_score,
+                    "risk_level": risk_level,
+                    "recommendation": recommendation,
+                    "confidence": confidence
+                }
+            )
+            
+            return risk_score
+            
+        except Exception as e:
+            logger.error(
+                f"Failed to calculate risk score: {e}",
+                extra={
+                    "trace_id": self.trace_id,
+                    "token_address": factors.token_address,
+                    "error": str(e)
+                },
+                exc_info=True
+            )
+            # Return maximum risk score on error
+            return RiskScore(
+                total_score=100,
+                risk_level="critical",
+                confidence=0.0,
+                recommendation="avoid",
+                trace_id=self.trace_id,
+                risk_reasons=[f"Risk calculation failed: {str(e)}"]
+            )
+
+
+
+
+
+
+
+
+
+
+
+
+
+    def _score_liquidity(self, factors: RiskFactors, strict: bool) -> int:
         """
-        Calculate individual component scores.
+        Score liquidity risk (0-100, higher = riskier).
         
         Args:
-            risk_factors: List of risk factors
+            factors: Risk factors
+            strict: Use stricter thresholds
             
         Returns:
-            Dict[str, float]: Component scores by category
+            int: Liquidity risk score
         """
-        component_scores = {}
-        
-        # Group factors by category
-        factor_groups = {}
-        for factor in risk_factors:
-            if factor.category not in factor_groups:
-                factor_groups[factor.category] = []
-            factor_groups[factor.category].append(factor)
-        
-        # Calculate score for each category
-        for category, factors in factor_groups.items():
-            if len(factors) == 1:
-                # Single factor - use its score directly
-                component_scores[category.value] = factors[0].score
+        try:
+            min_liq = self.THRESHOLDS["min_liquidity_usd"]
+            safe_liq = self.THRESHOLDS["safe_liquidity_usd"]
+            
+            if strict:
+                min_liq *= 2
+                safe_liq *= 2
+            
+            if factors.liquidity_usd <= 0:
+                return 100  # Maximum risk
+            elif factors.liquidity_usd < min_liq:
+                # Scale from 100 to 70 based on how close to minimum
+                ratio = float(factors.liquidity_usd / min_liq)
+                return int(100 - (30 * ratio))
+            elif factors.liquidity_usd < safe_liq:
+                # Scale from 70 to 30 based on position between min and safe
+                ratio = float((factors.liquidity_usd - min_liq) / (safe_liq - min_liq))
+                return int(70 - (40 * ratio))
             else:
-                # Multiple factors - use weighted average
-                total_score = 0
-                total_weight = 0
-                for factor in factors:
-                    weight = factor.confidence
-                    total_score += factor.score * weight
-                    total_weight += weight
+                # Scale from 30 to 0 for very high liquidity
+                if factors.liquidity_usd > safe_liq * 10:
+                    return 0
+                ratio = min(1.0, float(factors.liquidity_usd / (safe_liq * 10)))
+                return int(30 * (1 - ratio))
                 
-                if total_weight > 0:
-                    component_scores[category.value] = total_score / total_weight
-                else:
-                    component_scores[category.value] = 0.5
-        
-        return component_scores
+        except Exception as e:
+            logger.error(f"Error scoring liquidity: {e}", extra={"trace_id": self.trace_id})
+            return 100
     
-    def _weighted_average_score(
-        self, 
-        risk_factors: List[RiskFactor], 
-        component_scores: Dict[str, float]
-    ) -> float:
+    def _score_distribution(self, factors: RiskFactors, strict: bool) -> int:
         """
-        Calculate weighted average risk score.
+        Score holder distribution risk (0-100, higher = riskier).
         
         Args:
-            risk_factors: List of risk factors
-            component_scores: Component scores by category
+            factors: Risk factors
+            strict: Use stricter thresholds
             
         Returns:
-            float: Weighted average score
+            int: Distribution risk score
         """
-        weights = self.scoring_weights[ScoringMethod.WEIGHTED_AVERAGE]
-        
-        total_weighted_score = 0
-        total_weight = 0
-        
-        for factor in risk_factors:
-            weight = weights.get(factor.category, 1.0)
-            confidence_weight = factor.confidence
+        try:
+            score = 50  # Start neutral
             
-            weighted_score = factor.score * weight * confidence_weight
-            total_weighted_score += weighted_score
-            total_weight += weight * confidence_weight
-        
-        if total_weight == 0:
-            return 0.5  # Neutral score if no factors
-        
-        return min(total_weighted_score / total_weight, 1.0)
-    
-    def _bayesian_score(
-        self, 
-        risk_factors: List[RiskFactor], 
-        component_scores: Dict[str, float]
-    ) -> float:
-        """
-        Calculate Bayesian risk score using prior probabilities.
-        
-        Args:
-            risk_factors: List of risk factors
-            component_scores: Component scores by category
+            # Check holder count
+            min_holders = self.THRESHOLDS["min_holders"]
+            safe_holders = self.THRESHOLDS["safe_holders"]
             
-        Returns:
-            float: Bayesian score
-        """
-        # Start with base risk probability
-        log_odds = math.log(0.1 / 0.9)  # 10% base risk probability
-        
-        for factor in risk_factors:
-            prior = self.priors.get(factor.category, 0.1)
+            if strict:
+                min_holders *= 2
+                safe_holders *= 2
             
-            # Convert factor score to likelihood ratio
-            # Higher scores increase evidence for risk
-            if factor.score > 0.5:
-                # Evidence supports risk
-                evidence_strength = (factor.score - 0.5) * 2  # 0.0 to 1.0
-                likelihood_ratio = 1 + evidence_strength * 9  # 1.0 to 10.0
+            if factors.holder_count < min_holders:
+                score += 25
+            elif factors.holder_count < safe_holders:
+                ratio = (factors.holder_count - min_holders) / (safe_holders - min_holders)
+                score += int(25 * (1 - ratio))
             else:
-                # Evidence against risk
-                evidence_strength = (0.5 - factor.score) * 2  # 0.0 to 1.0
-                likelihood_ratio = 1 / (1 + evidence_strength * 9)  # 0.1 to 1.0
+                score -= 10
             
-            # Weight by confidence and prior
-            weighted_log_lr = math.log(likelihood_ratio) * factor.confidence
-            log_odds += weighted_log_lr
-        
-        # Convert back to probability
-        odds = math.exp(log_odds)
-        probability = odds / (1 + odds)
-        
-        return min(max(probability, 0.0), 1.0)
+            # Check concentration in top holders
+            max_concentration = self.THRESHOLDS["max_top10_percent"]
+            if strict:
+                max_concentration *= 0.8
+            
+            if factors.top_10_holders_percent > max_concentration:
+                excess = float(factors.top_10_holders_percent - max_concentration)
+                score += min(25, int(excess))  # Cap at 25 points
+            elif factors.top_10_holders_percent < 30:
+                score -= 10  # Good distribution
+            
+            return max(0, min(100, score))
+            
+        except Exception as e:
+            logger.error(f"Error scoring distribution: {e}", extra={"trace_id": self.trace_id})
+            return 100
     
-    def _conservative_score(
-        self, 
-        risk_factors: List[RiskFactor], 
-        component_scores: Dict[str, float]
-    ) -> float:
+    def _score_age(self, factors: RiskFactors, strict: bool) -> int:
         """
-        Calculate conservative risk score (worst-case approach).
+        Score contract age risk (0-100, higher = riskier).
         
         Args:
-            risk_factors: List of risk factors
-            component_scores: Component scores by category
+            factors: Risk factors
+            strict: Use stricter thresholds
             
         Returns:
-            float: Conservative score
+            int: Age risk score
         """
-        if not risk_factors:
-            return 0.5  # Neutral when no information
-        
-        # Use maximum score as base, weighted by confidence
-        max_weighted_score = 0
-        critical_factor_penalty = 0
-        
-        for factor in risk_factors:
-            weighted_score = factor.score * factor.confidence
-            max_weighted_score = max(max_weighted_score, weighted_score)
+        try:
+            min_age = self.THRESHOLDS["min_age_hours"]
+            safe_age = self.THRESHOLDS["safe_age_hours"]
             
-            # Apply additional penalty for critical categories
-            if factor.category in [RiskCategory.HONEYPOT, RiskCategory.TRADING_DISABLED]:
-                if factor.level in [RiskLevel.HIGH, RiskLevel.CRITICAL]:
-                    critical_factor_penalty = max(critical_factor_penalty, 0.3)
-        
-        # Apply penalty for multiple high-risk factors
-        high_risk_count = sum(
-            1 for factor in risk_factors 
-            if factor.level in [RiskLevel.HIGH, RiskLevel.CRITICAL]
-        )
-        
-        multiple_risk_penalty = min(high_risk_count * 0.1, 0.4)  # Up to 40% penalty
-        
-        conservative_score = max_weighted_score + critical_factor_penalty + multiple_risk_penalty
-        
-        return min(conservative_score, 1.0)
-    
-    def _ensemble_score(
-        self, 
-        risk_factors: List[RiskFactor], 
-        component_scores: Dict[str, float]
-    ) -> float:
-        """
-        Calculate ensemble risk score combining multiple methods.
-        
-        Args:
-            risk_factors: List of risk factors
-            component_scores: Component scores by category
+            if strict:
+                min_age *= 2
+                safe_age *= 2
             
-        Returns:
-            float: Ensemble score
-        """
-        # Calculate scores using different methods
-        weighted_score = self._weighted_average_score(risk_factors, component_scores)
-        bayesian_score = self._bayesian_score(risk_factors, component_scores)
-        conservative_score = self._conservative_score(risk_factors, component_scores)
-        
-        # Dynamic weighting based on data quality
-        confidence_avg = (
-            sum(factor.confidence for factor in risk_factors) / len(risk_factors)
-            if risk_factors else 0.5
-        )
-        
-        # Higher confidence = more weight on weighted average and bayesian
-        # Lower confidence = more weight on conservative approach
-        if confidence_avg > 0.8:
-            method_weights = {"weighted": 0.4, "bayesian": 0.4, "conservative": 0.2}
-        elif confidence_avg > 0.6:
-            method_weights = {"weighted": 0.35, "bayesian": 0.35, "conservative": 0.3}
-        else:
-            method_weights = {"weighted": 0.3, "bayesian": 0.3, "conservative": 0.4}
-        
-        ensemble_score = (
-            weighted_score * method_weights["weighted"] +
-            bayesian_score * method_weights["bayesian"] +
-            conservative_score * method_weights["conservative"]
-        )
-        
-        return min(ensemble_score, 1.0)
-    
-    def _incorporate_external_validation(
-        self, 
-        internal_score: float, 
-        external_validation: AggregatedSecurityResult
-    ) -> float:
-        """
-        Incorporate external security provider validation.
-        
-        Args:
-            internal_score: Internal risk score
-            external_validation: External provider results
-            
-        Returns:
-            float: Adjusted score incorporating external validation
-        """
-        if external_validation.providers_successful == 0:
-            # No external validation - use internal score
-            return internal_score
-        
-        external_score = external_validation.overall_risk_score
-        
-        # Weight external validation based on number of successful providers and confidence
-        provider_weight = min(external_validation.providers_successful / 3, 0.6)
-        
-        # Boost weight if honeypot detected with high confidence
-        if (external_validation.honeypot_detected and 
-            external_validation.honeypot_confidence > 0.7):
-            provider_weight = min(provider_weight * 1.3, 0.8)
-        
-        internal_weight = 1.0 - provider_weight
-        
-        # Apply external honeypot penalty if detected
-        if external_validation.honeypot_detected:
-            honeypot_penalty = external_validation.honeypot_confidence * 0.8
-            external_score = max(external_score, honeypot_penalty)
-        
-        # Combine scores with variance consideration
-        score_difference = abs(internal_score - external_score)
-        if score_difference > 0.3:  # Large disagreement
-            # Be more conservative when internal and external disagree
-            combined_score = max(internal_score, external_score) * 0.9 + 0.1
-        else:
-            # Normal weighted combination
-            combined_score = (
-                internal_score * internal_weight +
-                external_score * provider_weight
-            )
-        
-        return min(combined_score, 1.0)
-    
-    def _calculate_confidence(
-        self, 
-        risk_factors: List[RiskFactor], 
-        external_validation: Optional[AggregatedSecurityResult]
-    ) -> float:
-        """
-        Calculate confidence in the risk assessment.
-        
-        Args:
-            risk_factors: List of risk factors
-            external_validation: External provider results
-            
-        Returns:
-            float: Confidence level (0.0 - 1.0)
-        """
-        if not risk_factors:
-            return 0.3  # Low confidence with no data
-        
-        # Base confidence from internal factors
-        avg_confidence = sum(factor.confidence for factor in risk_factors) / len(risk_factors)
-        
-        # Boost confidence with comprehensive analysis
-        factor_coverage = len(set(factor.category for factor in risk_factors))
-        coverage_boost = min(factor_coverage / 10, 0.2)  # Up to 20% boost for coverage
-        
-        # Boost confidence with external validation
-        external_boost = 0
-        if external_validation and external_validation.providers_successful > 0:
-            # More providers = higher confidence
-            provider_boost = min(external_validation.providers_successful / 3, 0.2)
-            
-            # Consensus boost - when providers agree
-            if external_validation.providers_successful > 1:
-                honeypot_consensus = (
-                    external_validation.honeypot_confidence 
-                    if external_validation.honeypot_confidence > 0.7 or external_validation.honeypot_confidence < 0.3
-                    else 0
-                )
-                consensus_boost = min(honeypot_consensus * 0.1, 0.1)
+            if factors.contract_age_hours < 1:
+                return 100  # Brand new
+            elif factors.contract_age_hours < 12:
+                # Very new contracts: scale from 100 to 85
+                ratio = factors.contract_age_hours / 12
+                return int(100 - (15 * ratio))
+            elif factors.contract_age_hours < min_age:
+                # New contracts: scale from 85 to 80
+                ratio = (factors.contract_age_hours - 12) / (min_age - 12)
+                return int(85 - (5 * ratio))
+            elif factors.contract_age_hours < safe_age:
+                # Moderate age: scale from 80 to 30
+                ratio = (factors.contract_age_hours - min_age) / (safe_age - min_age)
+                return int(80 - (50 * ratio))
+            elif factors.contract_age_hours < 720:  # Less than 1 month
+                # Established: scale from 30 to 20
+                ratio = (factors.contract_age_hours - safe_age) / (720 - safe_age)
+                return int(30 - (10 * ratio))
             else:
-                consensus_boost = 0
-            
-            external_boost = provider_boost + consensus_boost
-        
-        # Reduce confidence for conflicting signals
-        score_variance = self._calculate_score_variance(risk_factors)
-        variance_penalty = min(score_variance * 0.3, 0.2)  # Up to 20% penalty
-        
-        # Combine confidence components
-        final_confidence = avg_confidence + coverage_boost + external_boost - variance_penalty
-        
-        return max(min(final_confidence, 1.0), 0.2)  # Clamp between 20% and 100%
-    
-    def _calculate_score_variance(self, risk_factors: List[RiskFactor]) -> float:
-        """
-        Calculate variance in risk factor scores.
-        
-        Args:
-            risk_factors: List of risk factors
-            
-        Returns:
-            float: Score variance (0.0 - 1.0)
-        """
-        if len(risk_factors) < 2:
-            return 0.0
-        
-        scores = [factor.score for factor in risk_factors]
-        mean_score = sum(scores) / len(scores)
-        variance = sum((score - mean_score) ** 2 for score in scores) / len(scores)
-        
-        # Normalize variance to 0-1 range (theoretical max variance is 0.25)
-        normalized_variance = min(math.sqrt(variance) / 0.5, 1.0)
-        
-        return normalized_variance
-    
-    def _determine_risk_level(self, score: float, confidence: float) -> RiskLevel:
-        """
-        Determine risk level based on score and confidence.
-        
-        Args:
-            score: Overall risk score
-            confidence: Confidence in assessment
-            
-        Returns:
-            RiskLevel: Determined risk level
-        """
-        # Select appropriate thresholds based on confidence
-        if confidence >= 0.9:
-            thresholds = self.confidence_thresholds[0.9]
-        elif confidence >= 0.8:
-            thresholds = self.confidence_thresholds[0.8]
-        else:
-            thresholds = self.confidence_thresholds[0.7]
-        
-        # Apply confidence-based adjustment
-        # Lower confidence = more conservative thresholds
-        confidence_adjustment = (1.0 - confidence) * 0.1
-        
-        adjusted_thresholds = {
-            level: threshold - confidence_adjustment 
-            for level, threshold in thresholds.items()
-        }
-        
-        if score >= adjusted_thresholds["critical"]:
-            return RiskLevel.CRITICAL
-        elif score >= adjusted_thresholds["high"]:
-            return RiskLevel.HIGH
-        elif score >= adjusted_thresholds["medium"]:
-            return RiskLevel.MEDIUM
-        else:
-            return RiskLevel.LOW
-    
-    def _generate_explanation(
+                # Very established (1+ months)
+                months = factors.contract_age_hours / 720
+                return max(0, int(20 - (months * 2)))
+                
+        except Exception as e:
+            logger.error(f"Error scoring age: {e}", extra={"trace_id": self.trace_id})
+            return 100
+
+
+
+
+
+
+
+
+
+
+
+
+    # Replace the _generate_risk_reasons method (around line 615)
+    def _generate_risk_reasons(
         self,
-        score: float,
-        risk_factors: List[RiskFactor],
-        external_validation: Optional[AggregatedSecurityResult],
-        method: ScoringMethod,
-    ) -> str:
-        """
-        Generate human-readable explanation of the risk score.
-        
-        Args:
-            score: Overall risk score
-            risk_factors: List of risk factors
-            external_validation: External validation results
-            method: Scoring method used
-            
-        Returns:
-            str: Risk explanation
-        """
-        explanation_parts = [
-            f"Risk score: {score:.2f}/1.0 using {method.value.replace('_', ' ')} method"
-        ]
-        
-        # Highlight top risk factors
-        high_risk_factors = sorted(
-            [f for f in risk_factors if f.level in [RiskLevel.HIGH, RiskLevel.CRITICAL]],
-            key=lambda x: x.score,
-            reverse=True
-        )
-        
-        if high_risk_factors:
-            top_factors = high_risk_factors[:3]
-            factor_descriptions = [
-                f"{factor.category.value}: {factor.description}" 
-                for factor in top_factors
-            ]
-            explanation_parts.append(
-                f"Primary concerns: {'; '.join(factor_descriptions)}"
-            )
-        
-        # Include external validation summary
-        if external_validation:
-            if external_validation.honeypot_detected:
-                explanation_parts.append(
-                    f"External providers flagged as potential honeypot "
-                    f"({external_validation.providers_successful}/{external_validation.providers_checked} providers, "
-                    f"{external_validation.honeypot_confidence:.1%} confidence)"
-                )
-            else:
-                explanation_parts.append(
-                    f"External validation from {external_validation.providers_successful} providers "
-                    f"found {len(external_validation.risk_factors)} risk factors"
-                )
-        
-        # Add statistical context
-        if len(risk_factors) > 5:
-            explanation_parts.append(
-                f"Analysis covered {len(risk_factors)} risk categories with "
-                f"{len([f for f in risk_factors if f.level != RiskLevel.LOW])} elevated risks"
-            )
-        
-        return ". ".join(explanation_parts) + "."
-    
-    def _generate_recommendations(
-        self,
-        score: float,
-        risk_level: RiskLevel,
-        risk_factors: List[RiskFactor],
+        factors: RiskFactors,
+        liq_score: int,
+        dist_score: int,
+        age_score: int,
+        vol_score: int,
+        volatility_score: int,
+        sec_score: int
     ) -> List[str]:
         """
-        Generate actionable recommendations based on risk assessment.
+        Generate human-readable risk reasons.
         
         Args:
-            score: Overall risk score
-            risk_level: Determined risk level
-            risk_factors: List of risk factors
+            factors: Risk factors
+            liq_score: Liquidity score
+            dist_score: Distribution score
+            age_score: Age score
+            vol_score: Volume score
+            volatility_score: Volatility score
+            sec_score: Security score
             
         Returns:
-            List[str]: Actionable recommendations
+            List[str]: Risk reasons
         """
-        recommendations = []
+        reasons = []
         
-        # General recommendations based on risk level
-        if risk_level == RiskLevel.CRITICAL:
-            recommendations.extend([
-                "🚫 Avoid trading this token - critical risks detected",
-                "⚠️ Multiple severe security concerns identified",
-                "🔍 Consider this token unsafe for any investment"
-            ])
-        elif risk_level == RiskLevel.HIGH:
-            recommendations.extend([
-                "⚠️ Trade with extreme caution - significant risks present",
-                "💰 Use only very small position sizes (1-2% of portfolio max)",
-                "🔍 Monitor closely and be prepared to exit immediately",
-                "💡 Enable canary trades and tight stop-losses"
-            ])
-        elif risk_level == RiskLevel.MEDIUM:
-            recommendations.extend([
-                "⚠️ Trade with increased caution - moderate risks identified",
-                "💰 Consider reduced position sizing (max 5% of portfolio)",
-                "🔍 Enable additional monitoring and alerts",
-                "💡 Use limit orders and avoid market orders"
-            ])
+        if factors.honeypot_detected:
+            reasons.append("⚠️ HONEYPOT DETECTED - Cannot sell tokens")
+        
+        if liq_score >= 70:
+            reasons.append(f"Low liquidity: ${factors.liquidity_usd:,.0f}")
+        
+        if dist_score >= 70:
+            if factors.holder_count < self.THRESHOLDS["min_holders"]:
+                reasons.append(f"Very few holders: {factors.holder_count}")
+            if factors.top_10_holders_percent > self.THRESHOLDS["max_top10_percent"]:
+                reasons.append(f"High concentration: Top 10 hold {factors.top_10_holders_percent:.1f}%")
+        
+        if age_score >= 70:
+            if factors.contract_age_hours < 24:
+                reasons.append(f"Brand new contract: {factors.contract_age_hours}h old")
+            else:
+                reasons.append(f"Young contract: {factors.contract_age_hours/24:.1f} days old")
+        
+        if vol_score >= 70:
+            if factors.volume_24h < self.THRESHOLDS["min_volume_24h"]:
+                reasons.append(f"Low volume: ${factors.volume_24h:,.0f}/24h")
+            if factors.buy_sell_ratio < Decimal("0.3"):
+                reasons.append(f"Heavy selling pressure: {factors.buy_sell_ratio:.2f} buy/sell ratio")
+        
+        if volatility_score >= 70:
+            reasons.append(f"High volatility: {factors.price_volatility_24h:.1f}% in 24h")
+        
+        # Always check ownership and liquidity lock status if security score is concerning
+        if not factors.ownership_renounced and not factors.honeypot_detected:
+            reasons.append("Owner has not renounced")
+        if not factors.liquidity_locked and not factors.honeypot_detected:
+            reasons.append("Liquidity not locked")
+        
+        total_tax = factors.buy_tax_percent + factors.sell_tax_percent
+        if total_tax > self.THRESHOLDS["max_tax"]:
+            reasons.append(f"High taxes: {factors.buy_tax_percent}% buy, {factors.sell_tax_percent}% sell")
+        
+        return reasons
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    def _score_volume(self, factors: RiskFactors, strict: bool) -> int:
+        """
+        Score volume patterns risk (0-100, higher = riskier).
+        
+        Args:
+            factors: Risk factors
+            strict: Use stricter thresholds
+            
+        Returns:
+            int: Volume risk score
+        """
+        try:
+            score = 50  # Start neutral
+            
+            min_volume = self.THRESHOLDS["min_volume_24h"]
+            safe_volume = self.THRESHOLDS["safe_volume_24h"]
+            
+            if strict:
+                min_volume *= 2
+                safe_volume *= 2
+            
+            # Check absolute volume
+            if factors.volume_24h < min_volume:
+                score += 20
+            elif factors.volume_24h > safe_volume:
+                score -= 10
+            
+            # Check volume growth rate
+            if factors.volume_growth_rate < -50:  # Declining volume
+                score += 15
+            elif factors.volume_growth_rate > 200:  # Suspicious spike
+                score += 10
+            elif 10 < factors.volume_growth_rate < 100:  # Healthy growth
+                score -= 10
+            
+            # Check buy/sell ratio
+            if factors.buy_sell_ratio < Decimal("0.3"):  # Heavy selling
+                score += 20
+            elif factors.buy_sell_ratio > Decimal("3"):  # Heavy buying (possible pump)
+                score += 10
+            elif Decimal("0.8") < factors.buy_sell_ratio < Decimal("1.2"):  # Balanced
+                score -= 5
+            
+            # Check trading activity
+            if factors.trades_24h < self.THRESHOLDS["min_trades_24h"]:
+                score += 10
+            if factors.unique_traders_24h < self.THRESHOLDS["min_unique_traders"]:
+                score += 10
+            
+            return max(0, min(100, score))
+            
+        except Exception as e:
+            logger.error(f"Error scoring volume: {e}", extra={"trace_id": self.trace_id})
+            return 100
+    
+    def _score_volatility(self, factors: RiskFactors, strict: bool) -> int:
+        """
+        Score price volatility risk (0-100, higher = riskier).
+        
+        Args:
+            factors: Risk factors
+            strict: Use stricter thresholds
+            
+        Returns:
+            int: Volatility risk score
+        """
+        try:
+            max_vol = self.THRESHOLDS["max_volatility"]
+            if strict:
+                max_vol *= 0.7
+            
+            if factors.price_volatility_24h <= 5:
+                return 10  # Very stable
+            elif factors.price_volatility_24h <= 15:
+                return 30  # Normal volatility
+            elif factors.price_volatility_24h <= max_vol:
+                # Scale from 30 to 70
+                ratio = float((factors.price_volatility_24h - 15) / (max_vol - 15))
+                return int(30 + (40 * ratio))
+            else:
+                # Extreme volatility
+                excess = float(factors.price_volatility_24h - max_vol)
+                return min(100, 70 + int(excess))
+                
+        except Exception as e:
+            logger.error(f"Error scoring volatility: {e}", extra={"trace_id": self.trace_id})
+            return 100
+    
+    def _score_security(self, factors: RiskFactors, strict: bool) -> int:
+        """
+        Score security factors risk (0-100, higher = riskier).
+        
+        Args:
+            factors: Risk factors
+            strict: Use stricter thresholds
+            
+        Returns:
+            int: Security risk score
+        """
+        try:
+            # Start with external security score (inverted)
+            score = 100 - factors.security_score
+            
+            # Honeypot is critical risk
+            if factors.honeypot_detected:
+                return 100
+            
+            # Check ownership
+            if not factors.ownership_renounced:
+                score += 15
+            else:
+                score -= 5
+            
+            # Check liquidity lock
+            if not factors.liquidity_locked:
+                score += 20
+            else:
+                score -= 10
+                # Bonus for long lock duration
+                if factors.liquidity_lock_duration_days > 365:
+                    score -= 10
+                elif factors.liquidity_lock_duration_days > 180:
+                    score -= 5
+            
+            # Check taxes
+            max_tax = self.THRESHOLDS["max_tax"]
+            if strict:
+                max_tax *= 0.5
+            
+            total_tax = factors.buy_tax_percent + factors.sell_tax_percent
+            if total_tax > max_tax * 2:
+                score += 30
+            elif total_tax > max_tax:
+                score += 15
+            elif total_tax <= 5:
+                score -= 5
+            
+            # Check max wallet restriction
+            if factors.max_wallet_percent < 1:
+                score += 20  # Very restrictive
+            elif factors.max_wallet_percent < 3:
+                score += 10
+            
+            return max(0, min(100, score))
+            
+        except Exception as e:
+            logger.error(f"Error scoring security: {e}", extra={"trace_id": self.trace_id})
+            return 100
+    
+    def _get_risk_level(self, score: int) -> str:
+        """
+        Convert numerical score to risk level.
+        
+        Args:
+            score: Risk score (0-100)
+            
+        Returns:
+            str: Risk level category
+        """
+        if score >= 80:
+            return "critical"
+        elif score >= 60:
+            return "high"
+        elif score >= 40:
+            return "medium"
         else:
-            recommendations.extend([
-                "✅ Token appears relatively safe for trading",
-                "💰 Standard position sizing acceptable",
-                "🔍 Maintain regular monitoring as conditions can change",
-                "💡 Still recommend starting with smaller test positions"
-            ])
+            return "low"
+    
+    def _calculate_confidence(self, factors: RiskFactors) -> float:
+        """
+        Calculate confidence in risk assessment based on data completeness.
         
-        # Specific recommendations based on critical risk factors
-        critical_factors = [f for f in risk_factors if f.level == RiskLevel.CRITICAL]
+        Args:
+            factors: Risk factors
+            
+        Returns:
+            float: Confidence level (0-1)
+        """
+        confidence = 0.0
+        data_points = 0
         
-        for factor in critical_factors:
-            if factor.category == RiskCategory.HONEYPOT:
-                recommendations.append("🚨 HONEYPOT RISK: Selling tokens may be impossible")
-            elif factor.category == RiskCategory.TRADING_DISABLED:
-                recommendations.append("🚨 TRADING DISABLED: Cannot execute trades currently")
-            elif factor.category == RiskCategory.TAX_EXCESSIVE:
-                recommendations.append("🚨 EXCESSIVE TAXES: Trading costs may exceed 20%")
+        # Check which data points we have
+        if factors.liquidity_usd > 0:
+            confidence += 0.15
+            data_points += 1
         
-        # Medium/high risk specific recommendations
-        medium_high_factors = [f for f in risk_factors if f.level in [RiskLevel.HIGH, RiskLevel.MEDIUM]]
+        if factors.holder_count > 0:
+            confidence += 0.10
+            data_points += 1
         
-        for factor in medium_high_factors:
-            if factor.category == RiskCategory.LP_UNLOCKED:
-                recommendations.append("💡 LP RISK: Monitor for liquidity removal - set tight stops")
-            elif factor.category == RiskCategory.DEV_CONCENTRATION:
-                recommendations.append("💡 WHALE RISK: Watch for large sells from concentrated holders")
-            elif factor.category == RiskCategory.LIQUIDITY_LOW:
-                recommendations.append("💡 LIQUIDITY RISK: Use smaller sizes to minimize slippage")
-            elif factor.category == RiskCategory.PROXY_CONTRACT:
-                recommendations.append("💡 UPGRADE RISK: Contract code can be changed by owner")
+        if factors.contract_age_hours > 0:
+            confidence += 0.10
+            data_points += 1
         
-        # Add final safety reminder for high-risk tokens
-        if risk_level in [RiskLevel.HIGH, RiskLevel.CRITICAL]:
-            recommendations.append("🛡️ SAFETY REMINDER: Never invest more than you can afford to lose")
+        if factors.volume_24h > 0:
+            confidence += 0.15
+            data_points += 1
         
-        return recommendations
+        if factors.price_volatility_24h > 0:
+            confidence += 0.10
+            data_points += 1
+        
+        if factors.security_score < 100:  # Has been checked
+            confidence += 0.20
+            data_points += 1
+        
+        if factors.trades_24h > 0:
+            confidence += 0.10
+            data_points += 1
+        
+        if len(factors.data_sources) > 0:
+            confidence += 0.10
+            data_points += 1
+        
+        # Adjust confidence based on data freshness
+        data_age = (datetime.utcnow() - factors.timestamp).total_seconds()
+        if data_age < 300:  # Less than 5 minutes old
+            pass  # No adjustment
+        elif data_age < 3600:  # Less than 1 hour
+            confidence *= 0.9
+        else:
+            confidence *= 0.7
+        
+        return min(1.0, confidence)
+    
+    def _generate_risk_reasons(
+        self,
+        factors: RiskFactors,
+        liq_score: int,
+        dist_score: int,
+        age_score: int,
+        vol_score: int,
+        volatility_score: int,
+        sec_score: int
+    ) -> List[str]:
+        """
+        Generate human-readable risk reasons.
+        
+        Args:
+            factors: Risk factors
+            liq_score: Liquidity score
+            dist_score: Distribution score
+            age_score: Age score
+            vol_score: Volume score
+            volatility_score: Volatility score
+            sec_score: Security score
+            
+        Returns:
+            List[str]: Risk reasons
+        """
+        reasons = []
+        
+        if factors.honeypot_detected:
+            reasons.append("⚠️ HONEYPOT DETECTED - Cannot sell tokens")
+        
+        if liq_score >= 70:
+            reasons.append(f"Low liquidity: ${factors.liquidity_usd:,.0f}")
+        
+        if dist_score >= 70:
+            if factors.holder_count < self.THRESHOLDS["min_holders"]:
+                reasons.append(f"Very few holders: {factors.holder_count}")
+            if factors.top_10_holders_percent > self.THRESHOLDS["max_top10_percent"]:
+                reasons.append(f"High concentration: Top 10 hold {factors.top_10_holders_percent:.1f}%")
+        
+        if age_score >= 70:
+            if factors.contract_age_hours < 24:
+                reasons.append(f"Brand new contract: {factors.contract_age_hours}h old")
+            else:
+                reasons.append(f"Young contract: {factors.contract_age_hours/24:.1f} days old")
+        
+        if vol_score >= 70:
+            if factors.volume_24h < self.THRESHOLDS["min_volume_24h"]:
+                reasons.append(f"Low volume: ${factors.volume_24h:,.0f}/24h")
+            if factors.buy_sell_ratio < Decimal("0.3"):
+                reasons.append(f"Heavy selling pressure: {factors.buy_sell_ratio:.2f} buy/sell ratio")
+        
+        if volatility_score >= 70:
+            reasons.append(f"High volatility: {factors.price_volatility_24h:.1f}% in 24h")
+        
+        # Always report ownership status if not renounced (unless honeypot)
+        if not factors.ownership_renounced and not factors.honeypot_detected:
+            reasons.append("Owner has not renounced")
+        
+        # Always report liquidity lock status if not locked (unless honeypot)
+        if not factors.liquidity_locked and not factors.honeypot_detected:
+            reasons.append("Liquidity not locked")
+        
+        total_tax = factors.buy_tax_percent + factors.sell_tax_percent
+        if total_tax > self.THRESHOLDS["max_tax"]:
+            reasons.append(f"High taxes: {factors.buy_tax_percent}% buy, {factors.sell_tax_percent}% sell")
+        
+        return reasons
 
 
-# Global risk scorer instance
-risk_scorer = RiskScorer()
+
+
+
+
+
+
+
+
+
+
+
+
+    def _generate_positive_signals(
+        self,
+        factors: RiskFactors,
+        liq_score: int,
+        dist_score: int,
+        age_score: int,
+        vol_score: int,
+        volatility_score: int,
+        sec_score: int
+    ) -> List[str]:
+        """
+        Generate positive signals for the token.
+        
+        Args:
+            factors: Risk factors
+            liq_score: Liquidity score
+            dist_score: Distribution score
+            age_score: Age score
+            vol_score: Volume score
+            volatility_score: Volatility score
+            sec_score: Security score
+            
+        Returns:
+            List[str]: Positive signals
+        """
+        signals = []
+        
+        if liq_score <= 30:
+            signals.append(f"✓ Strong liquidity: ${factors.liquidity_usd:,.0f}")
+        
+        # Always report on holder distribution if it's good
+        if factors.holder_count > self.THRESHOLDS["safe_holders"]:
+            signals.append(f"✓ Wide distribution: {factors.holder_count:,} holders")
+        elif factors.holder_count > self.THRESHOLDS["min_holders"]:
+            signals.append(f"✓ {factors.holder_count} holders")
+            
+        if factors.top_10_holders_percent < 30 and factors.top_10_holders_percent > 0:
+            signals.append(f"✓ Decentralized: Top 10 hold only {factors.top_10_holders_percent:.1f}%")
+        
+        if age_score <= 30 and factors.contract_age_hours > self.THRESHOLDS["safe_age_hours"]:
+            signals.append(f"✓ Established: {factors.contract_age_hours/24:.0f} days old")
+        
+        if vol_score <= 30:
+            if factors.volume_24h > self.THRESHOLDS["safe_volume_24h"]:
+                signals.append(f"✓ High volume: ${factors.volume_24h:,.0f}/24h")
+            if Decimal("0.8") < factors.buy_sell_ratio < Decimal("1.2"):
+                signals.append(f"✓ Balanced trading: {factors.buy_sell_ratio:.2f} buy/sell")
+            if factors.volume_growth_rate > 10 and factors.volume_growth_rate < 100:
+                signals.append(f"✓ Growing volume: +{factors.volume_growth_rate:.0f}%")
+        
+        if volatility_score <= 30:
+            signals.append(f"✓ Stable price: {factors.price_volatility_24h:.1f}% volatility")
+        
+        if sec_score <= 30:
+            if factors.ownership_renounced:
+                signals.append("✓ Ownership renounced")
+            if factors.liquidity_locked:
+                signals.append(f"✓ Liquidity locked for {factors.liquidity_lock_duration_days} days")
+            total_tax = factors.buy_tax_percent + factors.sell_tax_percent
+            if total_tax <= 5:
+                signals.append(f"✓ Low taxes: {total_tax:.0f}% total")
+        
+        return signals
+
+
+
+
+
+
+
+
+
+
+
+
+
+    def _get_recommendation(self, score: int, confidence: float, strict: bool) -> str:
+        """
+        Generate trading recommendation based on risk score.
+        
+        Args:
+            score: Total risk score
+            confidence: Confidence in assessment
+            strict: Whether using strict mode
+            
+        Returns:
+            str: Trading recommendation
+        """
+        # Check for honeypot in stored factors
+        if hasattr(self, '_current_factors') and self._current_factors and self._current_factors.honeypot_detected:
+            return "avoid"
+        
+        if confidence < 0.3:
+            return "monitor"  # Need more data
+        
+        if strict:
+            # Stricter thresholds in strict mode
+            if score >= 70:
+                return "avoid"
+            elif score >= 50:
+                return "monitor"
+            elif score >= 30:
+                return "consider"
+            else:
+                return "trade"
+        else:
+            if score >= 80:
+                return "avoid"
+            elif score >= 60:
+                return "monitor"
+            elif score >= 40:
+                return "consider"
+            else:
+                return "trade"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    def _calculate_position_size(self, score: int, factors: RiskFactors) -> Decimal:
+        """
+        Calculate suggested position size as % of allocated capital.
+        
+        Args:
+            score: Total risk score
+            factors: Risk factors
+            
+        Returns:
+            Decimal: Suggested position percentage
+        """
+        # Store factors for recommendation check
+        self._current_factors = factors
+        
+        if score >= 80 or factors.honeypot_detected:
+            return Decimal("0")  # Don't trade
+        
+        # Base position from risk score
+        if score >= 60:
+            base_position = Decimal("1")  # 1% for high risk
+        elif score >= 40:
+            base_position = Decimal("3")  # 3% for medium risk
+        else:
+            base_position = Decimal("5")  # 5% for low risk
+        
+        # Adjust based on liquidity
+        if factors.liquidity_usd > 500000:
+            base_position *= Decimal("1.5")
+        elif factors.liquidity_usd < 50000:
+            base_position *= Decimal("0.5")
+        
+        # Further reduce for very new contracts (stricter)
+        if factors.contract_age_hours < 24:
+            base_position = min(base_position * Decimal("0.5"), Decimal("1"))
+        
+        # Additional safety check for poor metrics
+        if (factors.liquidity_usd < 10000 and 
+            factors.holder_count < 50 and 
+            factors.contract_age_hours < 48):
+            base_position = min(base_position, Decimal("1"))
+        
+        # Cap at 10%
+        return min(base_position, Decimal("10"))
+
+
+
+
+
+
+
+
+
+
+
+
+    def _calculate_slippage(self, volatility_score: int, liquidity_score: int) -> Decimal:
+        """
+        Calculate suggested slippage tolerance.
+        
+        Args:
+            volatility_score: Volatility risk score
+            liquidity_score: Liquidity risk score
+            
+        Returns:
+            Decimal: Suggested slippage percentage
+        """
+        # Base slippage from volatility
+        if volatility_score >= 70:
+            base_slippage = Decimal("5")
+        elif volatility_score >= 50:
+            base_slippage = Decimal("3")
+        elif volatility_score >= 30:
+            base_slippage = Decimal("2")
+        else:
+            base_slippage = Decimal("1")
+        
+        # Adjust for liquidity
+        if liquidity_score >= 70:
+            base_slippage += Decimal("2")
+        elif liquidity_score >= 50:
+            base_slippage += Decimal("1")
+        
+        # Cap at 10%
+        return min(base_slippage, Decimal("10"))
+
+
+async def quick_risk_assessment(
+    token_address: str,
+    chain: str,
+    liquidity_usd: Decimal,
+    holder_count: int = 0,
+    volume_24h: Decimal = Decimal("0"),
+    contract_age_hours: int = 0,
+    trace_id: str = ""
+) -> RiskScore:
+    """
+    Quick risk assessment with minimal data.
+    
+    This is a convenience function for rapid assessment when
+    full data isn't available.
+    
+    Args:
+        token_address: Token contract address
+        chain: Blockchain name
+        liquidity_usd: Current liquidity in USD
+        holder_count: Number of token holders
+        volume_24h: 24-hour trading volume
+        contract_age_hours: Hours since contract deployment
+        trace_id: Trace ID for logging
+        
+    Returns:
+        RiskScore: Basic risk assessment
+    """
+    factors = RiskFactors(
+        token_address=token_address,
+        chain=chain,
+        liquidity_usd=liquidity_usd,
+        holder_count=holder_count,
+        volume_24h=volume_24h,
+        contract_age_hours=contract_age_hours,
+        data_sources=["quick_assessment"]
+    )
+    
+    scorer = RiskScorer(trace_id=trace_id)
+    return await scorer.calculate_risk_score(factors, strict_mode=False)

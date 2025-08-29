@@ -1,9 +1,8 @@
 /**
  * DEX Sniper Pro - Enhanced Trading Interface Component
  * 
- * UPDATED: Integrates QuoteDisplay and TradeConfirmation components
- * for comprehensive trading experience with detailed quote comparison
- * and advanced confirmation workflow.
+ * UPDATED: Integrates QuoteDisplay and TradeConfirmation components,
+ * and inline AIIntelligenceDisplay for the selected token/pair.
  * 
  * FIXED: Uses apiClient for all API calls to ensure proper backend routing
  * 
@@ -15,6 +14,7 @@ import { Container, Row, Col, Card, Form, Button, Alert, Badge, Spinner } from '
 import { useWallet } from '../hooks/useWallet';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { apiClient } from '../config/api.js';
+import AIIntelligenceDisplay from './AIIntelligenceDisplay';
 
 // Import the enhanced components directly
 import QuoteDisplay from './QuoteDisplay';
@@ -66,6 +66,9 @@ const TradingInterface = () => {
   // Available tokens for current chain
   const [availableTokens, setAvailableTokens] = useState([]);
 
+  // NEW: Selected pair/token (to drive AIIntelligenceDisplay)
+  const [selectedPair, setSelectedPair] = useState(null);
+
   // Chain configuration
   const chainConfig = {
     1: { name: 'Ethereum', native: 'ETH', explorer: 'https://etherscan.io' },
@@ -77,10 +80,10 @@ const TradingInterface = () => {
   // Get chain ID from chain name
   const getChainId = () => {
     const chainIds = {
-      'ethereum': 1,
-      'bsc': 56,
-      'polygon': 137,
-      'base': 8453
+      ethereum: 1,
+      bsc: 56,
+      polygon: 137,
+      base: 8453
     };
     return chainIds[selectedChain] || 1;
   };
@@ -105,6 +108,19 @@ const TradingInterface = () => {
   }, [isConnected, selectedChain]);
 
   /**
+   * Track when user enters a token address and expose it as selectedPair
+   * so the AIIntelligenceDisplay can show live intelligence for it.
+   */
+  useEffect(() => {
+    const val = (tradeData.toToken || '').trim();
+    if (/^0x[a-fA-F0-9]{40}$/.test(val)) {
+      setSelectedPair({ address: val });
+    } else {
+      setSelectedPair(null);
+    }
+  }, [tradeData.toToken]);
+
+  /**
    * Load available tokens for current chain from backend - FIXED: Using apiClient
    */
   const loadAvailableTokens = useCallback(async () => {
@@ -120,12 +136,9 @@ const TradingInterface = () => {
   }, [selectedChain, getChainId]);
 
   /**
-   * Get quotes from multiple DEXs via backend API - FIXED: Using apiClient
+   * Enhanced fetchQuotes function with comprehensive error handling,
+   * mock data for testing, and proper API integration - FIXED: Uses apiClient
    */
-/**
- * Enhanced fetchQuotes function with comprehensive error handling,
- * mock data for testing, and proper API integration - FIXED: Uses apiClient
- */
   const fetchQuotes = useCallback(async () => {
     // Input validation
     if (!tradeData.fromToken || !tradeData.toToken || !tradeData.fromAmount) {
@@ -748,6 +761,17 @@ const TradingInterface = () => {
                     </Form.Group>
                   </Col>
                 </Row>
+
+                {/* Inline Market Intelligence for selected token/pair */}
+                {selectedPair && (
+                  <AIIntelligenceDisplay
+                    tokenAddress={selectedPair.address}
+                    chain={selectedChain}
+                    className="mb-3"
+                    autoRefresh={true}
+                    refreshInterval={60000}
+                  />
+                )}
 
                 {/* Trading Settings */}
                 <Row className="mb-3">

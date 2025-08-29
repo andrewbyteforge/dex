@@ -13,6 +13,7 @@ import {
   Filter,
   Download
 } from 'lucide-react';
+import AIIntelligenceDisplay from './AIIntelligenceDisplay';
 
 /**
  * Real-time monitoring component for the autotrade engine.
@@ -228,6 +229,16 @@ const AutotradeMonitor = ({
           </div>
         </Col>
       </Row>
+
+      {/* Inline AI Intelligence for current trade (compact) */}
+      {currentTrade && (
+        <AIIntelligenceDisplay
+          tokenAddress={currentTrade.tokenAddress}
+          chain={currentTrade.chain}
+          compact={true}
+          className="mb-2"
+        />
+      )}
 
       {/* Status Overview */}
       <Row className="mb-4">

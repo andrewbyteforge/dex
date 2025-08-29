@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from app.api.autotrade_ai import router as autotrade_ai_router
 
 # Core imports
 from app.core.logging_config import setup_logging
@@ -21,6 +22,12 @@ from app.core.middleware_setup import (
     setup_middleware_stack,
     register_core_routers
 )
+
+# Feature routers
+from app.api.ai_intelligence import router as ai_router  # <-- Added
+
+# Intelligence WS manager (NEW)
+from app.ws.intelligence_handler import manager as intelligence_manager  # <-- Added
 
 # Initialize structured logging FIRST
 setup_logging()
@@ -45,29 +52,24 @@ register_exception_handlers(app)
 # Register all API routers
 register_core_routers(app)
 
-# Intelligence WebSocket endpoint
-@app.websocket("/ws/intelligence/{user_id}")
-async def intelligence_websocket_endpoint(websocket: WebSocket, user_id: str):
-    """WebSocket endpoint for real-time Market Intelligence updates."""
-    try:
-        # Check if intelligence hub is available
-        if not hasattr(app.state, 'intelligence_hub'):
-            logger.error("Intelligence hub not available for WebSocket connection")
-            await websocket.close(code=1011, reason="Service unavailable")
-            return
-        
-        # Connect to intelligence hub
-        await app.state.intelligence_hub.connect_user(websocket, user_id)
-        
-    except WebSocketDisconnect:
-        logger.info(f"Intelligence WebSocket disconnected: {user_id}")
-    except Exception as e:
-        logger.error(f"Intelligence WebSocket connection failed: {e}")
-        try:
-            await websocket.close(code=1011, reason="Connection failed")
-        except:
-            pass
+# Register AI Intelligence API router with explicit prefix and tags
+app.include_router(ai_router, prefix="", tags=["AI Intelligence"])  # <-- Updated
+app.include_router(autotrade_ai_router)
 
+# Intelligence WebSocket endpoint (REPLACED to use intelligence_manager)
+@app.websocket("/ws/intelligence/{wallet_address}")
+async def intelligence_websocket(websocket: WebSocket, wallet_address: str):
+    await intelligence_manager.connect(websocket, wallet_address)
+    try:
+        while True:
+            data = await websocket.receive_json()
+            if data.get("type") == "analyze":
+                await intelligence_manager.analyze_and_broadcast(
+                    wallet_address,
+                    data.get("token_data", {})
+                )
+    except WebSocketDisconnect:
+        intelligence_manager.disconnect(wallet_address)
 
 if __name__ == "__main__":
     import uvicorn
