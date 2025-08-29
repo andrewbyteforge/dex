@@ -176,96 +176,46 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
 
 async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
     """
-    Handle HTTP exceptions with enhanced logging and context.
+    Handle HTTP exceptions with proper logging and response formatting.
     
-    Args:
-        request: FastAPI request object
-        exc: HTTP exception that was raised
+    Parameters
+    ----------
+    request : Request
+        The incoming request
+    exc : HTTPException
+        The HTTP exception to handle
         
-    Returns:
-        JSONResponse with error details
+    Returns
+    -------
+    JSONResponse
+        Formatted error response
     """
-    trace_id = get_trace_id()
-    client_info = get_client_info(request)
-    rate_limit_context = extract_rate_limit_context(request)
-    
-    error_details = {
-        "trace_id": trace_id,
-        "path": request.url.path,
-        "method": request.method,
-        "status_code": exc.status_code,
-        "detail": exc.detail,
-        "client_info": client_info,
-        "rate_limit_context": rate_limit_context
-    }
-    
-    # Log with appropriate severity
-    if exc.status_code == 429:
-        logger.warning(
-            f"Rate limit exceeded: {exc.detail}",
-            extra={'extra_data': error_details}
-        )
-    elif exc.status_code >= 500:
-        logger.error(
-            f"HTTP {exc.status_code}: {exc.detail}",
-            extra={'extra_data': error_details}
-        )
-    elif exc.status_code >= 400:
-        logger.info(
-            f"HTTP {exc.status_code}: {exc.detail}",
-            extra={'extra_data': error_details}
-        )
-    
-    # Prepare response headers
-    headers = {}
-    if hasattr(exc, 'headers') and exc.headers:
-        headers.update(exc.headers)
-    
-    # Add trace ID header for debugging
-    headers["X-Trace-ID"] = trace_id
-    
-    # Enhanced error response based on status code
-    if exc.status_code == 429:
-        content = {
-            "error": "Rate limit exceeded",
-            "detail": exc.detail,
-            "trace_id": trace_id,
-            "timestamp": time.time()
+    # Log the error
+    logger.warning(
+        f"HTTP {exc.status_code} error on {request.url.path}: {exc.detail}",
+        extra={
+            "trace_id": getattr(request.state, "trace_id", None),
+            "status_code": exc.status_code,
+            "path": request.url.path,
+            "detail": exc.detail
         }
-        
-        # Add retry information if available
-        if 'Retry-After' in headers:
-            content["retry_after"] = headers['Retry-After']
-        
-    elif exc.status_code == 422:
-        content = {
-            "error": "Validation error",
-            "detail": exc.detail,
-            "trace_id": trace_id,
-            "timestamp": time.time()
-        }
-        
-    elif exc.status_code >= 500:
-        content = {
-            "error": "Internal server error",
-            "detail": "An unexpected error occurred. Please contact support with the trace_id.",
-            "trace_id": trace_id,
-            "timestamp": time.time()
-        }
-        
-    else:
-        content = {
-            "error": "Client error",
-            "detail": exc.detail,
-            "trace_id": trace_id,
-            "timestamp": time.time()
-        }
+    )
     
+    # Return formatted error response
     return JSONResponse(
         status_code=exc.status_code,
-        content=content,
-        headers=headers
+        content={
+            "error": f"HTTP {exc.status_code}",  # Simple status message
+            "detail": exc.detail,
+            "trace_id": getattr(request.state, "trace_id", None),
+            "timestamp": datetime.utcnow().isoformat()
+        }
     )
+
+
+
+
+
 
 
 async def validation_exception_handler(request: Request, exc: Exception) -> JSONResponse:

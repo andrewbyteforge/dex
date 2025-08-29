@@ -421,6 +421,8 @@ const Autotrade = ({ systemHealth }) => {
      */
     const handleWalletApprovalComplete = useCallback(async (approvalResult) => {
         console.log('Wallet approval completed:', approvalResult);
+        console.log('Approval result keys:', Object.keys(approvalResult || {}));
+        console.log('Approval result full structure:', JSON.stringify(approvalResult, null, 2));
         
         // Immediately set approval status based on successful completion
         if (approvalResult && (approvalResult.status === 'approved' || approvalResult.success)) {
@@ -438,6 +440,7 @@ const Autotrade = ({ systemHealth }) => {
                     perTradeLimitUsd: parseFloat(approvalResult.spending_limits.per_trade_limit_usd || approvalResult.spending_limits.perTradeLimitUsd || 100),
                     dailySpentUsd: parseFloat(approvalResult.spending_limits.daily_spent_usd || approvalResult.spending_limits.dailySpentUsd || 0)
                 };
+                console.log('Found spending limits in result:', spendingLimits);
             } else if (approvalResult.daily_limit_usd && approvalResult.per_trade_limit_usd) {
                 // Check if limits are at root level
                 spendingLimits = {
@@ -445,9 +448,11 @@ const Autotrade = ({ systemHealth }) => {
                     perTradeLimitUsd: parseFloat(approvalResult.per_trade_limit_usd),
                     dailySpentUsd: parseFloat(approvalResult.daily_spent_usd || 0)
                 };
+                console.log('Found spending limits at root level:', spendingLimits);
             } else {
                 // If no limits in result, try to get them from the current approval data being processed
-                console.log('[Autotrade] No spending limits in approval result, will refresh from backend');
+                console.log('[Autotrade] No spending limits in approval result - using defaults');
+                console.log('[Autotrade] Available approval result fields:', Object.keys(approvalResult));
             }
 
             setWalletApprovalStatus({
@@ -480,7 +485,7 @@ const Autotrade = ({ systemHealth }) => {
                 startAutotrade(modeToStart);
             }, 500);
         }
-    }, [checkWalletApprovalStatus, pendingStartMode, startAutotrade, selectedChain]);
+    }, [pendingStartMode, startAutotrade, selectedChain]);
 
     /**
      * Force approval flow for testing/security (can be removed in production)

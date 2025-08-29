@@ -9,9 +9,10 @@ File: backend/app/api/wallet_funding.py
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 from typing import Dict, List, Optional, Any
+import uuid
 
 from fastapi import APIRouter, HTTPException, Header, status
 from pydantic import BaseModel, Field, validator
@@ -186,15 +187,14 @@ async def request_wallet_approval(
         )
         
         # Generate simple approval ID
-        import uuid
         approval_id = str(uuid.uuid4())[:8]
         
-        # Store in pending approvals
+        # Store in pending approvals with float conversion for limits
         PENDING_APPROVALS[approval_id] = {
             'wallet_address': request.wallet_address,
             'chain': request.chain,
-            'daily_limit_usd': str(request.daily_limit_usd),
-            'per_trade_limit_usd': str(request.per_trade_limit_usd),
+            'daily_limit_usd': float(request.daily_limit_usd),
+            'per_trade_limit_usd': float(request.per_trade_limit_usd),
             'approval_duration_hours': request.approval_duration_hours,
             'requested_at': datetime.now(timezone.utc),
             'status': 'pending'
@@ -227,6 +227,8 @@ async def confirm_wallet_approval(
 ) -> Dict[str, Any]:
     """
     Confirm or reject a pending wallet approval.
+    
+    Returns complete approval details including spending limits.
     """
     try:
         logger.info(
@@ -244,20 +246,61 @@ async def confirm_wallet_approval(
                 detail="Approval request not found or expired"
             )
         
-        approval = PENDING_APPROVALS.pop(approval_id)
-        status_message = "approved" if request.confirmed else "rejected"
+        approval = PENDING_APPROVALS[approval_id]
         
+        # Update approval status
+        status_message = "approved" if request.confirmed else "rejected"
+        approval['status'] = status_message
+        approval['confirmed_at'] = datetime.now(timezone.utc)
+        
+        # Prepare spending limits structure
+        spending_limits = {
+            "daily_limit_usd": approval['daily_limit_usd'],
+            "per_trade_limit_usd": approval['per_trade_limit_usd'],
+            "daily_spent_usd": 0.0,
+            "last_reset": datetime.now(timezone.utc).isoformat(),
+            "approval_expires_at": (
+                datetime.now(timezone.utc) + 
+                timedelta(hours=approval['approval_duration_hours'])
+            ).isoformat()
+        }
+        
+        # Store approved wallet with spending limits
         if request.confirmed:
             chain = approval['chain']
             if chain not in APPROVED_WALLETS:
                 APPROVED_WALLETS[chain] = {}
-            APPROVED_WALLETS[chain][approval['wallet_address']] = approval
+            
+            APPROVED_WALLETS[chain][approval['wallet_address']] = {
+                **approval,
+                'spending_limits': spending_limits
+            }
+            
+            logger.info(
+                f"Wallet approved with spending limits",
+                extra={
+                    'trace_id': x_trace_id,
+                    'approval_id': approval_id,
+                    'wallet_address': approval['wallet_address'],
+                    'chain': chain,
+                    'daily_limit': spending_limits['daily_limit_usd'],
+                    'per_trade_limit': spending_limits['per_trade_limit_usd']
+                }
+            )
         
+        # Remove from pending approvals after processing
+        PENDING_APPROVALS.pop(approval_id)
+        
+        # Return complete approval response with spending limits
         return {
             "approval_id": approval_id,
             "status": status_message,
-            "confirmed_at": datetime.now(timezone.utc).isoformat(),
-            "message": f"Wallet approval {status_message} successfully"
+            "confirmed_at": approval['confirmed_at'].isoformat(),
+            "message": f"Wallet approval {status_message} successfully",
+            "spending_limits": spending_limits if request.confirmed else None,  # THIS IS CRITICAL
+            "wallet_address": approval['wallet_address'],
+            "chain": approval['chain'],
+            "approval_duration_hours": approval['approval_duration_hours']
         }
         
     except HTTPException:
@@ -278,18 +321,67 @@ async def check_spending_limits(
 ) -> SpendingCheckResponse:
     """
     Check if a proposed trade amount is within approved spending limits.
+    
+    Validates against both per-trade and daily limits.
     """
     try:
-        logger.info(f"Checking spending limits for {chain}: ${trade_amount_usd}")
+        logger.info(
+            f"Checking spending limits",
+            extra={
+                'trace_id': x_trace_id,
+                'chain': chain,
+                'trade_amount': str(trade_amount_usd)
+            }
+        )
         
-        # Mock response for demo
+        # Check if chain has approved wallets
+        if chain.lower() not in APPROVED_WALLETS or not APPROVED_WALLETS[chain.lower()]:
+            return SpendingCheckResponse(
+                allowed=False,
+                reason="No approved wallet for this chain",
+                details="Please approve a wallet for autotrade operations first"
+            )
+        
+        # Get first approved wallet for the chain
+        wallet_data = list(APPROVED_WALLETS[chain.lower()].values())[0]
+        spending_limits = wallet_data.get('spending_limits', {})
+        
+        per_trade_limit = Decimal(str(spending_limits.get('per_trade_limit_usd', 1000)))
+        daily_limit = Decimal(str(spending_limits.get('daily_limit_usd', 5000)))
+        daily_spent = Decimal(str(spending_limits.get('daily_spent_usd', 0)))
+        
+        # Check per-trade limit
+        if trade_amount_usd > per_trade_limit:
+            return SpendingCheckResponse(
+                allowed=False,
+                reason="Exceeds per-trade limit",
+                details=f"Trade amount ${trade_amount_usd} exceeds limit of ${per_trade_limit}",
+                per_trade_limit=str(per_trade_limit),
+                daily_limit=str(daily_limit),
+                current_daily_spending=str(daily_spent),
+                remaining_daily_limit=str(daily_limit - daily_spent)
+            )
+        
+        # Check daily limit
+        if daily_spent + trade_amount_usd > daily_limit:
+            return SpendingCheckResponse(
+                allowed=False,
+                reason="Exceeds daily limit",
+                details=f"Trade would exceed daily limit of ${daily_limit}",
+                per_trade_limit=str(per_trade_limit),
+                daily_limit=str(daily_limit),
+                current_daily_spending=str(daily_spent),
+                remaining_daily_limit=str(daily_limit - daily_spent)
+            )
+        
+        # Trade is within limits
         return SpendingCheckResponse(
-            allowed=trade_amount_usd <= Decimal('1000'),
-            reason="Within limits" if trade_amount_usd <= Decimal('1000') else "Exceeds per-trade limit",
-            per_trade_limit="1000.00",
-            daily_limit="5000.00",
-            current_daily_spending="500.00",
-            remaining_daily_limit="4500.00"
+            allowed=True,
+            reason="Within limits",
+            per_trade_limit=str(per_trade_limit),
+            daily_limit=str(daily_limit),
+            current_daily_spending=str(daily_spent),
+            remaining_daily_limit=str(daily_limit - daily_spent)
         )
         
     except Exception as e:
@@ -307,6 +399,8 @@ async def revoke_wallet_approval(
 ) -> Dict[str, Any]:
     """
     Revoke wallet approval for a specific chain.
+    
+    Removes all approved wallets for the specified chain.
     """
     try:
         if chain.lower() in APPROVED_WALLETS:
@@ -348,17 +442,22 @@ async def get_approved_wallet(
     x_trace_id: Optional[str] = Header(None, alias="X-Trace-ID")
 ) -> Dict[str, Any]:
     """
-    Get the approved wallet address for a specific chain.
+    Get the approved wallet address and spending limits for a specific chain.
+    
+    Returns the first approved wallet if multiple exist.
     """
     try:
         if chain.lower() in APPROVED_WALLETS and APPROVED_WALLETS[chain.lower()]:
             # Return first approved wallet for the chain
             wallet_address = list(APPROVED_WALLETS[chain.lower()].keys())[0]
+            wallet_data = APPROVED_WALLETS[chain.lower()][wallet_address]
             
             return {
                 "chain": chain.lower(),
                 "wallet_address": wallet_address,
-                "status": "approved"
+                "status": "approved",
+                "spending_limits": wallet_data.get('spending_limits'),
+                "approved_at": wallet_data.get('confirmed_at', datetime.now(timezone.utc)).isoformat()
             }
         
         raise HTTPException(
