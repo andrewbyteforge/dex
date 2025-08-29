@@ -602,14 +602,18 @@ const WalletConnect = ({
             {balances.native && (
               <div className="d-flex justify-content-between mb-2">
                 <span>{chains[selectedChain]?.symbol || 'Native'}</span>
-                <span className="fw-bold">{balances.native}</span>
+                <span className="fw-bold">
+                {typeof balances.native === 'object' 
+                  ? balances.native.balance || balances.native 
+                  : balances.native}
+              </span>
               </div>
             )}
             
             {balances.tokens && Object.entries(balances.tokens).map(([symbol, balance]) => (
               <div key={symbol} className="d-flex justify-content-between mb-1">
                 <span className="text-muted">{symbol}</span>
-                <span>{balance}</span>
+                <span>{typeof balance === 'object' ? balance.balance || balance : balance}</span>
               </div>
             ))}
           </div>
