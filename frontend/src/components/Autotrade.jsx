@@ -132,7 +132,6 @@ const Autotrade = ({ systemHealth }) => {
             // Existing typed handling for analysis/status
             switch (data.type) {
                 case 'ai_status':
-                    // data.status may be 'analyzing', 'ready', etc.
                     setAiStatus(data.status || 'connected');
                     if (data.status === 'analyzing') {
                         addAiThought('Analyzing new trading opportunity...', 'info');
@@ -166,7 +165,7 @@ const Autotrade = ({ systemHealth }) => {
     // EXTRA: Connect to AI WebSocket for "thinking/decision" stream when autotrade enabled
     useEffect(() => {
         if (isAutotradeEnabled) {
-            const ws = new WebSocket('ws://localhost:8001/api/autotrade-ai/ws');
+            const ws = new WebSocket(`ws://localhost:8001/ws/intelligence/${walletAddress}`);
             
             ws.onmessage = (event) => {
                 const data = JSON.parse(event.data);
@@ -831,13 +830,38 @@ const Autotrade = ({ systemHealth }) => {
                           <Brain size={20} />
                           <h5 className="mb-0">AI Intelligence</h5>
                         </div>
-                        <Badge bg={
-                          aiStatus === 'analyzing' ? 'warning' : 
-                          aiStatus === 'connected' ? 'success' : 
-                          aiStatus === 'error' ? 'danger' : 'secondary'
-                        }>
-                          {aiStatus}
-                        </Badge>
+
+                        <div className="d-flex align-items-center gap-2">
+                          <Badge bg={
+                            aiStatus === 'analyzing' ? 'warning' : 
+                            aiStatus === 'connected' ? 'success' : 
+                            aiStatus === 'error' ? 'danger' : 'secondary'
+                          }>
+                            {aiStatus}
+                          </Badge>
+
+                          {/* Add this button for testing */}
+                        <Button
+                        variant="outline-primary"
+                        size="sm"
+                        disabled={!intelligenceWs || intelligenceWs.readyState !== WebSocket.OPEN}
+                        onClick={() => {
+                            intelligenceWs?.send(JSON.stringify({
+                            type: "analyze",
+                            token_data: {
+                                address: "0xtest123",
+                                chain: selectedChain || "ethereum",
+                                liquidity: 100000,
+                                volume: 50000,
+                                holders: 500,
+                                age_hours: 24
+                            }
+                            }));
+                        }}
+                        >
+                        Test AI Analysis
+                        </Button>
+                        </div>
                       </div>
                     </Card.Header>
                     <Card.Body style={{ maxHeight: '400px', overflowY: 'auto' }}>

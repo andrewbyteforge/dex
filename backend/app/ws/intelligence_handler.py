@@ -20,32 +20,39 @@ class IntelligenceWebSocketManager:
         self.active_connections[wallet_address] = websocket
         logger.info(f"AI Intelligence WebSocket connected for {wallet_address}")
         
+        # Send initial connection confirmation
+        await websocket.send_json({
+            "type": "connected",
+            "message": "AI Intelligence connected and ready"
+        })
+        
     def disconnect(self, wallet_address: str):
         if wallet_address in self.active_connections:
             del self.active_connections[wallet_address]
             logger.info(f"AI Intelligence WebSocket disconnected for {wallet_address}")
     
-    async def analyze_and_broadcast(self, wallet_address: str, token_data: dict):
-        """Analyze token and broadcast AI thinking to connected client."""
+    async def process_message(self, wallet_address: str, data: dict):
+        """Process incoming messages and send AI analysis."""
         if wallet_address not in self.active_connections:
             return
             
         websocket = self.active_connections[wallet_address]
         
-        try:
-            # Send initial thinking message
+        if data.get("type") == "analyze":
+            token_data = data.get("token_data", {})
+            
+            # Send thinking messages
             await websocket.send_json({
                 "type": "ai_thinking",
                 "message": "🔍 Analyzing token metrics...",
                 "status": "analyzing"
             })
             
-            # Simulate AI thinking with small delay
             await asyncio.sleep(0.5)
             
             # Calculate risk score
             risk_factors = RiskFactors(
-                token_address=token_data.get("address", ""),
+                token_address=token_data.get("address", "0x0"),
                 chain=token_data.get("chain", "ethereum"),
                 liquidity_usd=Decimal(str(token_data.get("liquidity", 0))),
                 volume_24h=Decimal(str(token_data.get("volume", 0))),
@@ -55,7 +62,6 @@ class IntelligenceWebSocketManager:
             
             risk_score = await self.risk_scorer.calculate_risk_score(risk_factors)
             
-            # Send risk assessment
             await websocket.send_json({
                 "type": "ai_thinking",
                 "message": f"📊 Risk Score: {risk_score.total_score}/100 ({risk_score.risk_level})",
@@ -83,26 +89,15 @@ class IntelligenceWebSocketManager:
             await asyncio.sleep(0.3)
             
             # Final decision
-            decision = "APPROVED" if risk_score.recommendation in ["trade", "consider"] else "BLOCKED"
+            decision = "approved" if risk_score.recommendation in ["trade", "consider"] else "blocked"
             
             await websocket.send_json({
                 "type": "ai_decision",
-                "decision": decision.lower(),
+                "decision": decision,
                 "risk_score": risk_score.total_score,
                 "risk_level": risk_score.risk_level,
-                "recommendation": risk_score.recommendation,
-                "message": f"{'✅' if decision == 'APPROVED' else '❌'} {decision}: {risk_score.recommendation.upper()}",
-                "suggested_position": float(risk_score.suggested_position_percent),
-                "suggested_slippage": float(risk_score.suggested_slippage),
+                "message": f"{'✅ APPROVED' if decision == 'approved' else '❌ BLOCKED'}: {risk_score.recommendation.upper()}",
                 "status": "complete"
-            })
-            
-        except Exception as e:
-            logger.error(f"Error in AI analysis broadcast: {e}")
-            await websocket.send_json({
-                "type": "ai_error",
-                "message": "AI analysis failed",
-                "status": "error"
             })
 
 manager = IntelligenceWebSocketManager()

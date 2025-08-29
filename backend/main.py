@@ -26,9 +26,6 @@ from app.core.middleware_setup import (
 # Feature routers
 from app.api.ai_intelligence import router as ai_router  # <-- Added
 
-# Intelligence WS manager (NEW)
-from app.ws.intelligence_handler import manager as intelligence_manager  # <-- Added
-
 # Initialize structured logging FIRST
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -56,20 +53,84 @@ register_core_routers(app)
 app.include_router(ai_router, prefix="", tags=["AI Intelligence"])  # <-- Updated
 app.include_router(autotrade_ai_router)
 
-# Intelligence WebSocket endpoint (REPLACED to use intelligence_manager)
+# --------------------------------------------------------------------
+# Wallet-specific AI Intelligence WebSocket (inline analysis handler)
+# --------------------------------------------------------------------
 @app.websocket("/ws/intelligence/{wallet_address}")
-async def intelligence_websocket(websocket: WebSocket, wallet_address: str):
-    await intelligence_manager.connect(websocket, wallet_address)
+async def intelligence_wallet_websocket(websocket: WebSocket, wallet_address: str):
+    """WebSocket endpoint for wallet-specific AI intelligence updates."""
+    await websocket.accept()
+    logger.info(f"AI Intelligence WebSocket connected for {wallet_address}")
+    
+    # Send connection confirmation
+    await websocket.send_json({
+        "type": "connected",
+        "message": "AI Intelligence connected and ready"
+    })
+    
     try:
         while True:
+            # Receive messages from frontend
             data = await websocket.receive_json()
+            
             if data.get("type") == "analyze":
-                await intelligence_manager.analyze_and_broadcast(
-                    wallet_address,
-                    data.get("token_data", {})
+                # Import here to avoid potential circular imports
+                from app.strategy.risk_scoring import RiskScorer, RiskFactors
+                from decimal import Decimal
+                import asyncio
+                
+                token_data = data.get("token_data", {})
+                
+                # Send thinking messages
+                await websocket.send_json({
+                    "type": "ai_thinking",
+                    "message": "🔍 Analyzing token metrics...",
+                    "status": "analyzing"
+                })
+                
+                await asyncio.sleep(0.5)
+                
+                # Calculate risk score
+                scorer = RiskScorer()
+                risk_factors = RiskFactors(
+                    token_address=token_data.get("address", "0x0"),
+                    chain=token_data.get("chain", "ethereum"),
+                    liquidity_usd=Decimal(str(token_data.get("liquidity", 0))),
+                    volume_24h=Decimal(str(token_data.get("volume", 0))),
+                    holder_count=token_data.get("holders", 0),
+                    contract_age_hours=token_data.get("age_hours", 0)
                 )
+                
+                risk_score = await scorer.calculate_risk_score(risk_factors)
+                
+                await websocket.send_json({
+                    "type": "ai_thinking",
+                    "message": f"📊 Risk Score: {risk_score.total_score}/100 ({risk_score.risk_level})",
+                    "status": "analyzing"
+                })
+                
+                await asyncio.sleep(0.3)
+                
+                # Send decision
+                decision = "approved" if risk_score.total_score < 60 else "blocked"
+                
+                await websocket.send_json({
+                    "type": "ai_decision",
+                    "decision": decision,
+                    "risk_score": risk_score.total_score,
+                    "risk_level": risk_score.risk_level,
+                    "message": f"{'✅ APPROVED' if decision == 'approved' else '❌ BLOCKED'}: {risk_score.recommendation.upper()}",
+                    "status": "complete"
+                })
+                
     except WebSocketDisconnect:
-        intelligence_manager.disconnect(wallet_address)
+        logger.info(f"AI WebSocket disconnected for wallet {wallet_address}")
+    except Exception as e:
+        logger.error(f"AI WebSocket error for {wallet_address}: {e}")
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     import uvicorn
