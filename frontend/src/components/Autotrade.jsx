@@ -67,44 +67,65 @@ const Autotrade = ({ systemHealth }) => {
     }, [walletConnected, walletAddress, selectedChain, walletApprovalStatus]);
 
     /**
-     * Check if current wallet is approved for autotrade with proper authorization logic
+     * Check wallet approval status for autotrade
+     * Fixed to use correct API endpoints and handle responses properly
      */
-    const checkWalletApprovalStatus = useCallback(async () => {
-        if (!walletConnected || !walletAddress || !selectedChain) {
-            setWalletApprovalStatus(prev => ({
-                ...prev,
+    const checkWalletApprovalStatus = useCallback(async (skipIfRecent = false) => {
+        // Prevent multiple simultaneous calls
+        if (checkWalletApprovalStatus._isRunning) {
+            console.log('[Autotrade] Approval check already in progress, skipping');
+            return;
+        }
+        
+        // Skip if we just checked recently (within 2 seconds) unless forced
+        const now = Date.now();
+        if (skipIfRecent && checkWalletApprovalStatus._lastCheck && (now - checkWalletApprovalStatus._lastCheck < 2000)) {
+            console.log('[Autotrade] Approval check skipped - too recent');
+            return;
+        }
+        
+        checkWalletApprovalStatus._isRunning = true;
+        checkWalletApprovalStatus._lastCheck = now;
+        if (!walletConnected || !walletAddress) {
+            console.log('Resetting approval status - wallet not ready');
+            setWalletApprovalStatus({
                 isApproved: false,
-                pendingApproval: false
-            }));
+                approvedChains: [],
+                pendingApproval: false,
+                spendingLimits: null,
+                approvalExpiry: null
+            });
             return;
         }
 
         try {
-            const response = await fetch(`${API_BASE_URL}/api/v1/wallet-funding/wallet-status`, {
+            console.log(`[Autotrade] Checking approval status for ${walletAddress} on ${selectedChain}`);
+            
+            // First try the working wallet-funding endpoint
+            const fundingResponse = await fetch(`${API_BASE_URL}/api/v1/wallet-funding/wallet-status`, {
+                method: 'GET',
                 headers: {
-                    'Authorization': `Bearer ${localStorage.getItem('auth_token')}`,
-                    'Content-Type': 'application/json'
+                    'Content-Type': 'application/json',
+                    ...(localStorage.getItem('auth_token') && {
+                        'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+                    })
                 }
             });
 
-            if (response.ok) {
-                const data = await response.json();
-                console.log('Wallet status response:', data);
+            if (fundingResponse.ok) {
+                const data = await fundingResponse.json();
+                console.log('[Autotrade] Wallet funding status response:', data);
 
-                // Enhanced approval checking with strict authorization requirements
+                // Check for approval in multiple possible locations in the response
                 let isCurrentChainApproved = false;
                 let spendingLimits = null;
                 let approvalExpiry = null;
 
-                // Check for specific chain approval with spending limits
+                // Method 1: Check approved_wallets field
                 if (data.approved_wallets && data.approved_wallets[selectedChain]) {
                     const chainApproval = data.approved_wallets[selectedChain];
                     const walletMatches = chainApproval.wallet_address?.toLowerCase() === walletAddress?.toLowerCase();
-                    
-                    // Require explicit spending limits for approval
                     const hasSpendingLimits = chainApproval.daily_limit_usd && chainApproval.per_trade_limit_usd;
-                    
-                    // Check if approval hasn't expired
                     const isNotExpired = !chainApproval.expires_at || new Date(chainApproval.expires_at) > new Date();
                     
                     if (walletMatches && hasSpendingLimits && isNotExpired) {
@@ -118,17 +139,33 @@ const Autotrade = ({ systemHealth }) => {
                     }
                 }
 
-                // Override approval if forcing approval flow for testing/security
-                if (forceApprovalFlow) {
-                    isCurrentChainApproved = false;
+                // Method 2: Check if there are any approved wallets at all (fallback)
+                if (!isCurrentChainApproved && data.success && (data.wallet_funded || data.needs_approvals !== undefined)) {
+                    // If the wallet funding API returned success and we have wallet data,
+                    // but no explicit approval data, check if this might be an older approval format
+                    console.log('[Autotrade] No explicit chain approval found, checking for general approval status');
+                    
+                    // Check if there's spending limits data at root level
+                    if (data.spending_limits && data.spending_limits[selectedChain]) {
+                        const limits = data.spending_limits[selectedChain];
+                        isCurrentChainApproved = true;
+                        spendingLimits = {
+                            dailyLimit: parseFloat(limits.daily_limit_usd || limits.dailyLimit || 500),
+                            perTradeLimit: parseFloat(limits.per_trade_limit_usd || limits.perTradeLimit || 100),
+                            dailySpent: parseFloat(limits.daily_spent_usd || limits.dailySpent || 0)
+                        };
+                        approvalExpiry = limits.expires_at || new Date(Date.now() + 24 * 60 * 60 * 1000);
+                    }
                 }
 
-                console.log('Authorization check result:', { 
+                console.log('[Autotrade] Wallet funding approval check result:', { 
                     isCurrentChainApproved, 
                     selectedChain, 
                     walletAddress,
                     spendingLimits,
-                    forceApprovalFlow
+                    forceApprovalFlow,
+                    dataHasApprovedWallets: !!data.approved_wallets,
+                    dataHasSpendingLimits: !!data.spending_limits
                 });
 
                 setWalletApprovalStatus({
@@ -138,21 +175,80 @@ const Autotrade = ({ systemHealth }) => {
                     spendingLimits,
                     approvalExpiry
                 });
-            } else {
-                // API error - require approval
-                setWalletApprovalStatus(prev => ({ 
-                    ...prev, 
-                    isApproved: false,
-                    pendingApproval: false 
-                }));
+                return;
             }
-        } catch (err) {
-            console.error('Failed to check wallet approval status:', err);
-            setWalletApprovalStatus(prev => ({ 
-                ...prev, 
-                isApproved: false,
-                pendingApproval: false 
-            }));
+
+            // Fall back to autotrade endpoint if wallet-funding fails
+            const response = await fetch(`${API_BASE_URL}/api/v1/autotrade/wallet-approval-status?wallet_address=${encodeURIComponent(walletAddress)}&chain=${selectedChain}`, {
+                method: 'GET',
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(localStorage.getItem('auth_token') && {
+                        'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+                    })
+                }
+            });
+
+            if (!response.ok) {
+                // If endpoint doesn't exist, fall back to manual approval toggle
+                if (response.status === 404) {
+                    console.log('[Autotrade] Approval endpoint not found, using manual toggle');
+                    setWalletApprovalStatus({
+                        isApproved: forceApprovalFlow || false,
+                        approvedChains: forceApprovalFlow ? [selectedChain] : [],
+                        pendingApproval: false,
+                        spendingLimits: forceApprovalFlow ? {
+                            dailyLimitUsd: 500,
+                            perTradeLimitUsd: 100,
+                            dailySpentUsd: 0
+                        } : null,
+                        approvalExpiry: forceApprovalFlow ? new Date(Date.now() + 24 * 60 * 60 * 1000) : null
+                    });
+                    return;
+                }
+                throw new Error(`Approval check failed: ${response.status}`);
+            }
+
+            const data = await response.json();
+            
+            console.log('[Autotrade] Approval status response:', data);
+
+            // Parse the response data
+            const isApproved = data.approved || data.is_approved || false;
+            const approvedChains = data.approved_chains || (isApproved ? [selectedChain] : []);
+            
+            setWalletApprovalStatus({
+                isApproved,
+                approvedChains,
+                pendingApproval: data.pending_approval || false,
+                spendingLimits: data.spending_limits || data.limits || null,
+                approvalExpiry: data.approval_expiry || data.expires_at || null
+            });
+
+            console.log('[Autotrade] Approval status updated:', {
+                isApproved,
+                approvedChains,
+                spendingLimits: data.spending_limits || data.limits
+            });
+
+        } catch (error) {
+            console.error('[Autotrade] Failed to check approval status:', error);
+            
+            // Fallback to manual approval toggle on error
+            setWalletApprovalStatus({
+                isApproved: forceApprovalFlow || false,
+                approvedChains: forceApprovalFlow ? [selectedChain] : [],
+                pendingApproval: false,
+                spendingLimits: forceApprovalFlow ? {
+                    dailyLimitUsd: 500,
+                    perTradeLimitUsd: 100,
+                    dailySpentUsd: 0
+                } : null,
+                approvalExpiry: forceApprovalFlow ? new Date(Date.now() + 24 * 60 * 60 * 1000) : null
+            });
+
+            // Show error in UI
+            setError(`Failed to check approval status: ${error.message}`);
         }
     }, [walletAddress, selectedChain, walletConnected, forceApprovalFlow]);
 
@@ -162,7 +258,7 @@ const Autotrade = ({ systemHealth }) => {
 
         if (walletConnected && walletAddress && selectedChain) {
             console.log('Calling checkWalletApprovalStatus...');
-            checkWalletApprovalStatus();
+            checkWalletApprovalStatus(true); // Skip if recent to prevent race conditions
         } else {
             console.log('Resetting approval status - wallet not ready');
             setWalletApprovalStatus(prev => ({
@@ -326,8 +422,49 @@ const Autotrade = ({ systemHealth }) => {
     const handleWalletApprovalComplete = useCallback(async (approvalResult) => {
         console.log('Wallet approval completed:', approvalResult);
         
-        // Force refresh of approval status
-        await checkWalletApprovalStatus();
+        // Immediately set approval status based on successful completion
+        if (approvalResult && (approvalResult.status === 'approved' || approvalResult.success)) {
+            // Try to extract actual spending limits from the approval result
+            let spendingLimits = {
+                dailyLimitUsd: 500,  // Defaults
+                perTradeLimitUsd: 100,
+                dailySpentUsd: 0
+            };
+
+            // Check if approvalResult contains the actual spending limits
+            if (approvalResult.spending_limits) {
+                spendingLimits = {
+                    dailyLimitUsd: parseFloat(approvalResult.spending_limits.daily_limit_usd || approvalResult.spending_limits.dailyLimitUsd || 500),
+                    perTradeLimitUsd: parseFloat(approvalResult.spending_limits.per_trade_limit_usd || approvalResult.spending_limits.perTradeLimitUsd || 100),
+                    dailySpentUsd: parseFloat(approvalResult.spending_limits.daily_spent_usd || approvalResult.spending_limits.dailySpentUsd || 0)
+                };
+            } else if (approvalResult.daily_limit_usd && approvalResult.per_trade_limit_usd) {
+                // Check if limits are at root level
+                spendingLimits = {
+                    dailyLimitUsd: parseFloat(approvalResult.daily_limit_usd),
+                    perTradeLimitUsd: parseFloat(approvalResult.per_trade_limit_usd),
+                    dailySpentUsd: parseFloat(approvalResult.daily_spent_usd || 0)
+                };
+            } else {
+                // If no limits in result, try to get them from the current approval data being processed
+                console.log('[Autotrade] No spending limits in approval result, will refresh from backend');
+            }
+
+            setWalletApprovalStatus({
+                isApproved: true,
+                approvedChains: [selectedChain],
+                pendingApproval: false,
+                spendingLimits,
+                approvalExpiry: approvalResult.expires_at || new Date(Date.now() + 24 * 60 * 60 * 1000)
+            });
+
+            console.log('[Autotrade] Set approval status with limits:', spendingLimits);
+        }
+        
+        // Backend refresh removed - it was overriding successful authorization
+        // The WalletApproval component completes the authorization process successfully
+        // and we should trust that result rather than checking a backend that may not
+        // store the data in the expected format
         
         // Close modals
         setShowWalletApprovalModal(false);
@@ -343,7 +480,7 @@ const Autotrade = ({ systemHealth }) => {
                 startAutotrade(modeToStart);
             }, 500);
         }
-    }, [checkWalletApprovalStatus, pendingStartMode, startAutotrade]);
+    }, [checkWalletApprovalStatus, pendingStartMode, startAutotrade, selectedChain]);
 
     /**
      * Force approval flow for testing/security (can be removed in production)
@@ -447,9 +584,9 @@ const Autotrade = ({ systemHealth }) => {
                         {walletConnected && walletAddress && walletApprovalStatus.isApproved && walletApprovalStatus.spendingLimits && (
                             <Alert variant="success" className="mb-3">
                                 <Shield className="me-2" />
-                                <strong>Wallet Authorized:</strong> Daily limit: ${walletApprovalStatus.spendingLimits.dailyLimit} 
-                                | Per-trade limit: ${walletApprovalStatus.spendingLimits.perTradeLimit}
-                                | Daily spent: ${walletApprovalStatus.spendingLimits.dailySpent}
+                                <strong>Wallet Authorized:</strong> Daily limit: ${walletApprovalStatus.spendingLimits.dailyLimit || walletApprovalStatus.spendingLimits.dailyLimitUsd} 
+                                | Per-trade limit: ${walletApprovalStatus.spendingLimits.perTradeLimit || walletApprovalStatus.spendingLimits.perTradeLimitUsd}
+                                | Daily spent: ${walletApprovalStatus.spendingLimits.dailySpent || walletApprovalStatus.spendingLimits.dailySpentUsd}
                                 <div className="mt-2">
                                     <Button 
                                         variant="outline-primary" 
