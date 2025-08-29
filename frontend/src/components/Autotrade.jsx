@@ -1,11 +1,11 @@
 /**
- * Enhanced Autotrade dashboard component with Secure Wallet Funding Integration
- * SECURITY: Integrates wallet approval system with user confirmation before trading
- *
+ * Enhanced Autotrade dashboard component with comprehensive debugging for polling issues
+ * FIXED: Removed function dependencies from polling useEffect to prevent interval recreation
+ * 
  * File: frontend/src/components/Autotrade.jsx
  */
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Container, Row, Col, Card, Button, Badge, Alert, Spinner, Nav, Modal, ProgressBar } from 'react-bootstrap';
 import { Play, Pause, Square, Activity, AlertTriangle, Wifi, WifiOff, RefreshCw, Settings, Brain, Shield, CheckCircle } from 'lucide-react';
 
@@ -17,14 +17,18 @@ import WalletApproval from './WalletApproval';
 import useWebSocket from '../hooks/useWebSocket';
 import { useWallet } from '../hooks/useWallet';
 
-// Production polling configuration
+// FIXED: Production polling configuration with proper intervals
 const POLLING_INTERVALS = {
-    AUTOTRADE_STATUS: process.env.NODE_ENV === 'development' ? 5000 : 10000, // 5s dev, 10s prod
-    METRICS: process.env.NODE_ENV === 'development' ? 3000 : 15000,          // 3s dev, 15s prod
-    AI_DATA: process.env.NODE_ENV === 'development' ? 5000 : 20000           // 5s dev, 20s prod
+    AUTOTRADE_STATUS: import.meta.env.DEV ? 20000 : 10000,    // 20s dev, 10s prod
+    AUTOTRADE_SETTINGS: import.meta.env.DEV ? 60000 : 30000,  // 60s dev, 30s prod
+    AUTOTRADE_METRICS: import.meta.env.DEV ? 30000 : 15000,   // 30s dev, 15s prod
+    AI_DATA: import.meta.env.DEV ? 40000 : 20000              // 40s dev, 20s prod
 };
 
 const API_BASE_URL = 'http://localhost:8001';
+
+// Debug flag for enhanced logging
+const DEBUG_POLLING = localStorage.getItem('debug_polling') === 'true';
 
 /**
  * Enhanced Autotrade dashboard component with secure wallet funding
@@ -44,7 +48,7 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
     const [discoveryLoading, setDiscoveryLoading] = useState(false);
     const [discoveryResult, setDiscoveryResult] = useState(null);
     
-    // Test discovery UI state - UPDATED
+    // Test discovery UI state
     const [testDiscoveryResults, setTestDiscoveryResults] = useState(null);
     const [showTestResults, setShowTestResults] = useState(false);
     
@@ -53,6 +57,30 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
     const [wsKey] = useState(() => Date.now());
     const mountedRef = useRef(true);
     const retryTimeoutRef = useRef(null);
+    
+    // CRITICAL FIX: Track polling state and intervals
+    const pollingIntervalsRef = useRef({
+        status: null,
+        settings: null,
+        metrics: null,
+        ai: null
+    });
+    
+    // Track polling setup to prevent duplicates
+    const pollingSetupRef = useRef({
+        isSetup: false,
+        setupTime: null,
+        teardownTime: null
+    });
+    
+    // Track API call counts for debugging
+    const apiCallCountsRef = useRef({
+        status: 0,
+        settings: 0,
+        metrics: 0,
+        ai: 0,
+        lastReset: Date.now()
+    });
     
     // Autotrade engine state
     const [autotradeStatus, setAutotradeStatus] = useState({
@@ -72,8 +100,7 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
         last_updated: null
     });
 
-
-    // Missing autotrade settings state declaration
+    // Autotrade settings state
     const [autotradeSettings, setAutotradeSettings] = useState({
         strategy: 'conservative',
         max_position_size_usd: 100,
@@ -86,8 +113,7 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
         whitelist_protocols: []
     });
 
-
-    // Missing performance metrics state declaration  
+    // Performance metrics state  
     const [performanceMetrics, setPerformanceMetrics] = useState({
         opportunities_found: 0,
         opportunities_executed: 0,
@@ -119,15 +145,14 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
     const [retryCount, setRetryCount] = useState(0);
     const MAX_RETRY_ATTEMPTS = 3;
 
-    // Wallet integration - Fixed property names
+    // Wallet integration
     const { 
         isConnected: walletConnected,
         walletAddress: walletAddress,
         selectedChain: currentChain
     } = useWallet();
 
-    // FIX: Check both the hook state AND localStorage for connection status
-    // This handles cases where the hook hasn't synchronized yet
+    // Fixed wallet state handling
     const [walletStateFixed, setWalletStateFixed] = useState({
         connected: walletConnected,
         address: walletAddress,
@@ -137,7 +162,6 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
     // Update the fixed state whenever wallet state or localStorage changes
     useEffect(() => {
         const checkWalletState = () => {
-            // First check the hook state
             if (walletConnected && walletAddress) {
                 setWalletStateFixed({
                     connected: true,
@@ -147,7 +171,6 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
                 return;
             }
             
-            // Fallback to localStorage if hook reports disconnected
             const persistedConnection = localStorage.getItem('dex_wallet_connection');
             if (persistedConnection) {
                 try {
@@ -163,7 +186,6 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
                     // Keep current state if parse fails
                 }
             } else if (!walletConnected) {
-                // Only set disconnected if both sources agree
                 setWalletStateFixed({
                     connected: false,
                     address: null,
@@ -174,18 +196,16 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
 
         checkWalletState();
         
-        // Also check periodically to catch delayed updates
         const interval = setInterval(checkWalletState, 5000);
         return () => clearInterval(interval);
     }, [walletConnected, walletAddress, currentChain]);
 
-    // Use the fixed values throughout the component
     const walletConnectedFixed = walletStateFixed.connected;
     const walletAddressFixed = walletStateFixed.address;
     const currentChainFixed = walletStateFixed.chain;
 
     /**
-     * Production-ready logging with environment awareness
+     * Enhanced logging with polling debug support
      */
     const logMessage = useCallback((level, message, data = {}) => {
         const logEntry = {
@@ -196,6 +216,11 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
             message,
             ...data
         };
+
+        // Always log polling-related messages when debugging
+        if (DEBUG_POLLING && (message.includes('poll') || message.includes('interval') || message.includes('API call'))) {
+            console.log(`[POLLING DEBUG] ${message}`, logEntry);
+        }
 
         if (import.meta.env.DEV || localStorage.getItem('debug_autotrade')) {
             switch (level) {
@@ -237,16 +262,371 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
 
         logMessage('error', `[Autotrade:${operation}]`, errorEntry);
         
-        // Track error history for debugging
         setErrorHistory(prev => [errorEntry, ...prev.slice(0, 9)]);
     }, [logMessage, wsKey]);
 
     /**
-     * SECURITY: Load wallet approval status
+     * Track API calls for debugging
      */
-/**
- * SECURITY: Load wallet approval status - FIXED approval validation
- */
+    const trackApiCall = useCallback((endpoint) => {
+        apiCallCountsRef.current[endpoint]++;
+        
+        // Log if we're getting too many calls
+        const now = Date.now();
+        const timeSinceReset = now - apiCallCountsRef.current.lastReset;
+        
+        if (timeSinceReset > 60000) { // Reset counts every minute
+            if (DEBUG_POLLING) {
+                logMessage('debug', 'API call counts (last minute)', {
+                    counts: { ...apiCallCountsRef.current },
+                    duration: timeSinceReset
+                });
+            }
+            apiCallCountsRef.current = {
+                status: 0,
+                settings: 0,
+                metrics: 0,
+                ai: 0,
+                lastReset: now
+            };
+        }
+        
+        // Warn if we're calling too frequently
+        if (apiCallCountsRef.current[endpoint] > 10) {
+            logMessage('warn', `High frequency API calls detected for ${endpoint}`, {
+                count: apiCallCountsRef.current[endpoint],
+                timeSinceReset
+            });
+        }
+    }, [logMessage]);
+
+    /**
+     * CRITICAL: Create stable references for API functions using useRef
+     * This prevents them from being recreated on every render
+     */
+    const apiHandlersRef = useRef({});
+
+    // Initialize API handlers once
+    useEffect(() => {
+        apiHandlersRef.current.loadStatus = async () => {
+            if (!backendAvailable || !mountedRef.current) return;
+            
+            trackApiCall('status');
+            
+            if (DEBUG_POLLING) {
+                logMessage('debug', 'loadStatus called', {
+                    caller: new Error().stack?.split('\n')[2],
+                    backendAvailable,
+                    mounted: mountedRef.current
+                });
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/v1/autotrade/status`, {
+                    method: 'GET',
+                    headers: { 'Content-Type': 'application/json' },
+                    signal: AbortSignal.timeout(5000)
+                });
+                
+                if (response.status === 429) {
+                    logMessage('warn', 'Status endpoint rate limited - backing off');
+                    return;
+                }
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    if (mountedRef.current) {
+                        setAutotradeStatus(data);
+                        setEngineMode(data.mode || 'disabled');
+                        setIsRunning(data.is_running || false);
+                    }
+                }
+            } catch (error) {
+                if (mountedRef.current && !error.name?.includes('Abort')) {
+                    logMessage('debug', 'Failed to load status', { error: error.message });
+                }
+            }
+        };
+
+        apiHandlersRef.current.loadSettings = async () => {
+            if (!backendAvailable || !mountedRef.current) return;
+            
+            trackApiCall('settings');
+            
+            if (DEBUG_POLLING) {
+                logMessage('debug', 'loadSettings called', {
+                    caller: new Error().stack?.split('\n')[2]
+                });
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/v1/autotrade/settings`, {
+                    method: 'GET',
+                    headers: { 'Content-Type': 'application/json' },
+                    signal: AbortSignal.timeout(5000)
+                });
+                
+                if (response.status === 429) {
+                    logMessage('warn', 'Settings endpoint rate limited - backing off');
+                    return;
+                }
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    if (mountedRef.current) {
+                        setAutotradeSettings(data.settings || data);
+                    }
+                } else if (response.status === 404) {
+                    if (mountedRef.current) {
+                        setAutotradeSettings({
+                            max_concurrent_trades: 5,
+                            max_queue_size: 50,
+                            opportunity_timeout_minutes: 10,
+                            execution_batch_size: 3
+                        });
+                    }
+                }
+            } catch (error) {
+                if (mountedRef.current && !error.name?.includes('Abort')) {
+                    logMessage('debug', 'Failed to load settings', { error: error.message });
+                }
+            }
+        };
+
+        apiHandlersRef.current.loadMetrics = async () => {
+            if (!backendAvailable || !mountedRef.current) return;
+            
+            trackApiCall('metrics');
+            
+            if (DEBUG_POLLING) {
+                logMessage('debug', 'loadMetrics called', {
+                    caller: new Error().stack?.split('\n')[2]
+                });
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/v1/autotrade/metrics`, {
+                    method: 'GET',
+                    headers: { 'Content-Type': 'application/json' },
+                    signal: AbortSignal.timeout(5000)
+                });
+                
+                if (response.status === 429) {
+                    logMessage('warn', 'Metrics endpoint rate limited - backing off');
+                    return;
+                }
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    if (mountedRef.current) {
+                        setPerformanceMetrics(data);
+                        setMetrics(data.metrics || data);
+                        setLastUpdate(new Date());
+                    }
+                }
+            } catch (error) {
+                if (mountedRef.current && !error.name?.includes('Abort')) {
+                    logMessage('debug', 'Failed to load metrics', { error: error.message });
+                }
+            }
+        };
+
+        apiHandlersRef.current.loadAIIntelligenceData = async () => {
+            if (!backendAvailable || !mountedRef.current) return;
+            
+            trackApiCall('ai');
+            
+            if (DEBUG_POLLING) {
+                logMessage('debug', 'loadAIIntelligenceData called', {
+                    caller: new Error().stack?.split('\n')[2]
+                });
+            }
+
+            try {
+                const recentResponse = await fetch(`${API_BASE_URL}/api/v1/intelligence/pairs/recent?limit=1`, {
+                    signal: AbortSignal.timeout(5000)
+                });
+                if (recentResponse.ok) {
+                    const recentData = await recentResponse.json();
+                    if (mountedRef.current && recentData.pairs?.length > 0) {
+                        const latestPair = recentData.pairs[0];
+                        setAiIntelligenceData({
+                            pair_address: latestPair.pair_address,
+                            token_symbol: latestPair.token_symbol,
+                            opportunity_level: latestPair.opportunity_level,
+                            ai_intelligence: latestPair.intelligence_data,
+                            timestamp: latestPair.analyzed_at
+                        });
+                    }
+                }
+
+                const regimeResponse = await fetch(`${API_BASE_URL}/api/v1/intelligence/market/regime`, {
+                    signal: AbortSignal.timeout(5000)
+                });
+                if (regimeResponse.ok) {
+                    const regimeData = await regimeResponse.json();
+                    if (mountedRef.current) {
+                        setMarketRegime({
+                            regime: regimeData.regime,
+                            confidence: regimeData.confidence,
+                            updated_at: regimeData.updated_at
+                        });
+                    }
+                }
+
+                const statsResponse = await fetch(`${API_BASE_URL}/api/v1/intelligence/stats/processing`, {
+                    signal: AbortSignal.timeout(5000)
+                });
+                if (statsResponse.ok) {
+                    const statsData = await statsResponse.json();
+                    if (mountedRef.current) {
+                        setAiStats(prev => ({
+                            ...prev,
+                            ...statsData.ai_intelligence_stats
+                        }));
+                    }
+                }
+            } catch (error) {
+                if (mountedRef.current && !error.name?.includes('Abort')) {
+                    logMessage('debug', 'AI intelligence data not available', { error: error.message });
+                }
+            }
+        };
+    }, [backendAvailable, trackApiCall, logMessage]);
+
+    /**
+     * CRITICAL FIX: Polling setup with no function dependencies
+     * This prevents the effect from re-running when functions are recreated
+     */
+    useEffect(() => {
+        // Skip if backend unavailable or WebSocket connected
+        if (!backendAvailable || wsConnected) {
+            if (pollingSetupRef.current.isSetup) {
+                logMessage('debug', 'Clearing polling due to conditions', {
+                    backendAvailable,
+                    wsConnected
+                });
+                
+                // Clear all intervals
+                Object.keys(pollingIntervalsRef.current).forEach(key => {
+                    if (pollingIntervalsRef.current[key]) {
+                        clearInterval(pollingIntervalsRef.current[key]);
+                        pollingIntervalsRef.current[key] = null;
+                    }
+                });
+                
+                pollingSetupRef.current.isSetup = false;
+                pollingSetupRef.current.teardownTime = Date.now();
+            }
+            return;
+        }
+
+        // Prevent duplicate setup
+        if (pollingSetupRef.current.isSetup) {
+            logMessage('warn', 'Polling already setup, skipping', {
+                setupTime: pollingSetupRef.current.setupTime,
+                intervals: Object.keys(pollingIntervalsRef.current).filter(k => pollingIntervalsRef.current[k] !== null)
+            });
+            return;
+        }
+
+        logMessage('info', 'Setting up polling intervals', {
+            intervals: {
+                status: POLLING_INTERVALS.AUTOTRADE_STATUS,
+                settings: POLLING_INTERVALS.AUTOTRADE_SETTINGS,
+                metrics: POLLING_INTERVALS.AUTOTRADE_METRICS,
+                ai: POLLING_INTERVALS.AI_DATA
+            }
+        });
+
+        // Use a setup delay to prevent immediate polling on mount
+        const setupDelay = setTimeout(() => {
+            if (!mountedRef.current) return;
+            
+            // Initial load with staggered starts
+            apiHandlersRef.current.loadStatus();
+            setTimeout(() => apiHandlersRef.current.loadSettings(), 500);
+            setTimeout(() => apiHandlersRef.current.loadMetrics(), 1000);
+            setTimeout(() => apiHandlersRef.current.loadAIIntelligenceData(), 1500);
+
+            // Set up intervals with staggered starts to prevent simultaneous calls
+            setTimeout(() => {
+                if (mountedRef.current && !pollingIntervalsRef.current.status) {
+                    pollingIntervalsRef.current.status = setInterval(
+                        apiHandlersRef.current.loadStatus,
+                        POLLING_INTERVALS.AUTOTRADE_STATUS
+                    );
+                    logMessage('debug', 'Status polling started', {
+                        interval: POLLING_INTERVALS.AUTOTRADE_STATUS
+                    });
+                }
+            }, 2000);
+
+            setTimeout(() => {
+                if (mountedRef.current && !pollingIntervalsRef.current.settings) {
+                    pollingIntervalsRef.current.settings = setInterval(
+                        apiHandlersRef.current.loadSettings,
+                        POLLING_INTERVALS.AUTOTRADE_SETTINGS
+                    );
+                    logMessage('debug', 'Settings polling started', {
+                        interval: POLLING_INTERVALS.AUTOTRADE_SETTINGS
+                    });
+                }
+            }, 3000);
+
+            setTimeout(() => {
+                if (mountedRef.current && !pollingIntervalsRef.current.metrics) {
+                    pollingIntervalsRef.current.metrics = setInterval(
+                        apiHandlersRef.current.loadMetrics,
+                        POLLING_INTERVALS.AUTOTRADE_METRICS
+                    );
+                    logMessage('debug', 'Metrics polling started', {
+                        interval: POLLING_INTERVALS.AUTOTRADE_METRICS
+                    });
+                }
+            }, 4000);
+
+            setTimeout(() => {
+                if (mountedRef.current && !pollingIntervalsRef.current.ai) {
+                    pollingIntervalsRef.current.ai = setInterval(
+                        apiHandlersRef.current.loadAIIntelligenceData,
+                        POLLING_INTERVALS.AI_DATA
+                    );
+                    logMessage('debug', 'AI polling started', {
+                        interval: POLLING_INTERVALS.AI_DATA
+                    });
+                }
+            }, 5000);
+
+            pollingSetupRef.current.isSetup = true;
+            pollingSetupRef.current.setupTime = Date.now();
+        }, 1000);
+
+        // Cleanup function
+        return () => {
+            clearTimeout(setupDelay);
+            
+            logMessage('debug', 'Polling cleanup triggered', {
+                wasSetup: pollingSetupRef.current.isSetup,
+                activeIntervals: Object.keys(pollingIntervalsRef.current).filter(k => pollingIntervalsRef.current[k] !== null)
+            });
+            
+            // Clear all intervals
+            Object.keys(pollingIntervalsRef.current).forEach(key => {
+                if (pollingIntervalsRef.current[key]) {
+                    clearInterval(pollingIntervalsRef.current[key]);
+                    pollingIntervalsRef.current[key] = null;
+                }
+            });
+            
+            pollingSetupRef.current.isSetup = false;
+            pollingSetupRef.current.teardownTime = Date.now();
+        };
+    }, [backendAvailable, wsConnected, logMessage]); // Only depend on state, not functions
+
+    /**
+     * Load wallet approval status (stable reference)
+     */
     const loadWalletApprovalStatus = useCallback(async () => {
         if (!backendAvailable || !walletConnectedFixed) return;
 
@@ -261,7 +641,6 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
             if (response.ok) {
                 const data = await response.json();
                 
-                // Map the response properly
                 const mappedData = {
                     ...data,
                     approved_wallets: data.approvals || {},
@@ -270,10 +649,8 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
                 
                 setWalletApprovalStatus(mappedData);
                 
-                // FIXED: Check approval based on chain-protocol mapping instead of direct chain lookup
                 let hasApprovalForChain = false;
                 if (data.approvals && data.wallet_funded) {
-                    // Define chain to protocol mappings
                     const chainProtocolMappings = {
                         'ethereum': ['uniswap_v2', 'uniswap_v3', 'sushiswap', 'curve', 'balancer'],
                         'bsc': ['pancakeswap', 'bakeryswap', 'apeswap', 'biswap'],
@@ -287,271 +664,17 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
                     const expectedProtocols = chainProtocolMappings[currentChainLower] || [];
                     const approvedProtocols = Object.keys(data.approvals);
                     
-                    // Check if any protocol for the current chain is approved
                     hasApprovalForChain = expectedProtocols.some(protocol => 
                         approvedProtocols.includes(protocol)
                     );
-                    
-                    logMessage('debug', 'Approval validation details', {
-                        current_chain: currentChainLower,
-                        expected_protocols: expectedProtocols,
-                        approved_protocols: approvedProtocols,
-                        has_matching_approval: hasApprovalForChain,
-                        wallet_funded: data.wallet_funded
-                    });
                 }
                 
                 setCanStartAutotrade(hasApprovalForChain);
-                
-                logMessage('info', 'Wallet approval status loaded', {
-                    approved_protocols: Object.keys(data.approvals || {}),
-                    current_chain: currentChainFixed,
-                    can_start_autotrade: hasApprovalForChain,
-                    wallet_funded: data.wallet_funded
-                });
             }
         } catch (error) {
             logMessage('debug', 'Could not load wallet approval status', { error: error.message });
         }
     }, [backendAvailable, walletConnectedFixed, currentChainFixed, logMessage]);
-
-
-
-
-
-
-
-
-
-    /**
-     * Load AI intelligence data from API
-     */
-    const loadAIIntelligenceData = useCallback(async () => {
-        if (!backendAvailable) return;
-
-        try {
-            // Get recent AI analyzed pairs
-            const recentResponse = await fetch(`${API_BASE_URL}/api/v1/intelligence/pairs/recent?limit=1`);
-            if (recentResponse.ok) {
-                const recentData = await recentResponse.json();
-                if (recentData.pairs && recentData.pairs.length > 0) {
-                    const latestPair = recentData.pairs[0];
-                    setAiIntelligenceData({
-                        pair_address: latestPair.pair_address,
-                        token_symbol: latestPair.token_symbol,
-                        opportunity_level: latestPair.opportunity_level,
-                        ai_intelligence: latestPair.intelligence_data,
-                        timestamp: latestPair.analyzed_at
-                    });
-                }
-            }
-
-            // Get current market regime
-            const regimeResponse = await fetch(`${API_BASE_URL}/api/v1/intelligence/market/regime`);
-            if (regimeResponse.ok) {
-                const regimeData = await regimeResponse.json();
-                setMarketRegime({
-                    regime: regimeData.regime,
-                    confidence: regimeData.confidence,
-                    updated_at: regimeData.updated_at
-                });
-            }
-
-            // Get AI processing stats
-            const statsResponse = await fetch(`${API_BASE_URL}/api/v1/intelligence/stats/processing`);
-            if (statsResponse.ok) {
-                const statsData = await statsResponse.json();
-                setAiStats(prev => ({
-                    ...prev,
-                    ...statsData.ai_intelligence_stats
-                }));
-            }
-
-        } catch (error) {
-            logMessage('debug', 'AI intelligence data not available', { error: error.message });
-        }
-    }, [backendAvailable, logMessage]);
-
-    /**
-     * Load initial autotrade data with comprehensive error handling
-     */
-/**
- * Load initial data with AbortController to prevent duplicate API calls during StrictMode
- */
-/**
- * Load initial data with AbortController to prevent duplicate API calls during StrictMode
- */
-    const loadInitialData = useCallback(async (signal) => {
-        if (!mountedRef.current) return;
-        
-        // Prevent multiple simultaneous loads
-        if (loading) {
-            logMessage('debug', 'LoadInitialData already in progress - skipping', {
-                is_mounted: mountedRef.current,
-                backend_available: backendAvailable
-            });
-            return;
-        }
-
-        setLoading(true);
-        setError(null);
-
-        try {
-            logMessage('info', 'Loading initial autotrade data', {
-                backend_available: backendAvailable,
-                wallet_connected: !!connectedWallet,
-                trace_id: `load-${Date.now()}`
-            });
-
-            // All API calls use the same AbortController signal
-            const promises = [
-                fetch(`${API_BASE_URL}/api/v1/autotrade/status`, {
-                    method: 'GET',
-                    headers: { 'Content-Type': 'application/json' },
-                    signal // Pass abort signal to prevent zombie requests
-                }).then(async (response) => {
-                    if (!response.ok) {
-                        throw new Error(`Status fetch failed: ${response.status}`);
-                    }
-                    return response.json();
-                }).then((data) => {
-                    if (mountedRef.current && !signal?.aborted) {
-                        setAutotradeStatus(data);
-                        setEngineMode(data.mode || 'disabled');
-                    }
-                    return data;
-                }),
-
-                fetch(`${API_BASE_URL}/api/v1/autotrade/settings`, {
-                    method: 'GET', 
-                    headers: { 'Content-Type': 'application/json' },
-                    signal
-                }).then(async (response) => {
-                    if (response.status === 404) {
-                        // Settings endpoint not implemented yet - use defaults
-                        const defaultSettings = {
-                            max_concurrent_trades: 5,
-                            max_queue_size: 50,
-                            opportunity_timeout_minutes: 10,
-                            execution_batch_size: 3
-                        };
-                        if (mountedRef.current && !signal?.aborted) {
-                            setAutotradeSettings(defaultSettings);
-                        }
-                        return defaultSettings;
-                    }
-                    if (!response.ok) {
-                        throw new Error(`Settings fetch failed: ${response.status}`);
-                    }
-                    return response.json();
-                }).then((data) => {
-                    if (mountedRef.current && !signal?.aborted) {
-                        setAutotradeSettings(data);
-                    }
-                    return data;
-                }),
-
-                fetch(`${API_BASE_URL}/api/v1/autotrade/metrics`, {
-                    method: 'GET',
-                    headers: { 'Content-Type': 'application/json' },
-                    signal
-                }).then(async (response) => {
-                    if (!response.ok) {
-                        throw new Error(`Metrics fetch failed: ${response.status}`);
-                    }
-                    return response.json();
-                }).then((data) => {
-                    if (mountedRef.current && !signal?.aborted) {
-                        setPerformanceMetrics(data);
-                    }
-                    return data;
-                })
-            ];
-
-            // Wait for all API calls to complete
-            const [statusData, settingsData, metricsData] = await Promise.all(promises);
-
-            if (mountedRef.current && !signal?.aborted) {
-                setLastUpdate(new Date());
-                setBackendAvailable(true);
-                
-                logMessage('info', 'Initial data loaded successfully', {
-                    status_mode: statusData?.mode,
-                    settings_count: Object.keys(settingsData || {}).length,
-                    metrics_available: !!metricsData,
-                    trace_id: `load-${Date.now()}`
-                });
-            }
-
-        } catch (error) {
-            // Handle abort gracefully - this is expected during StrictMode cleanup
-            if (error.name === 'AbortError' || signal?.aborted) {
-                logMessage('debug', 'LoadInitialData aborted (expected during StrictMode)', {
-                    error: error.name,
-                    signal_aborted: signal?.aborted,
-                    mounted: mountedRef.current
-                });
-                return; // Don't set error state for aborted requests
-            }
-
-            if (mountedRef.current) {
-                const errorMessage = error.message || 'Failed to load initial data';
-                setError(errorMessage);
-                setBackendAvailable(false);
-                
-                logError('load_initial_data', error, {
-                    backend_url: API_BASE_URL,
-                    mounted: mountedRef.current,
-                    signal_aborted: signal?.aborted
-                });
-            }
-        } finally {
-            if (mountedRef.current && !signal?.aborted) {
-                setLoading(false);
-            }
-        }
-    }, [backendAvailable, connectedWallet, loading, logMessage, logError]);
-
-    /**
-     * Load initial data on mount with proper cleanup for StrictMode
-     */
-/**
- * Production polling with proper intervals instead of aggressive loading
- */
-    useEffect(() => {
-        if (!backendAvailable) return;
-
-        // Single consolidated polling function
-        const pollData = async () => {
-            if (!mountedRef.current) return;
-            
-            try {
-                const abortController = new AbortController();
-                await loadInitialData(abortController.signal);
-            } catch (error) {
-                logMessage('error', 'Polling failed', { error: error.message });
-            }
-        };
-
-        // PRODUCTION: Use 10-second intervals instead of aggressive loading
-        const pollInterval = setInterval(pollData, 10000); // 10 seconds
-        
-        // Initial load
-        pollData();
-
-        return () => {
-            clearInterval(pollInterval);
-        };
-    }, [backendAvailable]); // Only depend on backendAvailable
-
-
-
-
-
-
-
-
-
 
     /**
      * Handle WebSocket message processing with AI intelligence support
@@ -583,7 +706,6 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
                             trade_id: message.data.trade_id,
                             profit: message.data.profit_usd 
                         });
-                        // Update metrics if trade data includes profit
                         if (message.data.profit_usd) {
                             setMetrics(prev => ({
                                 ...prev,
@@ -613,7 +735,6 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
                     }
                     break;
 
-                // AI Intelligence WebSocket Messages
                 case 'new_pair_analysis':
                     if (message.data && message.data.intelligence_data) {
                         logMessage('info', 'New pair AI analysis received', { 
@@ -621,7 +742,6 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
                             intelligence_score: message.data.intelligence_data.intelligence_score 
                         });
                         
-                        // Store the most recent AI analysis for display
                         setAiIntelligenceData({
                             pair_address: message.data.pair_address,
                             token_symbol: message.data.token_symbol,
@@ -649,7 +769,6 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
                 case 'whale_activity_alert':
                     if (message.data) {
                         logMessage('warn', 'Whale activity detected', message.data);
-                        // Update AI intelligence data if it matches current pair
                         if (aiIntelligenceData && message.data.token_address === aiIntelligenceData.pair_address) {
                             setAiIntelligenceData(prev => ({
                                 ...prev,
@@ -666,7 +785,6 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
                 case 'coordination_detected':
                     if (message.data) {
                         logMessage('error', 'Coordination pattern detected', message.data);
-                        // Show coordination warning
                         setError(`AI Alert: Coordination detected - ${message.data.pattern_type} (Risk: ${message.data.risk_level})`);
                     }
                     break;
@@ -690,7 +808,6 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
 
                 case 'connection_ack':
                     logMessage('info', 'WebSocket connection acknowledged');
-                    // Clear connection errors
                     if (error && error.includes('WebSocket')) {
                         setError(null);
                     }
@@ -729,7 +846,6 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
             logMessage('info', 'Autotrade WebSocket connected successfully');
             
             if (mountedRef.current && sendMessage) {
-                // Subscribe to all autotrade events INCLUDING AI intelligence events
                 sendMessage({
                     type: 'subscribe',
                     channels: [
@@ -738,7 +854,6 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
                         'opportunity_found',
                         'metrics_update',
                         'emergency_stop',
-                        // AI Intelligence channels
                         'new_pair_analysis',
                         'market_regime_change',
                         'whale_activity_alert',
@@ -748,7 +863,6 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
                 });
             }
             
-            // Clear WebSocket-related errors
             if (error && (error.includes('WebSocket') || error.includes('Backend unavailable'))) {
                 setError(null);
             }
@@ -767,7 +881,7 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
     });
 
     /**
-     * SECURITY: Check wallet approval before starting autotrade
+     * Check wallet approval before starting autotrade
      */
     const checkWalletApprovalAndStart = useCallback(async (mode = 'standard') => {
         if (!walletConnectedFixed || !walletAddressFixed) {
@@ -780,19 +894,17 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
             return;
         }
 
-        // Check if wallet is approved for current chain
         if (!canStartAutotrade) {
             setPendingStartMode(mode);
             setShowSecurityWarningModal(true);
             return;
         }
 
-        // Wallet is approved, proceed with start
         await startAutotradeSecure(mode);
     }, [walletConnectedFixed, walletAddressFixed, currentChainFixed, canStartAutotrade]);
 
     /**
-     * SECURITY: Start autotrade with wallet approval verification
+     * Start autotrade with wallet approval verification
      */
     const startAutotradeSecure = useCallback(async (mode = 'standard') => {
         if (!backendAvailable) {
@@ -800,7 +912,6 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
             return;
         }
 
-        // Final security check
         if (!canStartAutotrade) {
             setError('Wallet not approved for autotrade on this chain');
             return;
@@ -852,14 +963,14 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
                 wallet_address: walletAddressFixed
             });
 
-            // Update state
             setIsRunning(true);
             setEngineMode(mode);
             
-            // Reload data
+            // Reload data after a short delay
             setTimeout(() => {
                 if (mountedRef.current) {
-                    loadInitialData();
+                    apiHandlersRef.current.loadStatus();
+                    apiHandlersRef.current.loadMetrics();
                 }
             }, 1000);
 
@@ -873,7 +984,7 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
                 setLoading(false);
             }
         }
-    }, [backendAvailable, canStartAutotrade, walletAddressFixed, currentChainFixed, logMessage, logError, loadInitialData]);
+    }, [backendAvailable, canStartAutotrade, walletAddressFixed, currentChainFixed, logMessage, logError]);
 
     /**
      * Stop autotrade engine
@@ -906,10 +1017,9 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
                 setEngineMode('disabled');
                 logMessage('info', 'Autotrade stopped successfully');
                 
-                // Reload status after stopping
                 setTimeout(() => {
                     if (mountedRef.current) {
-                        loadInitialData();
+                        apiHandlersRef.current.loadStatus();
                     }
                 }, 1000);
             }
@@ -923,7 +1033,7 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
                 setLoading(false);
             }
         }
-    }, [backendAvailable, logMessage, logError, loadInitialData]);
+    }, [backendAvailable, logMessage, logError]);
 
     /**
      * Emergency stop functionality
@@ -954,10 +1064,9 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
                 setShowEmergencyModal(false);
                 setError('Emergency stop executed successfully');
                 
-                // Reload status
                 setTimeout(() => {
                     if (mountedRef.current) {
-                        loadInitialData();
+                        apiHandlersRef.current.loadStatus();
                     }
                 }, 1000);
             }
@@ -967,10 +1076,10 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
                 setError(`Emergency stop failed: ${error.message}`);
             }
         }
-    }, [backendAvailable, logMessage, logError, loadInitialData]);
+    }, [backendAvailable, logMessage, logError]);
 
     /**
-     * Trigger test discovery with FIXED data parsing - UPDATED
+     * Trigger test discovery
      */
     const triggerTestDiscovery = useCallback(async () => {
         try {
@@ -991,7 +1100,6 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
             const data = await response.json();
             logMessage('info', 'Triggered test discovery', { response: data });
             
-            // FIXED: Parse the response correctly based on backend structure
             const processedResult = {
                 success: data.success || false,
                 message: data.message || 'Discovery completed',
@@ -1005,21 +1113,19 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
                     chain: pair.chain,
                     dex: pair.dex,
                     pair_address: pair.pair_address,
-                    liquidity_usd: parseFloat(pair.liquidity_eth || 0) * 2000, // Rough conversion
+                    liquidity_usd: parseFloat(pair.liquidity_eth || 0) * 2000,
                     volume_24h: parseFloat(pair.metadata?.volume_24h || 0),
                     price_change_24h: parseFloat(pair.metadata?.price_change_24h || 0),
-                    risk_score: (pair.risk_score || 50) / 100, // Convert from percentage to decimal
+                    risk_score: (pair.risk_score || 50) / 100,
                     token0: pair.token0,
                     token1: pair.token1,
                     metadata: pair.metadata
                 }))
             };
             
-            // Update UI state with processed results
             setTestDiscoveryResults(processedResult);
             setShowTestResults(true);
             
-            // Show success alert
             alert(`Test Discovery Success!\nFound ${processedResult.pairs_discovered} pairs in ${processedResult.scan_duration_ms}ms`);
             
         } catch (error) {
@@ -1030,7 +1136,6 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
                 context: {}
             });
             
-            // Show error alert
             alert(`Test Discovery Failed: ${error.message}`);
         } finally {
             setDiscoveryLoading(false);
@@ -1044,7 +1149,6 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
         await loadWalletApprovalStatus();
         setShowWalletApprovalModal(false);
         
-        // If user had a pending start mode, proceed with it
         if (pendingStartMode) {
             await startAutotradeSecure(pendingStartMode);
             setPendingStartMode(null);
@@ -1052,14 +1156,25 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
     }, [loadWalletApprovalStatus, pendingStartMode, startAutotradeSecure]);
 
     /**
-     * Component initialization
+     * Component initialization with enhanced debugging
      */
     useEffect(() => {
         mountedRef.current = true;
-        logMessage('info', 'Secure Autotrade component mounted');
-        
-        // Load initial data
-        loadInitialData();
+        logMessage('info', 'Secure Autotrade component mounted', {
+            debug_polling: DEBUG_POLLING,
+            environment: import.meta.env.MODE,
+            strictMode: document.querySelector('#root > *')?.constructor?.name === 'StrictMode'
+        });
+
+        // Log initial state
+        if (DEBUG_POLLING) {
+            console.log('[POLLING DEBUG] Initial component state:', {
+                backendAvailable,
+                wsConnected,
+                pollingIntervals: POLLING_INTERVALS,
+                mountedAt: new Date().toISOString()
+            });
+        }
 
         return () => {
             mountedRef.current = false;
@@ -1069,9 +1184,17 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
                 clearTimeout(retryTimeoutRef.current);
             }
             
-            logMessage('info', 'Secure Autotrade component unmounting - cleanup initiated');
+            // Clear all polling intervals
+            Object.values(pollingIntervalsRef.current).forEach(intervalId => {
+                if (intervalId) clearInterval(intervalId);
+            });
+            
+            logMessage('info', 'Secure Autotrade component unmounting - cleanup initiated', {
+                activeIntervals: Object.keys(pollingIntervalsRef.current).filter(k => pollingIntervalsRef.current[k] !== null),
+                apiCallCounts: { ...apiCallCountsRef.current }
+            });
         };
-    }, [loadInitialData, logMessage]);
+    }, [logMessage]);
 
     /**
      * Watch for wallet changes and update approval status
@@ -1084,6 +1207,80 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
         }
     }, [walletConnectedFixed, walletAddressFixed, currentChainFixed, loadWalletApprovalStatus]);
 
+    /**
+     * Manual refresh function
+     */
+    const handleManualRefresh = useCallback(() => {
+        logMessage('info', 'Manual refresh triggered');
+        setLoading(true);
+        
+        // Use the stable references
+        Promise.all([
+            apiHandlersRef.current.loadStatus(),
+            apiHandlersRef.current.loadSettings(),
+            apiHandlersRef.current.loadMetrics(),
+            apiHandlersRef.current.loadAIIntelligenceData()
+        ]).finally(() => {
+            setLoading(false);
+            setLastUpdate(new Date());
+        });
+    }, [logMessage]);
+
+    /**
+     * Debug polling button (only shown when debugging)
+     */
+    const renderDebugPanel = () => {
+        if (!DEBUG_POLLING) return null;
+        
+        return (
+            <Card className="mb-3 border-warning">
+                <Card.Header className="bg-warning text-dark">
+                    <strong>Polling Debug Panel</strong>
+                </Card.Header>
+                <Card.Body>
+                    <Row>
+                        <Col md={6}>
+                            <h6>Polling Status</h6>
+                            <ul className="small">
+                                <li>Setup: {pollingSetupRef.current.isSetup ? 'Yes' : 'No'}</li>
+                                <li>Setup Time: {pollingSetupRef.current.setupTime ? new Date(pollingSetupRef.current.setupTime).toLocaleTimeString() : 'Never'}</li>
+                                <li>Active Intervals: {Object.keys(pollingIntervalsRef.current).filter(k => pollingIntervalsRef.current[k] !== null).join(', ') || 'None'}</li>
+                            </ul>
+                        </Col>
+                        <Col md={6}>
+                            <h6>API Call Counts</h6>
+                            <ul className="small">
+                                <li>Status: {apiCallCountsRef.current.status}</li>
+                                <li>Settings: {apiCallCountsRef.current.settings}</li>
+                                <li>Metrics: {apiCallCountsRef.current.metrics}</li>
+                                <li>AI: {apiCallCountsRef.current.ai}</li>
+                            </ul>
+                        </Col>
+                    </Row>
+                    <Button
+                        variant="outline-danger"
+                        size="sm"
+                        onClick={() => {
+                            Object.keys(pollingIntervalsRef.current).forEach(key => {
+                                if (pollingIntervalsRef.current[key]) {
+                                    clearInterval(pollingIntervalsRef.current[key]);
+                                    pollingIntervalsRef.current[key] = null;
+                                }
+                            });
+                            pollingSetupRef.current.isSetup = false;
+                            logMessage('warn', 'Manually cleared all polling intervals');
+                            alert('All polling intervals cleared');
+                        }}
+                    >
+                        Clear All Intervals
+                    </Button>
+                </Card.Body>
+            </Card>
+        );
+    };
+
+    // ... rest of the component (all render methods remain the same)
+    
     /**
      * Render connection status indicator
      */
@@ -1301,7 +1498,7 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
                     
                     <Button 
                         variant="outline-secondary" 
-                        onClick={() => loadInitialData()} 
+                        onClick={handleManualRefresh} 
                         disabled={loading}
                         size="sm"
                     >
@@ -1357,7 +1554,6 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
                             <div className="small text-muted">Success Rate</div>
                         </div>
                     </Col>
-                    {/* AI Metrics */}
                     <Col sm={6} lg={2} className="mb-3">
                         <div className="text-center">
                             <div className="h4 text-warning mb-1">
@@ -1376,7 +1572,6 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
                     </Col>
                 </Row>
 
-                {/* Market Regime Display */}
                 {marketRegime.regime !== 'unknown' && (
                     <Row className="mt-3">
                         <Col>
@@ -1426,6 +1621,9 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
 
     return (
         <Container fluid>
+            {/* Debug Panel (only when debugging) */}
+            {renderDebugPanel()}
+
             {/* Error Display */}
             {error && (
                 <Alert 
@@ -1442,322 +1640,339 @@ const Autotrade = ({ connectedWallet, systemHealth }) => {
                             </strong>
                             <div>{error}</div>
                             {!backendAvailable && (
-                                <small className="text-muted mt-1">
-                                    Start the backend server to enable autotrade functionality
-                                </small>
-                            )}
-                        </div>
-                    </div>
-                </Alert>
-            )}
+                               <small className="text-muted mt-1">
+                                   Start the backend server to enable autotrade functionality
+                               </small>
+                           )}
+                       </div>
+                   </div>
+               </Alert>
+           )}
 
-            {/* Discovery result toast-ish */}
-            {discoveryResult && (
-                <Alert 
-                    variant={discoveryResult.type} 
-                    onClose={() => setDiscoveryResult(null)} 
-                    dismissible 
-                    className="mb-3"
-                >
-                    {discoveryResult.text}
-                </Alert>
-            )}
+           {/* Discovery result toast */}
+           {discoveryResult && (
+               <Alert 
+                   variant={discoveryResult.type} 
+                   onClose={() => setDiscoveryResult(null)} 
+                   dismissible 
+                   className="mb-3"
+               >
+                   {discoveryResult.text}
+               </Alert>
+           )}
 
-            {/* Test Discovery Results Display - FIXED */}
-            {showTestResults && testDiscoveryResults && (
-                <Card className="mb-3">
-                    <Card.Header className="d-flex justify-content-between align-items-center">
-                        <h6 className="mb-0">Test Discovery Results</h6>
-                        <Button 
-                            variant="outline-secondary" 
-                            size="sm" 
-                            onClick={() => setShowTestResults(false)}
-                        >
-                            ×
-                        </Button>
-                    </Card.Header>
-                    <Card.Body>
-                        <Row className="mb-3">
-                            <Col md={3}>
-                                <strong>Status:</strong> <Badge bg={testDiscoveryResults.success ? 'success' : 'danger'}>
-                                    {testDiscoveryResults.status || 'Unknown'}
-                                </Badge>
-                            </Col>
-                            <Col md={3}>
-                                <strong>Pairs Found:</strong> {testDiscoveryResults.pairs_discovered || 0}
-                            </Col>
-                            <Col md={3}>
-                                <strong>Scan Duration:</strong> {testDiscoveryResults.scan_duration_ms || 0}ms
-                            </Col>
-                            <Col md={3}>
-                                <strong>Success Rate:</strong> {testDiscoveryResults.success_rate || 0}%
-                            </Col>
-                        </Row>
-                        
-                        {testDiscoveryResults.pairs && testDiscoveryResults.pairs.length > 0 && (
-                            <div>
-                                <h6>Discovered Pairs:</h6>
-                                {testDiscoveryResults.pairs.map((pair, index) => (
-                                    <Card key={index} className="mb-2" style={{ fontSize: '0.9em' }}>
-                                        <Card.Body className="py-2">
-                                            <Row>
-                                                <Col md={4}>
-                                                    <strong>{pair.symbol || 'UNKNOWN/UNKNOWN'}</strong> ({pair.name || 'Unknown'})
-                                                    <br />
-                                                    <small className="text-muted">{pair.chain} • {pair.dex}</small>
-                                                </Col>
-                                                <Col md={2}>
-                                                    <small>Liquidity</small>
-                                                    <br />
-                                                    <strong>${(pair.liquidity_usd || 0).toLocaleString()}</strong>
-                                                </Col>
-                                                <Col md={2}>
-                                                    <small>Volume 24h</small>
-                                                    <br />
-                                                    <strong>${(pair.volume_24h || 0).toLocaleString()}</strong>
-                                                </Col>
-                                                <Col md={2}>
-                                                    <small>Price Change</small>
-                                                    <br />
-                                                    <span className={(pair.price_change_24h || 0) >= 0 ? 'text-success' : 'text-danger'}>
-                                                        {(pair.price_change_24h || 0) > 0 ? '+' : ''}{(pair.price_change_24h || 0).toFixed(2)}%
-                                                    </span>
-                                                </Col>
-                                                <Col md={2}>
-                                                    <small>Risk Score</small>
-                                                    <br />
-                                                    <Badge bg={(pair.risk_score || 0.5) < 0.3 ? 'success' : (pair.risk_score || 0.5) < 0.6 ? 'warning' : 'danger'}>
-                                                        {((pair.risk_score || 0.5) * 100).toFixed(0)}%
-                                                    </Badge>
-                                                </Col>
-                                            </Row>
-                                        </Card.Body>
-                                    </Card>
-                                ))}
-                            </div>
-                        )}
-                    </Card.Body>
-                </Card>
-            )}
+           {/* Test Discovery Results Display */}
+           {showTestResults && testDiscoveryResults && (
+               <Card className="mb-3">
+                   <Card.Header className="d-flex justify-content-between align-items-center">
+                       <h6 className="mb-0">Test Discovery Results</h6>
+                       <Button 
+                           variant="outline-secondary" 
+                           size="sm" 
+                           onClick={() => setShowTestResults(false)}
+                       >
+                           ×
+                       </Button>
+                   </Card.Header>
+                   <Card.Body>
+                       <Row className="mb-3">
+                           <Col md={3}>
+                               <strong>Status:</strong> <Badge bg={testDiscoveryResults.success ? 'success' : 'danger'}>
+                                   {testDiscoveryResults.status || 'Unknown'}
+                               </Badge>
+                           </Col>
+                           <Col md={3}>
+                               <strong>Pairs Found:</strong> {testDiscoveryResults.pairs_discovered || 0}
+                           </Col>
+                           <Col md={3}>
+                               <strong>Scan Duration:</strong> {testDiscoveryResults.scan_duration_ms || 0}ms
+                           </Col>
+                           <Col md={3}>
+                               <strong>Success Rate:</strong> {testDiscoveryResults.success_rate || 0}%
+                           </Col>
+                       </Row>
+                       
+                       {testDiscoveryResults.pairs && testDiscoveryResults.pairs.length > 0 && (
+                           <div>
+                               <h6>Discovered Pairs:</h6>
+                               {testDiscoveryResults.pairs.map((pair, index) => (
+                                   <Card key={index} className="mb-2" style={{ fontSize: '0.9em' }}>
+                                       <Card.Body className="py-2">
+                                           <Row>
+                                               <Col md={4}>
+                                                   <strong>{pair.symbol || 'UNKNOWN/UNKNOWN'}</strong> ({pair.name || 'Unknown'})
+                                                   <br />
+                                                   <small className="text-muted">{pair.chain} • {pair.dex}</small>
+                                               </Col>
+                                               <Col md={2}>
+                                                   <small>Liquidity</small>
+                                                   <br />
+                                                   <strong>${(pair.liquidity_usd || 0).toLocaleString()}</strong>
+                                               </Col>
+                                               <Col md={2}>
+                                                   <small>Volume 24h</small>
+                                                   <br />
+                                                   <strong>${(pair.volume_24h || 0).toLocaleString()}</strong>
+                                               </Col>
+                                               <Col md={2}>
+                                                   <small>Price Change</small>
+                                                   <br />
+                                                   <span className={(pair.price_change_24h || 0) >= 0 ? 'text-success' : 'text-danger'}>
+                                                       {(pair.price_change_24h || 0) > 0 ? '+' : ''}{(pair.price_change_24h || 0).toFixed(2)}%
+                                                   </span>
+                                               </Col>
+                                               <Col md={2}>
+                                                   <small>Risk Score</small>
+                                                   <br />
+                                                   <Badge bg={(pair.risk_score || 0.5) < 0.3 ? 'success' : (pair.risk_score || 0.5) < 0.6 ? 'warning' : 'danger'}>
+                                                       {((pair.risk_score || 0.5) * 100).toFixed(0)}%
+                                                   </Badge>
+                                               </Col>
+                                           </Row>
+                                       </Card.Body>
+                                   </Card>
+                               ))}
+                           </div>
+                       )}
+                   </Card.Body>
+               </Card>
+           )}
 
-            {/* SECURITY: Wallet Security Status */}
-            {renderWalletSecurityStatus()}
+           {/* Wallet Security Status */}
+           {renderWalletSecurityStatus()}
 
-            {/* Engine Status Overview */}
-            {renderEngineStatus()}
+           {/* Engine Status Overview */}
+           {renderEngineStatus()}
 
-            {/* Performance Metrics */}
-            {renderMetrics()}
+           {/* Performance Metrics */}
+           {renderMetrics()}
 
-            {/* Navigation Tabs */}
-            <Row className="mb-4">
-                <Col>
-                    <Nav variant="tabs">
-                        <Nav.Item>
-                            <Nav.Link 
-                                active={activeTab === 'overview'} 
-                                onClick={() => setActiveTab('overview')}
-                            >
-                                Overview
-                            </Nav.Link>
-                        </Nav.Item>
-                        <Nav.Item>
-                            <Nav.Link 
-                                active={activeTab === 'wallet-security'} 
-                                onClick={() => setActiveTab('wallet-security')}
-                            >
-                                <Shield size={14} className="me-1" />
-                                Wallet Security
-                            </Nav.Link>
-                        </Nav.Item>
-                        <Nav.Item>
-                            <Nav.Link 
-                                active={activeTab === 'monitor'} 
-                                onClick={() => setActiveTab('monitor')}
-                                disabled={!backendAvailable}
-                            >
-                                Monitor
-                                {autotradeStatus.queue_size > 0 && (
-                                    <Badge bg="primary" className="ms-1">{autotradeStatus.queue_size}</Badge>
-                                )}
-                            </Nav.Link>
-                        </Nav.Item>
-                        <Nav.Item>
-                            <Nav.Link 
-                                active={activeTab === 'config'} 
-                                onClick={() => setActiveTab('config')}
-                                disabled={!backendAvailable}
-                            >
-                                Configuration
-                            </Nav.Link>
-                        </Nav.Item>
-                        <Nav.Item>
-                            <Nav.Link 
-                                active={activeTab === 'advanced'} 
-                                onClick={() => setActiveTab('advanced')}
-                                disabled={!backendAvailable}
-                            >
-                                Advanced Orders
-                            </Nav.Link>
-                        </Nav.Item>
-                    </Nav>
-                </Col>
-            </Row>
+           {/* Navigation Tabs */}
+           <Row className="mb-4">
+               <Col>
+                   <Nav variant="tabs">
+                       <Nav.Item>
+                           <Nav.Link 
+                               active={activeTab === 'overview'} 
+                               onClick={() => setActiveTab('overview')}
+                           >
+                               Overview
+                           </Nav.Link>
+                       </Nav.Item>
+                       <Nav.Item>
+                           <Nav.Link 
+                               active={activeTab === 'wallet-security'} 
+                               onClick={() => setActiveTab('wallet-security')}
+                           >
+                               <Shield size={14} className="me-1" />
+                               Wallet Security
+                           </Nav.Link>
+                       </Nav.Item>
+                       <Nav.Item>
+                           <Nav.Link 
+                               active={activeTab === 'monitor'} 
+                               onClick={() => setActiveTab('monitor')}
+                               disabled={!backendAvailable}
+                           >
+                               Monitor
+                               {autotradeStatus.queue_size > 0 && (
+                                   <Badge bg="primary" className="ms-1">{autotradeStatus.queue_size}</Badge>
+                               )}
+                           </Nav.Link>
+                       </Nav.Item>
+                       <Nav.Item>
+                           <Nav.Link 
+                               active={activeTab === 'config'} 
+                               onClick={() => setActiveTab('config')}
+                               disabled={!backendAvailable}
+                           >
+                               Configuration
+                           </Nav.Link>
+                       </Nav.Item>
+                       <Nav.Item>
+                           <Nav.Link 
+                               active={activeTab === 'advanced'} 
+                               onClick={() => setActiveTab('advanced')}
+                               disabled={!backendAvailable}
+                           >
+                               Advanced Orders
+                           </Nav.Link>
+                       </Nav.Item>
+                   </Nav>
+               </Col>
+           </Row>
 
-            {/* Tab Content */}
-            {activeTab === 'overview' && (
-                <Row>
-                    <Col lg={8}>
-                        <Card>
-                            <Card.Body>
-                                <h5>Secure AI-Powered Autotrade Engine</h5>
-                                <p className="text-muted">
-                                    The secure AI-powered autotrade engine monitors opportunities across multiple chains and executes trades 
-                                    based on configured strategies and AI intelligence analysis. Advanced market intelligence including 
-                                    social sentiment, whale behavior, and coordination pattern detection informs all trading decisions.
-                                    All trades require explicit wallet approval and respect your configured spending limits.
-                                    {!backendAvailable && ' Backend connection required for full functionality.'}
-                                </p>
+           {/* Tab Content */}
+           {activeTab === 'overview' && (
+               <Row>
+                   <Col lg={8}>
+                       <Card>
+                           <Card.Body>
+                               <h5>Secure AI-Powered Autotrade Engine</h5>
+                               <p className="text-muted">
+                                   The secure AI-powered autotrade engine monitors opportunities across multiple chains and executes trades 
+                                   based on configured strategies and AI intelligence analysis. Advanced market intelligence including 
+                                   social sentiment, whale behavior, and coordination pattern detection informs all trading decisions.
+                                   All trades require explicit wallet approval and respect your configured spending limits.
+                                   {!backendAvailable && ' Backend connection required for full functionality.'}
+                               </p>
 
-                                <Row>
-                                    <Col md={6}>
-                                        <h6 className="text-muted">Current Status</h6>
-                                        <ul className="list-unstyled">
-                                            <li>WebSocket: {wsConnected ? 'Connected' : 'Disconnected'}</li>
-                                            <li>Engine: {isRunning ? `Running (${engineMode})` : 'Stopped'}</li>
-                                            <li>Backend: {backendAvailable ? 'Available' : 'Offline'}</li>
-                                            <li>Wallet: {walletConnectedFixed ? `Connected (${currentChainFixed})` : 'Not Connected'}</li>
-                                            <li>Security: {canStartAutotrade ? 'Approved' : 'Approval Required'}</li>
-                                            <li>Queue Size: {autotradeStatus.queue_size || 0}</li>
-                                            <li>AI Analysis: {aiStats.pairs_analyzed || 0} pairs analyzed</li>
-                                            <li>Market Regime: {marketRegime.regime !== 'unknown' ? marketRegime.regime : 'Unknown'}</li>
-                                        </ul>
-                                    </Col>
-                                    <Col md={6}>
-                                        <h6 className="text-muted">Quick Actions</h6>
-                                        <div className="d-flex flex-column gap-2">
-                                            <Button 
-                                                variant="outline-primary" 
-                                                size="sm" 
-                                                onClick={() => setActiveTab('wallet-security')}
-                                            >
-                                                <Shield size={16} className="me-1" /> Manage Wallet Security
-                                            </Button>
-                                            <Button 
-                                                variant="outline-secondary" 
-                                                size="sm" 
-                                                onClick={() => setActiveTab('config')}
-                                                disabled={!backendAvailable}
-                                            >
-                                                <Settings size={16} className="me-1" /> Configure Settings
-                                            </Button>
-                                            <Button 
-                                                variant="outline-info" 
-                                                size="sm" 
-                                                onClick={() => setActiveTab('monitor')}
-                                                disabled={!backendAvailable}
-                                            >
-                                                <Activity size={16} className="me-1" /> View Monitor
-                                            </Button>
-                                            {/* FIXED: Trigger test discovery with corrected loading state */}
-                                            <Button
-                                                variant="outline-success"
-                                                size="sm"
-                                                disabled={!backendAvailable || discoveryLoading}
-                                                onClick={triggerTestDiscovery}
-                                            >
-                                                {discoveryLoading ? (
-                                                    <>
-                                                        <Spinner animation="border" size="sm" className="me-1" />
-                                                        Testing...
-                                                    </>
-                                                ) : (
-                                                    <>
-                                                        <Brain size={16} className="me-1" />
-                                                        Trigger Test Discovery
-                                                    </>
-                                                )}
-                                            </Button>
-                                        </div>
-                                    </Col>
-                                </Row>
-                            </Card.Body>
-                        </Card>
-                    </Col>
-                    
-                    {/* AI Intelligence Display Column */}
-                    <Col lg={4}>
-                        <AIIntelligenceDisplay 
-                            intelligenceData={aiIntelligenceData}
-                            className="mb-4"
-                        />
-                        
-                        {/* Recent AI Alerts */}
-                        {errorHistory.filter(e => e.operation.includes('coordination') || e.operation.includes('whale')).length > 0 && (
-                            <Card>
-                                <Card.Header className="py-2">
-                                    <h6 className="mb-0 text-warning">
-                                        <AlertTriangle size={16} className="me-1" />
-                                        Recent AI Alerts
-                                    </h6>
-                                </Card.Header>
-                                <Card.Body>
-                                    {errorHistory
-                                        .filter(e => e.operation.includes('coordination') || e.operation.includes('whale'))
-                                        .slice(0, 3)
-                                        .map((alert, index) => (
-                                            <div key={index} className="small mb-2">
-                                                <div className="text-danger fw-bold">{alert.operation}</div>
-                                                <div className="text-muted">{new Date(alert.timestamp).toLocaleTimeString()}</div>
-                                            </div>
-                                        ))
-                                    }
-                                </Card.Body>
-                            </Card>
-                        )}
-                    </Col>
-                </Row>
-            )}
+                               <Row>
+                                   <Col md={6}>
+                                       <h6 className="text-muted">Current Status</h6>
+                                       <ul className="list-unstyled">
+                                           <li>WebSocket: {wsConnected ? 'Connected' : 'Disconnected'}</li>
+                                           <li>Engine: {isRunning ? `Running (${engineMode})` : 'Stopped'}</li>
+                                           <li>Backend: {backendAvailable ? 'Available' : 'Offline'}</li>
+                                           <li>Wallet: {walletConnectedFixed ? `Connected (${currentChainFixed})` : 'Not Connected'}</li>
+                                           <li>Security: {canStartAutotrade ? 'Approved' : 'Approval Required'}</li>
+                                           <li>Queue Size: {autotradeStatus.queue_size || 0}</li>
+                                           <li>AI Analysis: {aiStats.pairs_analyzed || 0} pairs analyzed</li>
+                                           <li>Market Regime: {marketRegime.regime !== 'unknown' ? marketRegime.regime : 'Unknown'}</li>
+                                       </ul>
+                                   </Col>
+                                   <Col md={6}>
+                                       <h6 className="text-muted">Quick Actions</h6>
+                                       <div className="d-flex flex-column gap-2">
+                                           {DEBUG_POLLING && (
+                                               <Button 
+                                                   variant="warning" 
+                                                   size="sm"
+                                                   onClick={() => {
+                                                       console.log('[POLLING DEBUG] Current state:', {
+                                                           pollingSetup: pollingSetupRef.current,
+                                                           activeIntervals: Object.keys(pollingIntervalsRef.current).filter(k => pollingIntervalsRef.current[k]),
+                                                           apiCallCounts: apiCallCountsRef.current,
+                                                           backendAvailable,
+                                                           wsConnected
+                                                       });
+                                                       alert('Check console for polling debug info');
+                                                   }}
+                                               >
+                                                   🐛 Debug Polling
+                                               </Button>
+                                           )}
+                                           <Button 
+                                               variant="outline-primary" 
+                                               size="sm" 
+                                               onClick={() => setActiveTab('wallet-security')}
+                                           >
+                                               <Shield size={16} className="me-1" /> Manage Wallet Security
+                                           </Button>
+                                           <Button 
+                                               variant="outline-secondary" 
+                                               size="sm" 
+                                               onClick={() => setActiveTab('config')}
+                                               disabled={!backendAvailable}
+                                           >
+                                               <Settings size={16} className="me-1" /> Configure Settings
+                                           </Button>
+                                           <Button 
+                                               variant="outline-info" 
+                                               size="sm" 
+                                               onClick={() => setActiveTab('monitor')}
+                                               disabled={!backendAvailable}
+                                           >
+                                               <Activity size={16} className="me-1" /> View Monitor
+                                           </Button>
+                                           <Button
+                                               variant="outline-success"
+                                               size="sm"
+                                               disabled={!backendAvailable || discoveryLoading}
+                                               onClick={triggerTestDiscovery}
+                                           >
+                                               {discoveryLoading ? (
+                                                   <>
+                                                       <Spinner animation="border" size="sm" className="me-1" />
+                                                       Testing...
+                                                   </>
+                                               ) : (
+                                                   <>
+                                                       <Brain size={16} className="me-1" />
+                                                       Trigger Test Discovery
+                                                   </>
+                                               )}
+                                           </Button>
+                                       </div>
+                                   </Col>
+                               </Row>
+                           </Card.Body>
+                       </Card>
+                   </Col>
+                   
+                   {/* AI Intelligence Display Column */}
+                   <Col lg={4}>
+                       <AIIntelligenceDisplay 
+                           intelligenceData={aiIntelligenceData}
+                           className="mb-4"
+                       />
+                       
+                       {/* Recent AI Alerts */}
+                       {errorHistory.filter(e => e.operation.includes('coordination') || e.operation.includes('whale')).length > 0 && (
+                           <Card>
+                               <Card.Header className="py-2">
+                                   <h6 className="mb-0 text-warning">
+                                       <AlertTriangle size={16} className="me-1" />
+                                       Recent AI Alerts
+                                   </h6>
+                               </Card.Header>
+                               <Card.Body>
+                                   {errorHistory
+                                       .filter(e => e.operation.includes('coordination') || e.operation.includes('whale'))
+                                       .slice(0, 3)
+                                       .map((alert, index) => (
+                                           <div key={index} className="small mb-2">
+                                               <div className="text-danger fw-bold">{alert.operation}</div>
+                                               <div className="text-muted">{new Date(alert.timestamp).toLocaleTimeString()}</div>
+                                           </div>
+                                       ))
+                                   }
+                               </Card.Body>
+                           </Card>
+                       )}
+                   </Col>
+               </Row>
+           )}
 
-            {activeTab === 'wallet-security' && (
-                <WalletApproval 
-                    connectedWallet={{ address: walletAddressFixed, chain: currentChainFixed }}
-                    onApprovalComplete={handleWalletApprovalComplete}
-                />
-            )}
+           {activeTab === 'wallet-security' && (
+               <WalletApproval 
+                   connectedWallet={{ address: walletAddressFixed, chain: currentChainFixed }}
+                   onApprovalComplete={handleWalletApprovalComplete}
+               />
+           )}
 
-            {activeTab === 'monitor' && backendAvailable && (
-                <AutotradeMonitor 
-                    autotradeStatus={autotradeStatus}
-                    isRunning={isRunning}
-                    wsConnected={wsConnected}
-                    metrics={metrics}
-                    aiIntelligenceData={aiIntelligenceData}
-                    marketRegime={marketRegime}
-                    onRefresh={loadInitialData}
-                />
-            )}
+           {activeTab === 'monitor' && backendAvailable && (
+               <AutotradeMonitor 
+                   autotradeStatus={autotradeStatus}
+                   isRunning={isRunning}
+                   wsConnected={wsConnected}
+                   metrics={metrics}
+                   aiIntelligenceData={aiIntelligenceData}
+                   marketRegime={marketRegime}
+                   onRefresh={handleManualRefresh}
+               />
+           )}
 
-            {activeTab === 'config' && backendAvailable && (
-                <AutotradeConfig 
-                    currentMode={engineMode}
-                    isRunning={isRunning}
-                    aiStats={aiStats}
-                    onModeChange={(mode) => {
-                        setEngineMode(mode);
-                        if (isRunning) {
-                            checkWalletApprovalAndStart(mode);
-                        }
-                    }}
-                />
-            )}
+           {activeTab === 'config' && backendAvailable && (
+               <AutotradeConfig 
+                   currentMode={engineMode}
+                   isRunning={isRunning}
+                   aiStats={aiStats}
+                   onModeChange={(mode) => {
+                       setEngineMode(mode);
+                       if (isRunning) {
+                           checkWalletApprovalAndStart(mode);
+                       }
+                   }}
+               />
+           )}
 
-            {activeTab === 'advanced' && backendAvailable && (
-                <AdvancedOrders 
-                    isRunning={isRunning}
-                    wsConnected={wsConnected}
-                    aiIntelligenceData={aiIntelligenceData}
-                    />
+           {activeTab === 'advanced' && backendAvailable && (
+               <AdvancedOrders 
+                   isRunning={isRunning}
+                   wsConnected={wsConnected}
+                   aiIntelligenceData={aiIntelligenceData}
+               />
            )}
 
            {/* Security Warning Modal */}

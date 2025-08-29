@@ -114,9 +114,9 @@ const initializeApp = () => {
     // Render application with StrictMode enabled
     // NOTE: React.StrictMode re-enabled - WebSocket connections are now stable
     root.render(
-      <React.StrictMode>  
+      // <React.StrictMode>  
         <App />
-      </React.StrictMode>
+      // </React.StrictMode>
     );
 
     logMessage('info', 'Application rendered successfully', {
