@@ -14,7 +14,7 @@ from collections import defaultdict, deque
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
-
+from fastapi.responses import JSONResponse
 import redis.asyncio as redis
 from fastapi import HTTPException, Request, Response, status
 from pydantic import BaseModel
@@ -147,12 +147,14 @@ class FallbackRateLimiter(BaseHTTPMiddleware):
                     },
                 )
 
-                raise HTTPException(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail=(
-                        "Rate limit exceeded: "
-                        f"{self.calls_per_minute}/min (+{self.burst_allowance} burst)"
-                    ),
+                return JSONResponse(
+                    status_code=429,
+                    content={
+                        "error": "Too Many Requests",
+                        "detail": f"Rate limit exceeded: {self.calls_per_minute}/min (+{self.burst_allowance} burst)",
+                        "message": "Please reduce your request frequency",
+                        "retry_after": 60
+                    },
                     headers={
                         "X-RateLimit-Limit": str(self.calls_per_minute),
                         "X-RateLimit-Burst": str(self.burst_allowance),
@@ -161,7 +163,7 @@ class FallbackRateLimiter(BaseHTTPMiddleware):
                         "X-RateLimit-Reset": str(int(time.time() + 60)),
                         "X-RateLimit-Type": "fallback-memory",
                         "Retry-After": "60",
-                    },
+                    }
                 )
 
             # Process downstream and attach headers

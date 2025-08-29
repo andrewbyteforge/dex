@@ -10,6 +10,14 @@ File: backend/app/core/exception_handlers.py
 from __future__ import annotations
 
 import logging
+import traceback
+from typing import Any, Dict
+
+from fastapi import HTTPException, Request, status
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
+import logging
 import time
 from typing import Any, Dict, Optional
 
@@ -349,32 +357,82 @@ async def timeout_exception_handler(request: Request, exc: Exception) -> JSONRes
     )
 
 
-def register_exception_handlers(app) -> None:
+def register_exception_handlers(app):
     """
-    Register all exception handlers with the FastAPI app.
+    Register all exception handlers for the FastAPI application.
     
-    Args:
-        app: FastAPI application instance
+    Parameters
+    ----------
+    app : FastAPI
+        FastAPI application instance
     """
-    # Global exception handler (catches all unhandled exceptions)
-    app.add_exception_handler(Exception, global_exception_handler)
     
-    # HTTP exception handler (overrides FastAPI's default)
-    app.add_exception_handler(HTTPException, http_exception_handler)
-    app.add_exception_handler(StarletteHTTPException, http_exception_handler)
-    
-    # Validation exception handler
-    try:
-        from pydantic import ValidationError
-        app.add_exception_handler(ValidationError, validation_exception_handler)
-    except ImportError:
-        logger.warning("Pydantic ValidationError handler not registered - module not available")
-    
-    # Timeout exception handler
-    import asyncio
-    app.add_exception_handler(asyncio.TimeoutError, timeout_exception_handler)
-    
-    logger.info("Exception handlers registered successfully")
+    @app.exception_handler(HTTPException)
+    async def http_exception_handler(request: Request, exc: HTTPException):
+        """
+        Handle FastAPI HTTPExceptions including rate limiting.
+        
+        Parameters
+        ----------
+        request : Request
+            The request that caused the exception
+        exc : HTTPException
+            The HTTP exception raised
+            
+        Returns
+        -------
+        JSONResponse
+            Properly formatted error response
+        """
+        # Special handling for rate limiting
+        if exc.status_code == 429:
+            logger.warning(
+                "Rate limit exceeded for %s on %s",
+                request.client.host if request.client else "unknown",
+                request.url.path
+            )
+            
+            # Return proper 429 response with headers
+            headers = getattr(exc, 'headers', {})
+            if not headers:
+                headers = {
+                    "Retry-After": "60",
+                    "X-RateLimit-Limit": "120",
+                    "X-RateLimit-Remaining": "0"
+                }
+            
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "error": "Too Many Requests",
+                    "message": exc.detail or "Rate limit exceeded. Please slow down.",
+                    "path": str(request.url.path)
+                },
+                headers=headers
+            )
+        
+        # Log other HTTP exceptions
+        if exc.status_code >= 500:
+            logger.error(
+                "HTTP %s error on %s: %s",
+                exc.status_code,
+                request.url.path,
+                exc.detail
+            )
+        elif exc.status_code >= 400:
+            logger.warning(
+                "HTTP %s error on %s: %s",
+                exc.status_code,
+                request.url.path,
+                exc.detail
+            )
+        
+        # Return standard error response
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={
+                "error": http_status_message(exc.status_code),
+            })
 
 
 # Export all handlers for manual registration if needed
