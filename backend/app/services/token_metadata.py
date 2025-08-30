@@ -9,8 +9,9 @@ import time
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
 
-from ..chains.evm_client import evm_client
-from ..chains.solana_client import solana_client
+from ..chains.evm_client import EvmClient  
+from ..chains.solana_client import SolanaClient
+
 import logging
 from ..core.settings import settings
 from ..storage.repositories import TokenMetadataRepository, get_token_repository
@@ -30,31 +31,35 @@ _DEFAULT_MIN_LIQUIDITY_USD = Decimal("1000")
 class TokenMetadataService:
     """
     Token metadata service with balance queries and intelligent caching.
-    
+   
     Provides unified interface for token operations across all chains
     with automatic metadata fetching and cache management.
     """
-    
+   
     def __init__(self) -> None:
         """Initialize token metadata service."""
+        # Client instances - lazily initialized
+        self.evm_client = None
+        self.solana_client = None
+        
         # In-memory cache for frequently accessed data
         self._balance_cache: Dict[str, Dict] = {}
         self._metadata_cache: Dict[str, Dict] = {}
-        
+       
         # Cache settings
         self.balance_cache_ttl = 30  # 30 seconds for balance cache
         self.metadata_cache_ttl = 3600  # 1 hour for metadata cache
-        
+       
         # Common token addresses by chain
         self.native_tokens = {
             "ethereum": "0x0000000000000000000000000000000000000000",
-            "bsc": "0x0000000000000000000000000000000000000000", 
+            "bsc": "0x0000000000000000000000000000000000000000",
             "polygon": "0x0000000000000000000000000000000000000000",
             "base": "0x0000000000000000000000000000000000000000",
             "arbitrum": "0x0000000000000000000000000000000000000000",
             "solana": "So11111111111111111111111111111111111111112"  # Wrapped SOL
         }
-        
+       
         self.common_tokens = {
             "ethereum": {
                 "USDC": "0xA0b86a33E6C43B4B6954A33DBA24D3C5D7a5e7b1",
@@ -77,8 +82,22 @@ class TokenMetadataService:
                 "SOL": "So11111111111111111111111111111111111111112",
             }
         }
-        
+       
         logger.info("Token metadata service initialized")
+
+    async def get_evm_client(self):
+        """Get or initialize EVM client."""
+        if self.evm_client is None:
+            self.evm_client = EvmClient()
+            await self.evm_client.initialize()
+        return self.evm_client
+    
+    async def get_solana_client(self):
+        """Get or initialize Solana client."""
+        if self.solana_client is None:
+            self.solana_client = SolanaClient()
+            await self.solana_client.initialize()
+        return self.solana_client
     
     async def get_balance(
         self,

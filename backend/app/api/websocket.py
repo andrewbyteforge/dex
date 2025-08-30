@@ -6,7 +6,7 @@ File: backend/app/api/websocket.py
 """
 
 from __future__ import annotations
-
+import time
 import logging
 import uuid
 from typing import Optional
@@ -807,3 +807,47 @@ async def websocket_health():
             "error": str(e),
             "timestamp": str(uuid.uuid4())
         }
+    
+
+
+
+
+@router.websocket("/discovery")
+async def discovery_websocket_endpoint(websocket: WebSocket):
+    """Dedicated WebSocket endpoint for discovery feed."""
+    await websocket.accept()
+    client_id = f"discovery_{int(time.time())}"
+    logger.info(f"Discovery WebSocket client connected: {client_id}")
+    
+    try:
+        # Connect client to the hub
+        connected = await ws_hub.connect_client(client_id, websocket)
+        if not connected:
+            logger.error(f"Failed to connect discovery client: {client_id}")
+            await websocket.close(code=1011, reason="Server error")
+            return
+        
+        # Auto-subscribe to discovery channel
+        await ws_hub.subscribe_to_channel(client_id, Channel.DISCOVERY)
+        logger.info(f"Discovery client {client_id} subscribed to discovery channel")
+        
+        # Keep connection alive and handle messages
+        while True:
+            try:
+                data = await websocket.receive_text()
+                # Discovery clients typically only receive, but handle any messages
+                await ws_hub.handle_client_message(client_id, data)
+            except WebSocketDisconnect:
+                logger.info(f"Discovery client {client_id} disconnected")
+                break
+            except Exception as e:
+                logger.error(f"Error handling discovery message for {client_id}: {e}")
+                break
+                
+    except Exception as e:
+        logger.error(f"Critical error in discovery endpoint: {e}")
+    finally:
+        try:
+            await ws_hub.disconnect_client(client_id, "Discovery connection closed")
+        except Exception as cleanup_error:
+            logger.error(f"Error cleaning up discovery client {client_id}: {cleanup_error}")

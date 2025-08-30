@@ -2,7 +2,7 @@
 Application Lifespan Management for DEX Sniper Pro.
 
 Handles startup and shutdown of all core services including Redis rate limiting,
-database, chain clients, Market Intelligence, and background services.
+database, chain clients, Market Intelligence, discovery broadcasting, and background services.
 
 File: backend/app/core/lifespan.py
 """
@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import AsyncGenerator
@@ -177,7 +178,7 @@ async def setup_intelligence_autotrade_bridge(app: FastAPI) -> bool:
         app.state.bridge_established_at = datetime.now(timezone.utc)
 
         logger.info(
-            "✅ Intelligence-Autotrade WebSocket bridge established successfully"
+            "Intelligence-Autotrade WebSocket bridge established successfully"
         )
         logger.info("   • Intelligence events will route to autotrade subscribers")
         logger.info("   • AI analysis will flow to trading decisions")
@@ -191,15 +192,159 @@ async def setup_intelligence_autotrade_bridge(app: FastAPI) -> bool:
         return False
 
 
+async def start_discovery_broadcasting(app: FastAPI) -> bool:
+    """
+    Start the discovery service that broadcasts real opportunities to frontend.
+    
+    This connects your DexscreenerWatcher to the WebSocket hub for live feeds.
+    """
+    try:
+        logger.info("Starting discovery broadcasting service...")
+        
+        # Start the discovery loop as background task
+        asyncio.create_task(discovery_broadcast_loop(app))
+        
+        app.state.discovery_broadcasting = "operational"
+        logger.info("Discovery broadcasting started successfully")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Failed to start discovery broadcasting: {e}")
+        app.state.discovery_broadcasting = "failed"
+        return False
+
+
+async def discovery_broadcast_loop(app: FastAPI) -> None:
+    """
+    Background loop that discovers opportunities and broadcasts via WebSocket.
+    """
+    logger.info("Discovery broadcast loop started")
+    
+    # Wait for WebSocket hub to be ready
+    await asyncio.sleep(5)
+    
+    # Initialize watcher
+    try:
+        from ..discovery.dexscreener_watcher import DexscreenerWatcher
+        watcher = DexscreenerWatcher()
+        await watcher.start()
+        logger.info("DexscreenerWatcher initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize DexscreenerWatcher: {e}")
+        return
+    
+    while True:
+        try:
+            # Get WebSocket hub directly
+            ws_hub = getattr(app.state, "ws_hub", None)
+            if not ws_hub:
+                logger.warning("WebSocket hub not available for broadcasting")
+                await asyncio.sleep(60)
+                continue
+                
+            # Discover new pairs
+            discovered_pairs = await watcher.discover_new_pairs(
+                chains=['ethereum', 'bsc', 'polygon', 'base'], 
+                limit=10
+            )
+            
+            if discovered_pairs:
+                logger.info(f"Broadcasting {len(discovered_pairs)} opportunities to WebSocket")
+                
+                # Send each pair as a simple message
+                for pair_data in discovered_pairs:
+                    try:
+                        # Format for frontend
+                        opportunity = format_opportunity_for_frontend(pair_data)
+                        
+                        # Send directly to discovery channel clients
+                        from ..ws.hub import Channel
+                        clients = ws_hub.get_channel_clients(Channel.DISCOVERY)
+                        
+                        for websocket in clients:
+                            try:
+                                message = {
+                                    "type": "new_opportunity",
+                                    "data": opportunity
+                                }
+                                await websocket.send_json(message)
+                                logger.debug(f"Sent {opportunity['token_symbol']} to discovery client")
+                            except Exception as e:
+                                logger.warning(f"Failed to send to discovery client: {e}")
+                    
+                    except Exception as e:
+                        logger.error(f"Error formatting opportunity: {e}")
+                        continue
+            else:
+                logger.debug("No new pairs discovered in this cycle")
+            
+            # Wait 30 seconds before next discovery cycle
+            await asyncio.sleep(30)
+            
+        except Exception as e:
+            logger.error(f"Discovery broadcast loop error: {e}")
+            await asyncio.sleep(60)
+
+
+
+
+
+
+def format_opportunity_for_frontend(pair_data: dict) -> dict:
+    """Convert Dexscreener pair data to frontend opportunity format."""
+    
+    base_token = pair_data.get('baseToken', {})
+    volume_data = pair_data.get('volume', {})
+    price_change = pair_data.get('priceChange', {})
+    liquidity = pair_data.get('liquidity', {})
+    
+    # Calculate basic risk score based on liquidity and volume
+    liquidity_usd = float(liquidity.get('usd', 0))
+    volume_24h = float(volume_data.get('h24', 0))
+    
+    risk_score = 50  # Base risk
+    if liquidity_usd < 10000:
+        risk_score += 20  # Higher risk for low liquidity
+    if volume_24h < 5000:
+        risk_score += 15  # Higher risk for low volume
+        
+    risk_score = min(95, max(5, risk_score))  # Clamp between 5-95
+        
+    # Determine profit potential
+    price_change_1h = float(price_change.get('h1', 0))
+    if abs(price_change_1h) > 10:
+        profit_potential = "high"
+    elif abs(price_change_1h) > 5:
+        profit_potential = "medium"
+    else:
+        profit_potential = "low"
+    
+    return {
+        "id": pair_data.get('pairAddress', f"pair_{int(time.time())}"),
+        "token_symbol": base_token.get('symbol', 'UNKNOWN'),
+        "token_address": base_token.get('address', ''),
+        "chain": pair_data.get('chainId', 'ethereum'),
+        "dex": pair_data.get('dexId', 'uniswap'),
+        "liquidity_usd": liquidity_usd,
+        "volume_24h": volume_24h,
+        "price_change_1h": price_change_1h,
+        "market_cap": float(pair_data.get('fdv', 0)),
+        "risk_score": risk_score,
+        "opportunity_type": "new_pair",
+        "profit_potential": profit_potential,
+        "detected_at": datetime.now().isoformat()
+    }
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """
-    Enhanced application lifecycle management with Redis rate limiting
-    and Market Intelligence.
+    Enhanced application lifecycle management with Redis rate limiting,
+    Market Intelligence, and discovery broadcasting.
 
     Manages startup and shutdown of all core services including
     Redis rate limiting, database, chain clients, Market Intelligence,
-    and background services.
+    discovery broadcasting, and background services.
     """
     logger.info("Starting DEX Sniper Pro backend...")
 
@@ -472,7 +617,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.error("WebSocket hub initialization failed: %s", e)
             app.state.websocket_status = "failed"
 
-        # 9.5 Setup Intelligence-Autotrade Bridge (NEW)
+        # 9.5 Setup Intelligence-Autotrade Bridge
         if hasattr(app.state, "ws_hub") and hasattr(app.state, "intelligence_hub"):
             try:
                 bridge_success = await setup_intelligence_autotrade_bridge(app)
@@ -492,7 +637,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             )
             app.state.bridge_status = "not_available"
 
-        # 10. Log comprehensive startup summary
+        # 10. Start Discovery Broadcasting (NEW)
+        if hasattr(app.state, "ws_hub") and app.state.websocket_status == "operational":
+            try:
+                discovery_success = await start_discovery_broadcasting(app)
+                if discovery_success:
+                    logger.info("Discovery broadcasting operational")
+                else:
+                    startup_warnings.append("Discovery broadcasting setup failed")
+            except Exception as e:
+                logger.error("Discovery broadcasting setup error: %s", e)
+                startup_warnings.append(f"Discovery broadcasting error: {e}")
+                app.state.discovery_broadcasting = f"error - {str(e)}"
+        else:
+            logger.warning("Cannot start discovery broadcasting - WebSocket hub not available")
+            app.state.discovery_broadcasting = "not_available"
+
+        # 11. Log comprehensive startup summary
         logger.info("=" * 60)
         logger.info("DEX Sniper Pro backend initialized successfully!")
 
@@ -507,6 +668,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.info("  Documentation: http://127.0.0.1:8001/docs")
         logger.info("  WebSocket: ws://127.0.0.1:8001/ws")
         logger.info("  Intelligence WebSocket: ws://127.0.0.1:8001/ws/intelligence")
+        logger.info("  Discovery Feed: ws://127.0.0.1:8001/ws/discovery")
 
         try:
             from .config import settings  # type: ignore
@@ -536,6 +698,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 app.state.intelligence_hub_status,
             )
 
+        # Discovery Broadcasting status
+        if hasattr(app.state, "discovery_broadcasting"):
+            logger.info(
+                "  Discovery Broadcasting: %s",
+                app.state.discovery_broadcasting,
+            )
+
         # Component status summary
         operational_components: list[str] = []
         degraded_components: list[str] = []
@@ -552,6 +721,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "discovery": getattr(app.state, "discovery_status", "unknown"),
             "intelligence_hub": getattr(
                 app.state, "intelligence_hub_status", "unknown"
+            ),
+            "discovery_broadcasting": getattr(
+                app.state, "discovery_broadcasting", "unknown"
             ),
             "scheduler": getattr(app.state, "scheduler_status", "unknown"),
             "websocket": getattr(app.state, "websocket_status", "unknown"),
@@ -608,7 +780,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     shutdown_errors: list[str] = []
 
     try:
-        # 1. Shutdown Intelligence Hub first
+        # 1. Shutdown Discovery Broadcasting first
+        if hasattr(app.state, "discovery_broadcasting"):
+            try:
+                app.state.discovery_broadcasting = "shutting_down"
+                logger.info("Discovery broadcasting shutdown initiated")
+            except Exception as e:
+                shutdown_errors.append(f"Discovery broadcasting shutdown: {e}")
+    except Exception as e:
+        shutdown_errors.append(f"Discovery broadcasting shutdown error: {e}")
+
+    try:
+        # 2. Shutdown Intelligence Hub
         if "INTELLIGENCE_HUB_AVAILABLE" in locals() and INTELLIGENCE_HUB_AVAILABLE:
             if hasattr(app.state, "intelligence_hub"):
                 try:
@@ -620,7 +803,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         shutdown_errors.append(f"Intelligence hub shutdown error: {e}")
 
     try:
-        # 2. Shutdown Redis rate limiter
+        # 3. Shutdown Redis rate limiter
         try:
             from ..middleware.rate_limiting import shutdown_rate_limiter  # type: ignore
 
@@ -634,7 +817,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         shutdown_errors.append(f"Rate limiter shutdown error: {e}")
 
     try:
-        # 3. Stop scheduler
+        # 4. Stop scheduler
         if (
             hasattr(scheduler_manager, "scheduler")
             and scheduler_manager.scheduler.running
@@ -645,7 +828,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         shutdown_errors.append(f"Scheduler shutdown: {e}")
 
     try:
-        # 4. Clear caches
+        # 5. Clear caches
         if hasattr(app.state, "dexscreener_client"):
             app.state.dexscreener_client.clear_cache()
             logger.info("Dexscreener cache cleared")
@@ -653,7 +836,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         shutdown_errors.append(f"Cache cleanup: {e}")
 
     try:
-        # 5. Close chain clients
+        # 6. Close chain clients
         if hasattr(app.state, "evm_client"):
             await app.state.evm_client.close()
             logger.info("EVM client closed successfully")
@@ -670,7 +853,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         shutdown_errors.append(f"Solana client shutdown: {e}")
 
     try:
-        # 6. Stop WebSocket hub
+        # 7. Stop WebSocket hub
         if hasattr(app.state, "ws_hub"):
             await app.state.ws_hub.stop()  # type: ignore
             logger.info("WebSocket hub stopped successfully")

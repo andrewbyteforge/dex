@@ -19,9 +19,11 @@ from pydantic import BaseModel
 
 from ..core.settings import get_settings
 from ..services.token_metadata import TokenMetadataService
-from ..strategy.risk_scoring import RiskManager
+# FIXED: Import RiskManager from the correct module
+from ..strategy.risk_manager import RiskManager
 
 logger = logging.getLogger(__name__)
+
 
 class PairData(BaseModel):
     """Structured pair data from Dexscreener."""

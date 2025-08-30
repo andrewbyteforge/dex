@@ -78,7 +78,7 @@ const LiveOpportunitiesFeed = () => {
         try {
           const data = JSON.parse(event.data);
           
-          if (data.type === 'new_opportunity') {
+          if (data.type === 'new_pair' || data.type === 'new_opportunity') {
             const opportunity = {
               id: data.id || `opp_${Date.now()}`,
               token_symbol: data.token_symbol || 'UNKNOWN',
