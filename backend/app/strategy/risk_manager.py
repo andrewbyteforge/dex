@@ -111,6 +111,11 @@ class RiskManager:
             RiskCategory.CONTRACT_UNVERIFIED: 0.5,
         }
         
+        # Supported chains - this was missing!
+        self.supported_chains = {
+            "ethereum", "bsc", "polygon", "base", "arbitrum", "solana"
+        }
+        
         # Minimum liquidity thresholds by chain (USD)
         self.min_liquidity_thresholds = {
             "ethereum": Decimal("10000"),  # $10k minimum on ETH
@@ -125,25 +130,42 @@ class RiskManager:
         self.critical_patterns = {
             "honeypot_signatures": [
                 "transfer(address,uint256)",
-                "transferFrom(address,address,uint256)",
+                "transferFrom(address,address,uint256)", 
                 "_beforeTokenTransfer",
             ],
             "blacklist_functions": [
                 "blacklist",
-                "addToBlacklist", 
-                "removeFromBlacklist",
+                "addToBlacklist",
+                "removeFromBlacklist", 
                 "setBlacklist",
                 "blacklistAddress",
             ],
             "owner_privilege_functions": [
                 "setTaxFee",
-                "setMaxTx",
+                "setMaxTx", 
                 "setSwapAndLiquifyEnabled",
                 "emergencyWithdraw",
                 "pause",
                 "unpause",
             ]
         }
+
+
+
+
+    def supports_chain(self, chain: str) -> bool:
+        """
+        Check if risk manager supports the given chain.
+        
+        Args:
+            chain: Chain name to check
+            
+        Returns:
+            True if chain is supported
+        """
+        return chain.lower() in self.supported_chains
+
+
     
     async def assess_token_risk(
         self,
@@ -186,8 +208,13 @@ class RiskManager:
             if not token_address or not chain:
                 raise ValueError("Token address and chain are required")
             
+            # Check if chain is supported by risk manager
+            if not self.supports_chain(chain):
+                raise ValueError(f"Chain {chain} not supported by risk manager")
+            
+            # Check if chain client is available
             if chain not in chain_clients:
-                raise ValueError(f"Chain {chain} not supported")
+                raise ValueError(f"Chain client for {chain} not available")
             
             # Initialize risk factors list
             risk_factors: List[RiskFactor] = []
@@ -282,6 +309,15 @@ class RiskManager:
                 }
             )
             raise
+
+
+
+
+
+
+
+
+
     
     async def _check_honeypot_risk(
         self, 

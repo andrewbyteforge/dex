@@ -114,44 +114,35 @@ class RpcPool:
                 ("ankr_polygon", "https://rpc.ankr.com/polygon", False),
                 ("polygon_official", "https://polygon-rpc.com", False),
             ],
+            "base": [  # ADD THIS
+                ("base_primary", settings.base_rpc_url, True),
+                ("base_official", "https://mainnet.base.org", False),
+            ],
+            "arbitrum": [  # ADD THIS
+                ("arbitrum_primary", settings.arbitrum_rpc_url, True),
+                ("arbitrum_official", "https://arb1.arbitrum.io/rpc", False),
+            ],
             "solana": [
                 ("solana_primary", settings.solana_rpc_url, True),
                 ("ankr_solana", "https://rpc.ankr.com/solana", False),
             ],
         }
-        
-        for chain, configs in chain_configs.items():
-            chain_providers = []
-            
-            for name, url, is_primary in configs:
-                # Skip if primary URL not configured
-                if is_primary and not url:
-                    continue
-                    
-                # Skip if secondary URL not available
-                if not is_primary and not url:
-                    continue
-                
-                provider = RpcProvider(
-                    name=name,
-                    url=url,
-                    chain=chain,
-                    is_primary=is_primary,
-                    rate_limit_per_minute=50 if not is_primary else 100,
-                )
-                chain_providers.append(provider)
-                
-                # Initialize metrics and circuit breaker
-                provider_key = f"{chain}:{name}"
-                self.metrics[provider_key] = ProviderMetrics()
-                self.circuit_breakers[provider_key] = CircuitBreaker(
-                    failure_threshold=3,
-                    cooldown_seconds=30.0
-                )
-            
-            if chain_providers:
-                self.providers[chain] = chain_providers
-    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     async def get_best_provider(self, chain: str) -> Optional[RpcProvider]:
         """
         Get the best available provider for a chain.
