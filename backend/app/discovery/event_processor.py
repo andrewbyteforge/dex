@@ -22,6 +22,47 @@ from ..services.pricing import PricingService
 import logging
 logger = logging.getLogger(__name__)
 
+# -----------------------------------------------------------------------------
+# AI Autotrade pipeline factory (added)
+# -----------------------------------------------------------------------------
+# Try to import the pipeline class from likely locations. If it isn't present,
+# we raise a clear error when the factory is called.
+try:
+    from ..autotrade.pipeline import AIAutotradesPipeline  # type: ignore
+except Exception:  # pragma: no cover - fallback import path
+    try:
+        from ..ai.autotrade_pipeline import AIAutotradesPipeline  # type: ignore
+    except Exception:  # pragma: no cover
+        AIAutotradesPipeline = None  # type: ignore
+
+
+async def get_ai_autotrade_pipeline() -> AIAutotradesPipeline:
+    """Get AI autotrade pipeline instance.
+
+    Notes:
+        - In production these dependencies would typically be provided by a DI
+          container; here we import lazily to avoid circular imports during
+          startup and to keep dev setup simple.
+    """
+    if AIAutotradesPipeline is None:
+        raise ImportError(
+            "AIAutotradesPipeline class could not be imported from expected modules."
+        )
+
+    # Lazy imports to avoid circular deps at module import time
+    from ..ai.market_intelligence import get_market_intelligence_engine
+    from ..ai.tuner import get_auto_tuner
+    from ..ws.intelligence_hub import get_intelligence_hub
+    from ..autotrade.engine import get_autotrade_engine
+
+    return AIAutotradesPipeline(
+        market_intelligence=await get_market_intelligence_engine(),
+        auto_tuner=await get_auto_tuner(),
+        websocket_hub=await get_intelligence_hub(),
+        autotrade_engine=await get_autotrade_engine(),
+    )
+# -----------------------------------------------------------------------------
+
 
 class ProcessingStatus(str, Enum):
     """Processing status for discovered pairs."""

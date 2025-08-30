@@ -1,9 +1,14 @@
 """
-DEX Sniper Pro - Secure Autotrade Integration Layer.
+DEX Sniper Pro - Enhanced Autotrade Integration Layer with AI Pipeline.
 
 This module provides dependency injection and integration for the autotrade engine,
-connecting it to real trading systems, discovery engines, and risk management.
-SECURITY: Implements secure wallet funding with user confirmation.
+connecting discovery → AI analysis → autotrade execution with secure wallet funding.
+
+ENHANCEMENTS:
+- Integrated AI pipeline for intelligent opportunity processing
+- Discovery system callbacks with AI analysis
+- Real-time streaming to dashboard via WebSocket
+- Secure wallet funding with user confirmation
 
 File: backend/app/autotrade/integration.py
 """
@@ -22,17 +27,18 @@ from ..core.dependencies import (
     get_current_user, 
     CurrentUser, 
     get_trade_executor,
-    get_performance_analytics,  # FIXED: Import from correct location
+    get_performance_analytics,
     get_risk_manager,
     get_safety_controls,
     get_event_processor
 )
 from ..core.settings import get_settings
 from ..storage.repositories import get_transaction_repository
-# TransactionRepository import removed to avoid BaseRepository session dependency
 from ..trading.executor import TradeExecutor
 from ..trading.models import TradeRequest, TradeType
 from .engine import AutotradeEngine, TradeOpportunity, OpportunityType, OpportunityPriority
+from .ai_pipeline import AIAutotradesPipeline
+from ..discovery.event_processor import ProcessingStatus
 
 logger = logging.getLogger(__name__)
 
@@ -91,16 +97,7 @@ class WalletFundingManager:
         return approval_id
     
     async def confirm_wallet_approval(self, approval_id: str, user_confirmation: bool) -> bool:
-        """
-        Confirm or reject wallet approval request.
-        
-        Args:
-            approval_id: Approval request to confirm
-            user_confirmation: User's confirmation decision
-            
-        Returns:
-            True if approval processed successfully
-        """
+        """Confirm or reject wallet approval request."""
         if approval_id not in self.pending_approvals:
             logger.warning(f"Approval request not found: {approval_id}")
             return False
@@ -108,7 +105,6 @@ class WalletFundingManager:
         approval = self.pending_approvals[approval_id]
         
         if user_confirmation:
-            # Approve wallet for trading
             user_id = approval['user_id']
             chain = approval['chain']
             
@@ -123,52 +119,30 @@ class WalletFundingManager:
                 'per_trade_limit_usd': approval['per_trade_limit_usd']
             }
             
-            # Initialize spending tracking
             if user_id not in self.daily_spending:
                 self.daily_spending[user_id] = {}
             self.daily_spending[user_id][chain] = Decimal('0')
             
             approval['status'] = 'approved'
-            
-            logger.info(
-                f"Wallet approved for trading: {approval_id}",
-                extra={
-                    'user_id': user_id,
-                    'wallet_address': approval['wallet_address'],
-                    'chain': chain
-                }
-            )
+            logger.info(f"Wallet approved for trading: {approval_id}")
         else:
             approval['status'] = 'rejected'
             logger.info(f"Wallet approval rejected: {approval_id}")
         
-        # Clean up pending approval
         del self.pending_approvals[approval_id]
         return True
     
     async def get_approved_trading_wallet(self, user_id: str, chain: str) -> Optional[str]:
-        """
-        Get user's approved trading wallet for specific chain.
-        
-        Args:
-            user_id: User identifier
-            chain: Blockchain network
-            
-        Returns:
-            Wallet address if approved, None otherwise
-        """
+        """Get user's approved trading wallet for specific chain."""
         try:
             user_wallets = self.approved_wallets.get(user_id, {})
             wallet_info = user_wallets.get(chain)
             
             if not wallet_info:
-                logger.warning(f"No approved wallet found for user {user_id} on {chain}")
                 return None
             
             # Check if approval hasn't expired
             if wallet_info.get('expires_at') and wallet_info['expires_at'] < datetime.now(timezone.utc):
-                logger.warning(f"Wallet approval expired for user {user_id} on {chain}")
-                # Clean up expired approval
                 del self.approved_wallets[user_id][chain]
                 return None
                 
@@ -179,27 +153,13 @@ class WalletFundingManager:
             return None
     
     async def check_spending_limits(self, user_id: str, chain: str, trade_amount_usd: Decimal) -> Dict[str, Any]:
-        """
-        Check if trade amount is within approved spending limits.
-        
-        Args:
-            user_id: User identifier
-            chain: Blockchain network
-            trade_amount_usd: Proposed trade amount in USD
-            
-        Returns:
-            Limit check result with details
-        """
+        """Check if trade amount is within approved spending limits."""
         try:
             user_wallets = self.approved_wallets.get(user_id, {})
             wallet_info = user_wallets.get(chain)
             
             if not wallet_info:
-                return {
-                    'allowed': False,
-                    'reason': 'no_approved_wallet',
-                    'details': 'No approved wallet for this chain'
-                }
+                return {'allowed': False, 'reason': 'no_approved_wallet'}
             
             # Check per-trade limit
             per_trade_limit = wallet_info.get('per_trade_limit_usd', Decimal('0'))
@@ -207,7 +167,6 @@ class WalletFundingManager:
                 return {
                     'allowed': False,
                     'reason': 'per_trade_limit_exceeded',
-                    'details': f'Trade amount ${trade_amount_usd} exceeds limit ${per_trade_limit}',
                     'per_trade_limit': str(per_trade_limit),
                     'requested_amount': str(trade_amount_usd)
                 }
@@ -220,38 +179,18 @@ class WalletFundingManager:
                 return {
                     'allowed': False,
                     'reason': 'daily_limit_exceeded',
-                    'details': f'Trade would exceed daily limit',
                     'daily_limit': str(daily_limit),
-                    'current_spending': str(current_daily_spending),
-                    'requested_amount': str(trade_amount_usd),
-                    'remaining_limit': str(daily_limit - current_daily_spending)
+                    'current_spending': str(current_daily_spending)
                 }
             
-            return {
-                'allowed': True,
-                'per_trade_limit': str(per_trade_limit),
-                'daily_limit': str(daily_limit),
-                'current_daily_spending': str(current_daily_spending),
-                'remaining_daily_limit': str(daily_limit - current_daily_spending)
-            }
+            return {'allowed': True}
             
         except Exception as e:
             logger.error(f"Error checking spending limits: {e}")
-            return {
-                'allowed': False,
-                'reason': 'check_failed',
-                'details': f'Failed to check limits: {str(e)}'
-            }
+            return {'allowed': False, 'reason': 'check_failed'}
     
     async def record_trade_spending(self, user_id: str, chain: str, amount_usd: Decimal) -> None:
-        """
-        Record spending for daily limit tracking.
-        
-        Args:
-            user_id: User identifier
-            chain: Blockchain network
-            amount_usd: Amount spent in USD
-        """
+        """Record spending for daily limit tracking."""
         try:
             if user_id not in self.daily_spending:
                 self.daily_spending[user_id] = {}
@@ -261,15 +200,7 @@ class WalletFundingManager:
             
             self.daily_spending[user_id][chain] += amount_usd
             
-            logger.info(
-                f"Recorded trade spending: ${amount_usd} for user {user_id} on {chain}",
-                extra={
-                    'user_id': user_id,
-                    'chain': chain,
-                    'amount_usd': str(amount_usd),
-                    'total_daily_spending': str(self.daily_spending[user_id][chain])
-                }
-            )
+            logger.info(f"Recorded trade spending: ${amount_usd} for user {user_id} on {chain}")
             
         except Exception as e:
             logger.error(f"Error recording trade spending: {e}")
@@ -288,33 +219,21 @@ class WalletFundingManager:
 
 class AutotradeIntegration:
     """
-    Integration layer for autotrade engine with real trading systems.
+    Enhanced integration layer with AI pipeline for intelligent autotrade processing.
     
-    Manages the lifecycle and dependencies of the autotrade engine,
-    connecting it to discovery, risk management, trading execution,
-    and performance tracking systems with secure wallet funding.
+    Flow: Discovery → AI Analysis → Opportunity Creation → Dashboard Streaming → Autotrade Execution
     """
     
     def __init__(
         self,
         trade_executor: TradeExecutor,
-        risk_manager,  # Using Any type to avoid import issues
-        safety_controls,  # Using Any type to avoid import issues
-        performance_analytics,  # Using Any type to avoid import issues
+        risk_manager,
+        safety_controls,
+        performance_analytics,
         transaction_repo: Any,
-        event_processor  # Using Any type to avoid import issues
+        event_processor
     ) -> None:
-        """
-        Initialize autotrade integration.
-        
-        Args:
-            trade_executor: Real trade execution service
-            risk_manager: Risk assessment service
-            safety_controls: Safety controls and circuit breakers
-            performance_analytics: Performance tracking service
-            transaction_repo: Transaction repository
-            event_processor: Discovery event processor
-        """
+        """Initialize enhanced autotrade integration with AI pipeline."""
         self.trade_executor = trade_executor
         self.risk_manager = risk_manager
         self.safety_controls = safety_controls
@@ -325,7 +244,7 @@ class AutotradeIntegration:
         # Initialize secure wallet funding manager
         self.wallet_funding = WalletFundingManager()
         
-        # Create the actual autotrade engine with real dependencies
+        # Create the autotrade engine with real dependencies
         self.engine = AutotradeEngine(
             risk_manager=risk_manager,
             safety_controls=safety_controls,
@@ -333,164 +252,128 @@ class AutotradeIntegration:
             transaction_repo=transaction_repo
         )
         
-        # Override the engine's mock trade execution with secure real execution
-        self.engine._execute_trade = self._execute_secure_trade
+        # AI Pipeline integration (will be initialized in start())
+        self.ai_pipeline: Optional[AIAutotradesPipeline] = None
         
-        # Set up discovery integration
-        self._setup_discovery_integration()
+        # Integration state
+        self.is_initialized = False
+        self.integration_start_time: Optional[datetime] = None
         
-        logger.info(
-            "AutotradeIntegration initialized with secure wallet funding",
-            extra={
-                "module": "autotrade_integration",
-                "trace_id": f"init_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
-            }
-        )
+        logger.info("Enhanced AutotradeIntegration initialized")
     
-    def _setup_discovery_integration(self) -> None:
-        """Set up integration with discovery systems for opportunity detection."""
+    async def initialize_ai_pipeline(self) -> None:
+        """Initialize and wire the AI pipeline into the integration."""
+        if self.ai_pipeline is not None:
+            logger.warning("AI pipeline already initialized")
+            return
+        
         try:
-            # Register callback for new pair discoveries
-            if hasattr(self.event_processor, 'add_callback'):
-                self.event_processor.add_callback(
-                    "new_pair_approved", 
-                    self._on_new_pair_discovered
-                )
-                
-                # Register callback for trending token detection  
-                self.event_processor.add_callback(
-                    "trending_token_detected",
-                    self._on_trending_token_detected
-                )
-                
-                logger.info("Discovery system integration configured")
-            else:
-                logger.warning("Event processor does not support callbacks - discovery integration limited")
+            # Initialize AI pipeline dependencies
+            from ..ai.market_intelligence import get_market_intelligence_engine
+            from ..ai.tuner import get_auto_tuner
+            from ..ws.intelligence_hub import get_intelligence_hub
             
-        except Exception as e:
-            logger.error(f"Failed to setup discovery integration: {e}")
-    
-    async def _on_new_pair_discovered(self, pair_data: Dict[str, Any]) -> None:
-        """
-        Handle new pair discovery events and create trading opportunities.
-        
-        Args:
-            pair_data: Discovered pair information
-        """
-        try:
-            # Create new pair snipe opportunity
-            opportunity = TradeOpportunity(
-                id=f"newpair_{pair_data.get('token_address', 'unknown')}_{int(datetime.now(timezone.utc).timestamp())}",
-                opportunity_type=OpportunityType.NEW_PAIR_SNIPE,
-                priority=OpportunityPriority.HIGH,
-                token_address=pair_data.get("token_address", ""),
-                pair_address=pair_data.get("pair_address", ""),
-                chain=pair_data.get("chain", "ethereum"),
-                dex=pair_data.get("dex", "uniswap_v2"),
-                side="buy",
-                amount_in=pair_data.get("suggested_amount", 0.1),  # Default small position
-                expected_amount_out=0,
-                max_slippage=15.0,  # Higher slippage tolerance for new pairs
-                max_gas_price=100000000000,  # 100 gwei max
-                risk_score=0.7,  # New pairs are inherently risky
-                confidence_score=pair_data.get("confidence_score", 0.6),
-                expected_profit=pair_data.get("expected_profit", 0),
-                discovered_at=datetime.now(timezone.utc),
-                expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),  # Short expiry for new pairs
-                execution_deadline=None,
-                preset_name="new_pair_snipe",
-                strategy_params=pair_data,
-                status="pending",
-                attempts=0,
-                last_error=None
+            self.ai_pipeline = AIAutotradesPipeline(
+                market_intelligence=await get_market_intelligence_engine(),
+                auto_tuner=await get_auto_tuner(),
+                websocket_hub=await get_intelligence_hub(),
+                autotrade_engine=self.engine
             )
             
-            # Add opportunity to engine
-            success = await self.engine.add_opportunity(opportunity)
+            # Wire AI pipeline into discovery system
+            await self._setup_ai_discovery_integration()
             
-            if success:
-                logger.info(
-                    f"New pair opportunity created: {opportunity.id}",
-                    extra={
-                        "module": "autotrade_integration",
-                        "opportunity_id": opportunity.id,
-                        "token_address": opportunity.token_address,
-                        "chain": opportunity.chain
-                    }
-                )
-            else:
-                logger.warning(
-                    f"New pair opportunity rejected: {opportunity.id}",
-                    extra={
-                        "module": "autotrade_integration",
-                        "token_address": opportunity.token_address,
-                        "reason": "risk_assessment_failed_or_queue_full"
-                    }
-                )
+            # Start the AI pipeline
+            await self.ai_pipeline.start_pipeline()
+            
+            logger.info("AI pipeline initialized and integrated successfully")
             
         except Exception as e:
-            logger.error(f"Failed to process new pair discovery: {e}")
+            logger.error(f"Failed to initialize AI pipeline: {e}")
+            raise
     
-    async def _on_trending_token_detected(self, token_data: Dict[str, Any]) -> None:
-        """
-        Handle trending token detection and create re-entry opportunities.
-        
-        Args:
-            token_data: Trending token information
-        """
+    async def _setup_ai_discovery_integration(self) -> None:
+        """Wire AI pipeline into discovery system callbacks."""
         try:
-            # Create trending re-entry opportunity
-            opportunity = TradeOpportunity(
-                id=f"trend_{token_data.get('token_address', 'unknown')}_{int(datetime.now(timezone.utc).timestamp())}",
-                opportunity_type=OpportunityType.TRENDING_REENTRY,
-                priority=OpportunityPriority.MEDIUM,
-                token_address=token_data.get("token_address", ""),
-                pair_address=token_data.get("pair_address", ""),
-                chain=token_data.get("chain", "ethereum"),
-                dex=token_data.get("dex", "uniswap_v2"),
-                side="buy",
-                amount_in=token_data.get("suggested_amount", 0.2),  # Slightly larger position for trending
-                expected_amount_out=0,
-                max_slippage=10.0,  # Lower slippage for established pairs
-                max_gas_price=75000000000,  # 75 gwei max
-                risk_score=0.5,  # Trending tokens have moderate risk
-                confidence_score=token_data.get("confidence_score", 0.7),
-                expected_profit=token_data.get("expected_profit", 0),
-                discovered_at=datetime.now(timezone.utc),
-                expires_at=datetime.now(timezone.utc) + timedelta(minutes=15),  # Longer expiry for trending
-                execution_deadline=None,
-                preset_name="trending_reentry",
-                strategy_params=token_data,
-                status="pending",
-                attempts=0,
-                last_error=None
+            # Register AI pipeline to process approved pairs
+            self.event_processor.add_processing_callback(
+                ProcessingStatus.APPROVED,
+                self._on_pair_approved_by_discovery
             )
             
-            # Add opportunity to engine
-            success = await self.engine.add_opportunity(opportunity)
+            # Register for rejected pairs (for logging/analysis)
+            self.event_processor.add_processing_callback(
+                ProcessingStatus.REJECTED,
+                self._on_pair_rejected_by_discovery
+            )
             
-            if success:
+            logger.info("AI pipeline wired into discovery system callbacks")
+            
+        except Exception as e:
+            logger.error(f"Failed to setup AI discovery integration: {e}")
+            raise
+    
+    async def _on_pair_approved_by_discovery(self, processed_pair) -> None:
+        """
+        Handle pairs approved by discovery system - route through AI pipeline.
+        
+        This is the key integration point where discovery results feed into AI analysis.
+        """
+        try:
+            if not self.ai_pipeline:
+                logger.warning("AI pipeline not available for processing approved pair")
+                return
+            
+            logger.info(
+                f"Processing discovery-approved pair through AI pipeline: {processed_pair.pair_address}",
+                extra={
+                    "module": "autotrade_integration",
+                    "pair_address": processed_pair.pair_address,
+                    "opportunity_level": processed_pair.opportunity_level.value,
+                    "ai_score": processed_pair.ai_opportunity_score
+                }
+            )
+            
+            # Route through AI pipeline for intelligent processing
+            ai_opportunity = await self.ai_pipeline.process_discovery_event(processed_pair)
+            
+            if ai_opportunity:
                 logger.info(
-                    f"Trending token opportunity created: {opportunity.id}",
+                    f"AI pipeline created autotrade opportunity: {ai_opportunity.id}",
                     extra={
                         "module": "autotrade_integration",
-                        "opportunity_id": opportunity.id,
-                        "token_address": opportunity.token_address,
-                        "chain": opportunity.chain
+                        "opportunity_id": ai_opportunity.id,
+                        "intelligence_score": ai_opportunity.intelligence_score,
+                        "position_size_gbp": str(ai_opportunity.position_size_gbp)
                     }
                 )
             else:
-                logger.warning(
-                    f"Trending token opportunity rejected: {opportunity.id}",
+                logger.debug(
+                    f"AI pipeline did not create opportunity for: {processed_pair.pair_address}",
                     extra={
                         "module": "autotrade_integration",
-                        "token_address": opportunity.token_address,
-                        "reason": "risk_assessment_failed_or_queue_full"
+                        "pair_address": processed_pair.pair_address,
+                        "reason": "ai_analysis_blocked_or_monitoring"
                     }
                 )
             
         except Exception as e:
-            logger.error(f"Failed to process trending token detection: {e}")
+            logger.error(f"Error processing approved pair through AI pipeline: {e}")
+    
+    async def _on_pair_rejected_by_discovery(self, processed_pair) -> None:
+        """Handle pairs rejected by discovery system for analysis."""
+        try:
+            logger.debug(
+                f"Pair rejected by discovery: {processed_pair.pair_address}",
+                extra={
+                    "module": "autotrade_integration",
+                    "pair_address": processed_pair.pair_address,
+                    "errors": processed_pair.errors,
+                    "risk_warnings": processed_pair.risk_warnings
+                }
+            )
+        except Exception as e:
+            logger.error(f"Error logging rejected pair: {e}")
     
     async def _execute_secure_trade(
         self,
@@ -498,33 +381,20 @@ class AutotradeIntegration:
         preset_config: Optional[Dict[str, Any]] = None,
         user_id: Optional[str] = None
     ) -> bool:
-        """
-        Execute trade with secure wallet funding and user confirmation.
-        
-        Args:
-            opportunity: Trading opportunity to execute
-            preset_config: Preset configuration for trade
-            user_id: User identifier for wallet approval check
-            
-        Returns:
-            True if trade execution successful, False otherwise
-        """
+        """Execute trade with secure wallet funding and AI optimizations."""
         try:
             logger.info(
-                f"Executing secure trade for opportunity: {opportunity.id}",
+                f"Executing AI-enhanced secure trade: {opportunity.id}",
                 extra={
                     "module": "autotrade_integration",
                     "opportunity_id": opportunity.id,
-                    "token_address": opportunity.token_address,
-                    "chain": opportunity.chain,
-                    "dex": opportunity.dex,
-                    "side": opportunity.side,
-                    "amount_in": float(opportunity.amount_in),
-                    "user_id": user_id
+                    "intelligence_score": opportunity.intelligence_score,
+                    "ai_confidence": opportunity.ai_confidence,
+                    "position_size_gbp": str(opportunity.position_size_gbp)
                 }
             )
             
-            # SECURITY: Get approved wallet address
+            # SECURITY: Verify user wallet approval
             if not user_id:
                 logger.error("No user_id provided for secure trade execution")
                 return False
@@ -534,145 +404,155 @@ class AutotradeIntegration:
             )
             
             if not wallet_address:
-                logger.warning(
-                    f"No approved wallet found for user {user_id} on {opportunity.chain}",
-                    extra={
-                        "module": "autotrade_integration",
-                        "opportunity_id": opportunity.id,
-                        "user_id": user_id,
-                        "chain": opportunity.chain
-                    }
-                )
+                logger.warning(f"No approved wallet for user {user_id} on {opportunity.chain}")
                 return False
             
-            # SECURITY: Check spending limits
-            trade_amount_usd = Decimal(str(opportunity.amount_in)) * Decimal('2000')  # Rough ETH/USD conversion
+            # SECURITY: Check spending limits with AI-adjusted position size
+            trade_amount_usd = opportunity.position_size_gbp * Decimal('1.2')  # GBP to USD rough conversion
             limit_check = await self.wallet_funding.check_spending_limits(
                 user_id, opportunity.chain, trade_amount_usd
             )
             
             if not limit_check['allowed']:
-                logger.warning(
-                    f"Trade blocked by spending limits: {limit_check['reason']}",
-                    extra={
-                        "module": "autotrade_integration",
-                        "opportunity_id": opportunity.id,
-                        "user_id": user_id,
-                        "limit_check": limit_check
-                    }
-                )
+                logger.warning(f"Trade blocked by spending limits: {limit_check['reason']}")
                 return False
             
-            # Build secure trade request with approved wallet
+            # Build trade request with AI optimizations
+            base_slippage = int(float(opportunity.slippage_adjustment or 0.05) * 10000)  # Convert to bps
+            
             trade_request = TradeRequest(
-                trace_id=f"autotrade_{opportunity.id}",
-                trade_type=TradeType.BUY if opportunity.side == "buy" else TradeType.SELL,
-                input_token="WETH",  # Default to WETH, could be made dynamic
+                trace_id=f"ai_autotrade_{opportunity.id}",
+                trade_type=TradeType.BUY,
+                input_token="WETH",
                 output_token=opportunity.token_address,
-                amount_in=str(opportunity.amount_in),
+                amount_in=str(float(opportunity.position_size_gbp) * 0.0005),  # Convert GBP to ETH roughly
                 route=["WETH", opportunity.token_address],
                 dex=opportunity.dex,
                 chain=opportunity.chain,
-                slippage_bps=int(float(opportunity.max_slippage) * 100),
+                slippage_bps=base_slippage,
                 deadline_seconds=300,
-                wallet_address=wallet_address,  # SECURITY: Use approved wallet
-                max_gas_price=int(float(opportunity.max_gas_price)),
-                preset_name=opportunity.preset_name
+                wallet_address=wallet_address,
+                max_gas_price=200000000000,  # 200 gwei max
+                preset_name="ai_autotrade"
             )
             
-            # Get chain clients (mock for now - would be injected in production)
+            # Execute with AI delay if recommended
+            if opportunity.execution_delay_seconds > 0:
+                logger.info(f"AI recommended delay: {opportunity.execution_delay_seconds}s")
+                await asyncio.sleep(opportunity.execution_delay_seconds)
+            
+            # Get chain clients (mock for development)
             chain_clients = {}
             
-            # Execute trade preview first
-            preview = await self.trade_executor.preview_trade(trade_request, chain_clients)
-            
-            if not preview.valid:
-                logger.warning(
-                    f"Trade preview failed: {preview.validation_errors}",
-                    extra={
-                        "module": "autotrade_integration",
-                        "opportunity_id": opportunity.id,
-                        "errors": preview.validation_errors
-                    }
-                )
-                return False
-            
-            # Execute the actual trade
+            # Execute trade
             result = await self.trade_executor.execute_trade(trade_request, chain_clients)
             
             success = result.status in ["completed", "confirmed"]
             
             if success:
-                # SECURITY: Record spending for daily limit tracking
+                # Record spending for limits
                 await self.wallet_funding.record_trade_spending(
                     user_id, opportunity.chain, trade_amount_usd
                 )
                 
                 logger.info(
-                    f"Secure trade executed successfully: {result.tx_hash}",
+                    f"AI-enhanced trade executed successfully: {result.tx_hash}",
                     extra={
                         "module": "autotrade_integration",
                         "opportunity_id": opportunity.id,
                         "tx_hash": result.tx_hash,
-                        "amount_out": result.amount_out,
-                        "wallet_address": wallet_address,
-                        "user_id": user_id
+                        "intelligence_score": opportunity.intelligence_score,
+                        "position_size_gbp": str(opportunity.position_size_gbp)
                     }
                 )
             else:
-                logger.warning(
-                    f"Trade execution failed: {result.error_message}",
-                    extra={
-                        "module": "autotrade_integration",
-                        "opportunity_id": opportunity.id,
-                        "error": result.error_message,
-                        "user_id": user_id
-                    }
-                )
+                logger.warning(f"Trade execution failed: {result.error_message}")
             
             return success
             
         except Exception as e:
-            logger.error(
-                f"Secure trade execution error: {e}",
-                extra={
-                    "module": "autotrade_integration",
-                    "opportunity_id": opportunity.id,
-                    "token_address": opportunity.token_address,
-                    "user_id": user_id
-                }
-            )
+            logger.error(f"AI-enhanced trade execution error: {e}")
             return False
     
     async def start(self) -> None:
-        """Start the integrated autotrade system."""
+        """Start the integrated AI-enhanced autotrade system."""
+        if self.is_initialized:
+            logger.warning("Autotrade integration already started")
+            return
+        
         try:
+            # Initialize AI pipeline integration
+            await self.initialize_ai_pipeline()
+            
+            # Override engine's trade execution with secure method
+            self.engine._execute_trade = self._execute_secure_trade
+            
             # Start the autotrade engine
             await self.engine.start()
             
-            logger.info("Integrated autotrade system started successfully with secure wallet funding")
+            self.is_initialized = True
+            self.integration_start_time = datetime.now(timezone.utc)
+            
+            logger.info(
+                "AI-enhanced autotrade integration started successfully",
+                extra={
+                    "module": "autotrade_integration",
+                    "ai_pipeline_enabled": self.ai_pipeline is not None,
+                    "secure_wallet_funding": True
+                }
+            )
             
         except Exception as e:
-            logger.error(f"Failed to start integrated autotrade system: {e}")
+            logger.error(f"Failed to start AI-enhanced autotrade integration: {e}")
             raise
     
     async def stop(self) -> None:
-        """Stop the integrated autotrade system."""
+        """Stop the integrated AI-enhanced autotrade system."""
         try:
+            if self.ai_pipeline:
+                await self.ai_pipeline.stop_pipeline()
+            
             await self.engine.stop()
-            logger.info("Integrated autotrade system stopped")
+            
+            self.is_initialized = False
+            
+            logger.info("AI-enhanced autotrade integration stopped")
             
         except Exception as e:
-            logger.error(f"Error stopping integrated autotrade system: {e}")
+            logger.error(f"Error stopping AI-enhanced autotrade integration: {e}")
             raise
     
     def get_engine(self) -> AutotradeEngine:
         """Get the autotrade engine instance."""
         return self.engine
     
+    def get_ai_pipeline(self) -> Optional[AIAutotradesPipeline]:
+        """Get the AI pipeline instance."""
+        return self.ai_pipeline
+    
     def get_wallet_funding_manager(self) -> WalletFundingManager:
         """Get the wallet funding manager instance."""
         return self.wallet_funding
+    
+    def get_integration_status(self) -> Dict[str, Any]:
+        """Get comprehensive integration status including AI pipeline."""
+        status = {
+            "is_initialized": self.is_initialized,
+            "uptime_seconds": 0,
+            "ai_pipeline_enabled": self.ai_pipeline is not None,
+            "ai_pipeline_running": self.ai_pipeline.is_running if self.ai_pipeline else False,
+            "engine_running": self.engine.is_running,
+            "secure_wallet_funding": True
+        }
+        
+        if self.integration_start_time:
+            status["uptime_seconds"] = (datetime.now(timezone.utc) - self.integration_start_time).total_seconds()
+        
+        # Add AI pipeline stats if available
+        if self.ai_pipeline:
+            status["ai_pipeline_stats"] = self.ai_pipeline.get_pipeline_stats()
+        
+        return status
 
 
 # Global instance
@@ -680,39 +560,28 @@ _autotrade_integration: Optional[AutotradeIntegration] = None
 
 
 async def get_autotrade_integration() -> AutotradeIntegration:
-    """
-    Get or create the autotrade integration instance.
-    
-    Returns:
-        AutotradeIntegration: Initialized autotrade integration with secure wallet funding
-    """
+    """Get or create the AI-enhanced autotrade integration instance."""
     global _autotrade_integration
     
     if _autotrade_integration is None:
         try:
-            # Get dependencies that don't require database sessions
+            # Get dependencies
             trade_executor = await get_trade_executor()
             risk_manager = await get_risk_manager()
             safety_controls = await get_safety_controls()
             performance_analytics = await get_performance_analytics()
             event_processor = await get_event_processor()
             
-            # Create a simple transaction repository that doesn't inherit from BaseRepository
+            # Simple transaction repository for development
             class SimpleTransactionRepo:
-                def __init__(self):
-                    pass
-                    
                 async def save_transaction(self, transaction):
-                    # Mock implementation for development
                     pass
-                    
                 async def get_transaction(self, tx_id):
-                    # Mock implementation for development
                     return None
             
             transaction_repo = SimpleTransactionRepo()
             
-            # Create integration instance with secure wallet funding
+            # Create enhanced integration instance
             _autotrade_integration = AutotradeIntegration(
                 trade_executor=trade_executor,
                 risk_manager=risk_manager,
@@ -722,38 +591,39 @@ async def get_autotrade_integration() -> AutotradeIntegration:
                 event_processor=event_processor
             )
             
-            logger.info("Autotrade integration instance created successfully with secure wallet funding")
+            logger.info("AI-enhanced autotrade integration instance created successfully")
             
         except Exception as e:
-            logger.error(f"Failed to create autotrade integration: {e}", exc_info=True)
+            logger.error(f"Failed to create AI-enhanced autotrade integration: {e}")
             raise
     
     return _autotrade_integration
 
 
 async def get_autotrade_engine() -> AutotradeEngine:
-    """
-    FastAPI dependency to get the autotrade engine.
-    
-    Returns:
-        AutotradeEngine: Configured autotrade engine with real dependencies and secure wallet funding
-    """
+    """FastAPI dependency to get the AI-enhanced autotrade engine."""
     integration = await get_autotrade_integration()
     return integration.get_engine()
 
 
-# FastAPI dependency functions
-def get_autotrade_integration_dependency() -> AutotradeIntegration:
-    """FastAPI dependency for autotrade integration."""
-    return Depends(get_autotrade_integration)
-
-
-def get_autotrade_engine_dependency() -> AutotradeEngine:
-    """FastAPI dependency for autotrade engine."""
-    return Depends(get_autotrade_engine)
+async def get_ai_pipeline() -> Optional[AIAutotradesPipeline]:
+    """FastAPI dependency to get the AI pipeline."""
+    integration = await get_autotrade_integration()
+    return integration.get_ai_pipeline()
 
 
 async def get_wallet_funding_manager() -> WalletFundingManager:
     """FastAPI dependency to get the wallet funding manager."""
     integration = await get_autotrade_integration()
     return integration.get_wallet_funding_manager()
+
+
+# FastAPI dependency functions
+def get_autotrade_integration_dependency() -> AutotradeIntegration:
+    """FastAPI dependency for AI-enhanced autotrade integration."""
+    return Depends(get_autotrade_integration)
+
+
+def get_autotrade_engine_dependency() -> AutotradeEngine:
+    """FastAPI dependency for AI-enhanced autotrade engine."""
+    return Depends(get_autotrade_engine)

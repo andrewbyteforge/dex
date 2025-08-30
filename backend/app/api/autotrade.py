@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import uuid
 import asyncio
+import time
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Any
 from enum import Enum
@@ -24,6 +25,14 @@ from pydantic import BaseModel, Field
 # --- NEW: AI intelligence + risk scoring imports ---
 from app.ws.intelligence_handler import manager as intelligence_manager
 from app.strategy.risk_scoring import RiskScorer, RiskFactors
+
+# --- NEW: System bootstrap / integration helpers (added) ---
+from app.core.bootstrap_autotrade import (
+    initialize_autotrade_system,
+    shutdown_autotrade_system,
+    get_autotrade_system_status,
+)
+from app.autotrade.integration import get_ai_pipeline, get_wallet_funding_manager
 
 logger = logging.getLogger(__name__)
 
@@ -260,6 +269,220 @@ async def evaluate_trade_opportunity(opportunity: dict, wallet_address: str) -> 
     })
 
     return decision == "approved"
+
+
+# ======================================================================
+# NEW: System management & AI pipeline / wallet-funding endpoints (added)
+# ======================================================================
+
+@router.post("/system/initialize", summary="Initialize AI-Enhanced Autotrade System")
+async def initialize_system() -> Dict[str, Any]:
+    """
+    Initialize the complete AI-enhanced autotrade system including:
+    - Discovery event processor
+    - AI intelligence pipeline
+    - Autotrade engine with secure wallet funding
+    - WebSocket streaming to dashboard
+    """
+    try:
+        trace_id = f"autotrade_init_{int(time.time())}"
+
+        logger.info(
+            "Initializing AI-enhanced autotrade system",
+            extra={"trace_id": trace_id, "module": "autotrade_api"},
+        )
+
+        # Initialize the complete system
+        result = await initialize_autotrade_system()
+
+        if result["status"] == "success":
+            logger.info(
+                "Autotrade system initialization completed successfully",
+                extra={"trace_id": trace_id, "module": "autotrade_api"},
+            )
+        else:
+            logger.error(
+                f"Autotrade system initialization failed: {result.get('message')}",
+                extra={"trace_id": trace_id, "module": "autotrade_api"},
+            )
+
+        result["trace_id"] = trace_id
+        result["timestamp"] = datetime.now(timezone.utc).isoformat()
+
+        return result
+
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"Error initializing autotrade system: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to initialize autotrade system: {str(e)}",
+        )
+
+
+@router.post("/system/shutdown", summary="Shutdown Autotrade System")
+async def shutdown_system() -> Dict[str, Any]:
+    """Gracefully shutdown the autotrade system."""
+    try:
+        trace_id = f"autotrade_shutdown_{int(time.time())}"
+
+        logger.info(
+            "Shutting down autotrade system",
+            extra={"trace_id": trace_id, "module": "autotrade_api"},
+        )
+
+        result = await shutdown_autotrade_system()
+        result["trace_id"] = trace_id
+        result["timestamp"] = datetime.now(timezone.utc).isoformat()
+
+        return result
+
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"Error shutting down autotrade system: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to shutdown autotrade system: {str(e)}",
+        )
+
+
+@router.get("/system/status", summary="Get Complete System Status")
+async def get_system_status() -> Dict[str, Any]:
+    """Get comprehensive status of the autotrade system including AI pipeline."""
+    try:
+        # Get system status
+        system_status = get_autotrade_system_status()
+
+        # Add current timestamp
+        system_status["timestamp"] = datetime.now(timezone.utc).isoformat()
+        system_status["trace_id"] = f"status_check_{int(time.time())}"
+
+        return system_status
+
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"Error getting system status: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get system status: {str(e)}",
+        )
+
+
+@router.get("/ai-pipeline/stats", summary="Get AI Pipeline Statistics")
+async def get_ai_pipeline_stats() -> Dict[str, Any]:
+    """Get detailed AI pipeline performance statistics."""
+    try:
+        ai_pipeline = await get_ai_pipeline()
+
+        if not ai_pipeline:
+            return {
+                "status": "not_initialized",
+                "message": "AI pipeline not initialized",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+
+        stats = ai_pipeline.get_pipeline_stats()
+        stats["timestamp"] = datetime.now(timezone.utc).isoformat()
+
+        return stats
+
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"Error getting AI pipeline stats: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get AI pipeline stats: {str(e)}",
+        )
+
+
+@router.get("/wallet-funding/status/{user_id}", summary="Get Wallet Funding Status")
+async def get_wallet_funding_status(user_id: str) -> Dict[str, Any]:
+    """Get wallet funding and approval status for a user."""
+    try:
+        wallet_manager = await get_wallet_funding_manager()
+        status_info = wallet_manager.get_wallet_status(user_id)
+
+        status_info["timestamp"] = datetime.now(timezone.utc).isoformat()
+        status_info["user_id"] = user_id
+
+        return status_info
+
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"Error getting wallet funding status for {user_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get wallet funding status: {str(e)}",
+        )
+
+
+@router.post("/wallet-funding/request-approval", summary="Request Wallet Approval")
+async def request_wallet_approval(
+    user_id: str = Query(..., description="User identifier"),
+    wallet_address: str = Query(..., description="Wallet address to approve"),
+    chain: str = Query(..., description="Blockchain network"),
+    daily_limit_usd: float = Query(..., gt=0, description="Daily spending limit in USD"),
+    per_trade_limit_usd: float = Query(..., gt=0, description="Per-trade limit in USD"),
+    approval_duration_hours: int = Query(24, gt=0, le=168, description="Approval duration in hours"),
+) -> Dict[str, Any]:
+    """Request approval for a wallet to be used in autotrade."""
+    try:
+        wallet_manager = await get_wallet_funding_manager()
+
+        approval_id = await wallet_manager.request_wallet_approval(
+            user_id=user_id,
+            wallet_address=wallet_address,
+            chain=chain,
+            daily_limit_usd=Decimal(str(daily_limit_usd)),
+            per_trade_limit_usd=Decimal(str(per_trade_limit_usd)),
+            approval_duration_hours=approval_duration_hours,
+        )
+
+        return {
+            "status": "success",
+            "approval_id": approval_id,
+            "message": f"Wallet approval requested for {wallet_address} on {chain}",
+            "next_steps": "User must confirm approval via /wallet-funding/confirm-approval endpoint",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"Error requesting wallet approval: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to request wallet approval: {str(e)}",
+        )
+
+
+@router.post("/wallet-funding/confirm-approval", summary="Confirm Wallet Approval")
+async def confirm_wallet_approval(
+    approval_id: str = Query(..., description="Approval request ID"),
+    user_confirmation: bool = Query(..., description="User confirmation (true to approve)"),
+) -> Dict[str, Any]:
+    """Confirm or reject a wallet approval request."""
+    try:
+        wallet_manager = await get_wallet_funding_manager()
+
+        success = await wallet_manager.confirm_wallet_approval(approval_id, user_confirmation)
+
+        if success:
+            action = "approved" if user_confirmation else "rejected"
+            return {
+                "status": "success",
+                "message": f"Wallet approval {action} successfully",
+                "approval_id": approval_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        else:
+            return {
+                "status": "error",
+                "message": f"Approval request {approval_id} not found or expired",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"Error confirming wallet approval: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to confirm wallet approval: {str(e)}",
+        )
+
+# ========================= END NEW ENDPOINTS ==========================
 
 
 # ----- API Endpoints -----

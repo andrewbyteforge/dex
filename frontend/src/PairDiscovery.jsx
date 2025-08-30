@@ -1,3 +1,4 @@
+import { api } from '../config/api.js';
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   Card, 
@@ -98,7 +99,7 @@ const PairDiscovery = ({ walletAddress, selectedChain = 'ethereum', onTradeReque
 
   const checkDiscoveryStatus = async () => {
     try {
-      const response = await fetch('/api/v1/discovery/status');
+      const response = await api.discoveryStatus();
       if (response.ok) {
         const status = await response.json();
         setDiscoveryStats(status);
@@ -243,8 +244,9 @@ const PairDiscovery = ({ walletAddress, selectedChain = 'ethereum', onTradeReque
     setIsLoading(true);
     
     try {
-      const endpoint = isDiscoveryActive ? '/api/v1/discovery/stop' : '/api/v1/discovery/start';
-      const response = await fetch(endpoint, { method: 'POST' });
+      const response = isDiscoveryActive 
+        ? await api.discoveryStop({})
+        : await api.discoveryStart({ chain: selectedChain });
       
       if (response.ok) {
         setIsDiscoveryActive(!isDiscoveryActive);
@@ -262,6 +264,11 @@ const PairDiscovery = ({ walletAddress, selectedChain = 'ethereum', onTradeReque
       setIsLoading(false);
     }
   };
+
+
+
+
+
 
   const updateFilters = (newFilters) => {
     setFilters(newFilters);
