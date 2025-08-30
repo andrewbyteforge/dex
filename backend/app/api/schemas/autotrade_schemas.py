@@ -55,7 +55,7 @@ class AutotradeStartRequest(BaseModel):
     mode: str = Field(
         default="standard",
         description="Autotrade operation mode",
-        regex="^(advisory|conservative|standard|aggressive)$"
+        pattern="^(advisory|conservative|standard|aggressive)$"
     )
 
 
@@ -65,7 +65,7 @@ class AutotradeModeRequest(BaseModel):
     mode: str = Field(
         ...,
         description="New autotrade mode",
-        regex="^(disabled|advisory|conservative|standard|aggressive)$"
+        pattern="^(disabled|advisory|conservative|standard|aggressive)$"
     )
 
 
@@ -106,7 +106,7 @@ class OpportunityRequest(BaseModel):
     chain: str = Field(
         ...,
         description="Blockchain network",
-        regex="^(ethereum|bsc|polygon|base|solana)$"
+        pattern="^(ethereum|bsc|polygon|base|solana)$"
     )
     dex: str = Field(
         ...,
@@ -126,7 +126,7 @@ class OpportunityRequest(BaseModel):
     priority: str = Field(
         default="medium",
         description="Execution priority level",
-        regex="^(critical|high|medium|low)$"
+        pattern="^(critical|high|medium|low)$"
     )
 
 
@@ -315,7 +315,7 @@ class WalletApprovalRequest(BaseModel):
     chain: str = Field(
         ...,
         description="Blockchain network",
-        regex="^(ethereum|bsc|polygon|base|solana)$"
+        pattern="^(ethereum|bsc|polygon|base|solana)$"
     )
     daily_limit_usd: float = Field(
         ...,
