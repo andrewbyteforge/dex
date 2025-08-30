@@ -36,10 +36,6 @@ from app.autotrade.integration import get_ai_pipeline, get_wallet_funding_manage
 
 logger = logging.getLogger(__name__)
 
-
-# Import AI analysis endpoints from separate module
-from . import autotrade_ai_analysis
-
 router = APIRouter(prefix="/autotrade", tags=["autotrade"])
 
 
@@ -227,6 +223,58 @@ async def get_autotrade_engine():
 
 # ----- NEW: AI Evaluation Helper -----
 
+async def evaluate_trade_opportunity(opportunity: dict, wallet_address: str) -> bool:
+    """
+    Evaluate a trade opportunity and stream AI thinking/decision to the frontend.
+
+    This uses the Intelligence WebSocket manager to push interim "thinking"
+    updates and a final decision payload to the client identified by wallet_address.
+    """
+    # Send AI thinking messages
+    await intelligence_manager.send_to_wallet(wallet_address, {
+        "type": "ai_thinking",
+        "message": "🔍 Analyzing new trading opportunity...",
+        "status": "analyzing"
+    })
+
+    # Simulate thinking
+    await asyncio.sleep(0.5)
+
+    # Calculate risk score
+    scorer = RiskScorer()
+    risk_factors = RiskFactors(
+        token_address=opportunity.get("token_address"),
+        chain=opportunity.get("chain", "ethereum"),
+        liquidity_usd=Decimal(str(opportunity.get("liquidity", 0))),
+        volume_24h=Decimal(str(opportunity.get("volume", 0)))
+    )
+    risk_score = await scorer.calculate_risk_score(risk_factors)
+
+    # Send risk assessment
+    await intelligence_manager.send_to_wallet(wallet_address, {
+        "type": "ai_thinking",
+        "message": f"📊 Risk Score: {risk_score.total_score}/100 ({risk_score.risk_level})",
+        "status": "analyzing"
+    })
+
+    # Final decision (example policy; adjust to your thresholds)
+    decision = "approved" if risk_score.total_score < 60 else "blocked"
+
+    await intelligence_manager.send_to_wallet(wallet_address, {
+        "type": "ai_decision",
+        "decision": decision,
+        "risk_score": risk_score.total_score,
+        "message": f"{'✅ Approved' if decision == 'approved' else '❌ Blocked'}: {risk_score.recommendation}",
+        "status": "complete"
+    })
+
+    return decision == "approved"
+
+
+# ======================================================================
+# NEW: System management & AI pipeline / wallet-funding endpoints (added)
+# ======================================================================
+
 @router.post("/system/initialize", summary="Initialize AI-Enhanced Autotrade System")
 async def initialize_system() -> Dict[str, Any]:
     """
@@ -318,6 +366,31 @@ async def get_system_status() -> Dict[str, Any]:
 
 
 @router.get("/ai-pipeline/stats", summary="Get AI Pipeline Statistics")
+async def get_ai_pipeline_stats() -> Dict[str, Any]:
+    """Get detailed AI pipeline performance statistics."""
+    try:
+        ai_pipeline = await get_ai_pipeline()
+
+        if not ai_pipeline:
+            return {
+                "status": "not_initialized",
+                "message": "AI pipeline not initialized",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+
+        stats = ai_pipeline.get_pipeline_stats()
+        stats["timestamp"] = datetime.now(timezone.utc).isoformat()
+
+        return stats
+
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"Error getting AI pipeline stats: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get AI pipeline stats: {str(e)}",
+        )
+
+
 @router.get("/wallet-funding/status/{user_id}", summary="Get Wallet Funding Status")
 async def get_wallet_funding_status(user_id: str) -> Dict[str, Any]:
     """Get wallet funding and approval status for a user."""
