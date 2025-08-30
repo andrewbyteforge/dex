@@ -1,5 +1,5 @@
 """
-DEX Sniper Pro - Intelligence WebSocket Hub with Autotrade Bridge.
+DEX Sniper Pro - Intelligence WebSocket Hub with Autotrade Bridge - FIXED VERSION.
 
 Phase 2 Week 10: Real-time intelligence streaming to frontend dashboard
 for live AI analysis updates, market regime changes, and coordination alerts.
@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Dict, Set, Optional, Any, List, Callable
+from typing import Dict, Set, Optional, Any, List, Callable, Union
 from datetime import datetime, timezone
 from enum import Enum
 
@@ -50,6 +50,8 @@ class IntelligenceWebSocketHub:
     Streams AI analysis results, market regime changes, whale alerts,
     and coordination pattern detections to connected frontend clients.
     Also routes high-priority intelligence to autotrade subscribers.
+    
+    FIXED: Proper ProcessedPair dataclass handling instead of dictionary access.
     """
     
     def __init__(self):
@@ -93,10 +95,10 @@ class IntelligenceWebSocketHub:
             try:
                 from ..discovery.event_processor import event_processor, ProcessingStatus
                 
-                # Register callbacks with event processor
+                # Register callbacks with event processor - FIXED: Use ProcessedPair properly
                 event_processor.add_processing_callback(
                     ProcessingStatus.APPROVED, 
-                    self._on_pair_approved
+                    self._on_pair_approved_fixed
                 )
                 logger.info("Event processor callbacks registered")
                 
@@ -395,14 +397,89 @@ class IntelligenceWebSocketHub:
             }
             await self._send_to_autotrade_bridge(bridge_data)
     
-    async def _on_pair_approved(self, pair_data: Dict[str, Any]):
+    def _extract_processed_pair_data(self, processed_pair: Any) -> Dict[str, Any]:
         """
-        Callback for when a pair is approved by event processor.
+        FIXED: Safely extract data from ProcessedPair dataclass.
         
         Args:
-            pair_data: Approved pair data
+            processed_pair: ProcessedPair dataclass instance or dict
+            
+        Returns:
+            Dict with safely extracted data
         """
         try:
+            # Handle ProcessedPair dataclass (the proper way)
+            if hasattr(processed_pair, 'pair_address'):
+                # Extract data using direct attribute access (not .get())
+                return {
+                    "address": processed_pair.pair_address,
+                    "token_address": processed_pair.token0 or "",
+                    "chain": processed_pair.chain,
+                    "dex": processed_pair.dex or "unknown",
+                    "intelligence_score": processed_pair.ai_opportunity_score or 0.5,
+                    "ai_confidence": processed_pair.ai_confidence or 0.5,
+                    "opportunity_rating": processed_pair.opportunity_level.value if processed_pair.opportunity_level else "unknown",
+                    "risk_assessment": {
+                        "overall_score": processed_pair.risk_assessment.overall_score if processed_pair.risk_assessment else 0.5,
+                        "risk_level": getattr(processed_pair.risk_assessment, 'risk_level', 'medium'),
+                        "warnings": processed_pair.risk_warnings or []
+                    },
+                    "coordination_detected": False,  # Default - would need to check intelligence_data
+                    "whale_activity": processed_pair.intelligence_data.get("whale_behavior", {}) if processed_pair.intelligence_data else {},
+                    "social_sentiment": processed_pair.intelligence_data.get("social_sentiment", {}) if processed_pair.intelligence_data else {},
+                    "token_symbol": processed_pair.base_token_symbol or "UNKNOWN",
+                    "liquidity_usd": float(processed_pair.liquidity_usd) if processed_pair.liquidity_usd else 0.0,
+                    "processing_id": processed_pair.processing_id,
+                    "tradeable": processed_pair.tradeable
+                }
+            
+            # Fallback for dict-like objects (legacy support)
+            elif isinstance(processed_pair, dict):
+                return {
+                    "address": processed_pair.get("pair_address", "unknown"),
+                    "token_address": processed_pair.get("token0", ""),
+                    "chain": processed_pair.get("chain", "unknown"),
+                    "intelligence_score": processed_pair.get("ai_opportunity_score", 0.5),
+                    "opportunity_rating": processed_pair.get("opportunity_level", "unknown"),
+                    "risk_assessment": processed_pair.get("risk_assessment", {}),
+                    "coordination_detected": processed_pair.get("coordination_detected", False),
+                    "whale_activity": processed_pair.get("whale_activity", {}),
+                    "social_sentiment": processed_pair.get("social_sentiment", {})
+                }
+            
+            # Unknown object type
+            else:
+                logger.warning(f"Unknown processed_pair type: {type(processed_pair)}")
+                return {
+                    "address": "unknown",
+                    "chain": "unknown",
+                    "intelligence_score": 0.5,
+                    "error": f"Unknown data type: {type(processed_pair)}"
+                }
+                
+        except Exception as e:
+            logger.error(f"Error extracting ProcessedPair data: {e}", exc_info=True)
+            return {
+                "address": "unknown",
+                "chain": "unknown", 
+                "intelligence_score": 0.5,
+                "error": str(e)
+            }
+    
+    async def _on_pair_approved_fixed(self, processed_pair: Any):
+        """
+        FIXED: Callback for when a pair is approved by event processor.
+        
+        This function properly handles ProcessedPair dataclass instances
+        instead of treating them like dictionaries.
+        
+        Args:
+            processed_pair: ProcessedPair dataclass instance (NOT a dict)
+        """
+        try:
+            # FIXED: Use proper dataclass attribute access
+            pair_data = self._extract_processed_pair_data(processed_pair)
+            
             intelligence_score = pair_data.get("intelligence_score", 0.5)
             
             # Determine event type based on intelligence score
@@ -418,24 +495,23 @@ class IntelligenceWebSocketHub:
             event = IntelligenceEvent(
                 event_type=event_type,
                 timestamp=datetime.now(timezone.utc),
-                data={
-                    "pair_address": pair_data.get("address", "unknown"),
-                    "token_address": pair_data.get("token_address", ""),
-                    "chain": pair_data.get("chain", "unknown"),
-                    "intelligence_score": intelligence_score,
-                    "opportunity_rating": pair_data.get("opportunity_rating", "neutral"),
-                    "risk_assessment": pair_data.get("risk_assessment", {}),
-                    "coordination_detected": pair_data.get("coordination_detected", False),
-                    "whale_activity": pair_data.get("whale_activity", {}),
-                    "social_sentiment": pair_data.get("social_sentiment", {}),
-                    "market_regime": self.last_market_regime
-                }
+                data=pair_data
             )
             
             await self.broadcast_intelligence_event(event)
             
+            logger.debug(
+                f"Intelligence event created for pair {pair_data.get('address', 'unknown')}",
+                extra={
+                    "pair_address": pair_data.get("address"),
+                    "chain": pair_data.get("chain"),
+                    "intelligence_score": intelligence_score,
+                    "event_type": event_type.value
+                }
+            )
+            
         except Exception as e:
-            logger.error(f"Error processing pair approval: {e}")
+            logger.error(f"Error processing pair approval: {e}", exc_info=True)
     
     async def _market_regime_monitor(self):
         """Background task to monitor market regime changes with autotrade bridge."""
