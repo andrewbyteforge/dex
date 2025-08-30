@@ -10,16 +10,24 @@ File: backend/app/api/autotrade.py
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import datetime, timezone
+from typing import Dict, Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, status
 
 logger = logging.getLogger(__name__)
 
 # Create main router with the expected structure
 router = APIRouter(prefix="/autotrade", tags=["autotrade"])
 
-# Import split modules with error handling for development
+def generate_trace_id() -> str:
+    """Generate a unique trace ID for request tracking."""
+    return f"auto_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{str(uuid.uuid4())[:8]}"
+
+# Try to import split modules, with graceful fallback
+split_modules_available = False
+
 try:
     from app.api.routers.autotrade_core import router as core_router
     from app.api.routers.autotrade_system import router as system_router  
@@ -32,48 +40,91 @@ try:
     router.include_router(queue_router, prefix="")
     router.include_router(wallet_router, prefix="")
     
+    split_modules_available = True
     logger.info("Split autotrade routers loaded successfully")
     
 except ImportError as e:
-    logger.warning(f"Split routers not available, using fallback: {e}")
+    logger.warning(f"Split routers not available: {e}")
+    split_modules_available = False
+
+# If split modules aren't available, create basic endpoints
+if not split_modules_available:
+    # Mock state for basic functionality
+    _engine_state = {
+        "mode": "disabled",
+        "is_running": False,
+        "started_at": None,
+        "queue_size": 0,
+        "active_trades": 0,
+    }
     
-    # Fallback: Import from the original schemas and state
-    try:
-        from app.api.schemas.autotrade_schemas import AutotradeStatusResponse
-        from app.api.utils.autotrade_engine_state import get_autotrade_engine, generate_trace_id
+    @router.get("/status")
+    async def get_status() -> Dict[str, Any]:
+        """Basic status endpoint when split modules unavailable."""
+        trace_id = generate_trace_id()
         
-        # Minimal fallback endpoints
-        @router.get("/status")
-        async def get_status():
-            trace_id = generate_trace_id()
-            return {
-                "status": "fallback_mode",
-                "message": "Autotrade running in fallback mode",
-                "trace_id": trace_id,
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            }
-            
-        @router.get("/health")
-        async def health_check():
-            return {
-                "status": "healthy",
-                "component": "autotrade_fallback",
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            }
-            
-        logger.info("Fallback autotrade endpoints created")
+        logger.info(
+            "Autotrade status requested (basic mode)",
+            extra={"extra_data": {"trace_id": trace_id, "module": "autotrade_basic"}}
+        )
         
-    except ImportError:
-        logger.error("Cannot create even fallback autotrade endpoints")
+        return {
+            "mode": _engine_state["mode"],
+            "is_running": _engine_state["is_running"],
+            "uptime_seconds": 0.0,
+            "queue_size": _engine_state["queue_size"],
+            "active_trades": _engine_state["active_trades"],
+            "metrics": {
+                "total_trades": 0,
+                "successful_trades": 0,
+                "failed_trades": 0,
+                "total_profit": 0.0,
+                "win_rate": 0.0,
+            },
+            "next_opportunity": None,
+            "configuration": {
+                "enabled": False,
+                "mode": "disabled",
+                "max_position_size_gbp": 100,
+                "daily_loss_limit_gbp": 500,
+                "max_concurrent_trades": 3,
+            },
+            "trace_id": trace_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "message": "Basic autotrade mode - split modules not available",
+        }
         
-        # Absolute minimal fallback
-        @router.get("/")
-        async def minimal_status():
-            return {
-                "status": "minimal",
-                "message": "Autotrade module needs setup",
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            }
+    @router.post("/start")
+    async def start_basic() -> Dict[str, str]:
+        """Basic start endpoint."""
+        trace_id = generate_trace_id()
+        return {
+            "status": "error",
+            "message": "Autotrade start not available - split modules needed",
+            "trace_id": trace_id,
+        }
+        
+    @router.post("/stop")
+    async def stop_basic() -> Dict[str, str]:
+        """Basic stop endpoint."""
+        trace_id = generate_trace_id()
+        return {
+            "status": "error", 
+            "message": "Autotrade stop not available - split modules needed",
+            "trace_id": trace_id,
+        }
+        
+    @router.get("/health")
+    async def basic_health() -> Dict[str, Any]:
+        """Basic health check."""
+        return {
+            "status": "limited",
+            "component": "autotrade_basic",
+            "message": "Basic mode - split modules not available",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    
+    logger.warning("Autotrade running in basic mode - split modules not available")
 
 
 @router.get("/", summary="Autotrade API Overview")
