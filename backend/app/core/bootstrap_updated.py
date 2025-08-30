@@ -81,7 +81,7 @@ async def register_api_routers(app: FastAPI) -> None:
         from ..api.orders import router as orders_router
         from ..api.discovery import router as discovery_router
         from ..api.safety import router as safety_router
-        from ..api.autotrade import router as autotrade_router
+        from ..api.autotrade_main import router as autotrade_router
         
         # New APIs
         from ..api.copytrade import router as copytrade_router
