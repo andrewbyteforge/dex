@@ -1,26 +1,240 @@
 """
 WebSocket API routes for DEX Sniper Pro.
-Provides clean, unified WebSocket endpoints replacing all existing WebSocket routes.
+Provides clean, unified WebSocket endpoints with live opportunities broadcasting.
 
 File: backend/app/api/websocket.py
 """
 
 from __future__ import annotations
-import time
+
+import asyncio
+import json
 import logging
+import time
 import uuid
-from typing import Optional
+from datetime import datetime, timezone
+from decimal import Decimal
+from typing import Dict, Any, Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, Path
 from fastapi.responses import HTMLResponse
 
+from ..discovery.event_processor import ProcessedPair, OpportunityLevel, ProcessingStatus
 from ..ws.hub import ws_hub, Channel, MessageType, WebSocketMessage
-
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ws", tags=["websocket"])
 
+
+# ========================================================================
+# OPPORTUNITY BROADCASTING SYSTEM
+# ========================================================================
+
+def transform_processed_pair_to_opportunity(processed_pair: ProcessedPair) -> Optional[Dict[str, Any]]:
+    """
+    Transform backend ProcessedPair to frontend opportunity format.
+    
+    Args:
+        processed_pair: Processed pair from event processor
+        
+    Returns:
+        Opportunity dict or None if not suitable for frontend display
+    """
+    try:
+        # Skip pairs that aren't viable opportunities
+        if not processed_pair.tradeable or processed_pair.opportunity_level == OpportunityLevel.BLOCKED:
+            return None
+            
+        # Determine opportunity type
+        opportunity_type = "new_pair"  # Default
+        if processed_pair.intelligence_data:
+            intel_data = processed_pair.intelligence_data
+            if intel_data.get("whale_activity", {}).get("whale_confidence", 0) > 0.7:
+                opportunity_type = "momentum"
+            elif intel_data.get("social_sentiment", {}).get("sentiment_score", 0) > 0.6:
+                opportunity_type = "trending_reentry"
+                
+        # Map opportunity level to profit potential
+        profit_potential_map = {
+            OpportunityLevel.EXCELLENT: "high",
+            OpportunityLevel.GOOD: "high", 
+            OpportunityLevel.FAIR: "medium",
+            OpportunityLevel.POOR: "low"
+        }
+        
+        # Calculate price change (mock for now - would come from price tracking)
+        price_change_1h = 0.0
+        if processed_pair.intelligence_data:
+            # Use AI confidence as price momentum indicator
+            ai_confidence = processed_pair.ai_confidence or 0.5
+            price_change_1h = (ai_confidence - 0.5) * 20  # Scale -10 to +10%
+            
+        opportunity = {
+            "id": f"opp_{processed_pair.processing_id}",
+            "token_symbol": processed_pair.base_token_symbol or "UNKNOWN",
+            "token_address": processed_pair.token0,  # Base token address
+            "chain": processed_pair.chain,
+            "dex": processed_pair.dex,
+            "liquidity_usd": float(processed_pair.liquidity_usd or 0),
+            "volume_24h": float(processed_pair.volume_24h or 0),
+            "price_change_1h": round(price_change_1h, 2),
+            "market_cap": float(processed_pair.market_cap or 0),
+            "risk_score": int(processed_pair.risk_assessment.overall_score) if processed_pair.risk_assessment else 50,
+            "opportunity_type": opportunity_type,
+            "detected_at": datetime.fromtimestamp(processed_pair.block_timestamp, timezone.utc).isoformat(),
+            "profit_potential": profit_potential_map.get(processed_pair.opportunity_level, "medium")
+        }
+        
+        return opportunity
+        
+    except Exception as e:
+        logger.error(f"Error transforming processed pair to opportunity: {e}")
+        return None
+
+
+class OpportunityBroadcaster:
+    """
+    Handles broadcasting live opportunities to WebSocket clients.
+    Integrates with the event processor to receive ProcessedPair updates.
+    """
+    
+    def __init__(self):
+        self.is_running = False
+        self.opportunity_callbacks = []
+        
+    async def start(self):
+        """Start the opportunity broadcaster."""
+        if self.is_running:
+            return
+            
+        self.is_running = True
+        logger.info("Opportunity broadcaster started")
+        
+        # Register with event processor to receive processed pairs
+        try:
+            from ..discovery.event_processor import event_processor
+            if event_processor:
+                event_processor.add_processing_callback(
+                    ProcessingStatus.APPROVED,
+                    self._handle_approved_opportunity
+                )
+                logger.info("Registered callback with event processor")
+            else:
+                logger.warning("Event processor not available for opportunity broadcasting")
+        except ImportError as e:
+            logger.warning(f"Could not import event processor: {e}")
+    
+    async def stop(self):
+        """Stop the opportunity broadcaster."""
+        self.is_running = False
+        logger.info("Opportunity broadcaster stopped")
+    
+    async def _handle_approved_opportunity(self, processed_pair: ProcessedPair):
+        """
+        Handle new approved opportunity from event processor.
+        
+        Args:
+            processed_pair: Approved ProcessedPair from event processor
+        """
+        try:
+            # Transform to frontend format
+            opportunity = transform_processed_pair_to_opportunity(processed_pair)
+            if not opportunity:
+                logger.debug(f"Skipping opportunity broadcast for {processed_pair.pair_address}")
+                return
+            
+            # Broadcast to all discovery channel subscribers
+            await self._broadcast_opportunity(opportunity)
+            
+            logger.info(
+                f"Broadcast opportunity: {opportunity['token_symbol']} on {opportunity['chain']}",
+                extra={
+                    "trace_id": processed_pair.processing_id,
+                    "opportunity_level": processed_pair.opportunity_level.value,
+                    "risk_score": opportunity['risk_score']
+                }
+            )
+            
+        except Exception as e:
+            logger.error(f"Error handling approved opportunity: {e}")
+    
+    async def _broadcast_opportunity(self, opportunity: Dict[str, Any]):
+        """
+        Broadcast opportunity to WebSocket clients.
+        
+        Args:
+            opportunity: Formatted opportunity data
+        """
+        try:
+            if not ws_hub:
+                logger.warning("WebSocket hub not available for opportunity broadcast")
+                return
+                
+            # Create WebSocket message - using NEW_OPPORTUNITY type
+            message = WebSocketMessage(
+                id=str(uuid.uuid4()),
+                type=MessageType.NEW_OPPORTUNITY,
+                channel=Channel.DISCOVERY,
+                data={
+                    "type": "new_opportunity",
+                    **opportunity
+                },
+                timestamp=datetime.now(timezone.utc).isoformat()
+            )
+            
+            # Broadcast to discovery channel
+            sent_count = await ws_hub.broadcast_to_channel(Channel.DISCOVERY, message)
+            
+            logger.debug(f"Opportunity broadcast to {sent_count} clients")
+            
+        except Exception as e:
+            logger.error(f"Error broadcasting opportunity: {e}")
+
+
+# Global opportunity broadcaster instance
+opportunity_broadcaster = OpportunityBroadcaster()
+
+
+async def _handle_discovery_client_message(client_id: str, message_data: Dict[str, Any]):
+    """
+    Handle messages from discovery WebSocket clients.
+    
+    Args:
+        client_id: Client identifier
+        message_data: Parsed message data
+    """
+    try:
+        message_type = message_data.get("type")
+        
+        if message_type == "set_filters":
+            # Handle filter updates (for future use)
+            filters = message_data.get("filters", {})
+            logger.info(f"Discovery client {client_id} updated filters: {filters}")
+            
+            # Could store client-specific filters here for targeted broadcasting
+            
+        elif message_type == "ping":
+            # Handle ping/keepalive
+            if ws_hub:
+                await ws_hub.send_to_client(client_id, WebSocketMessage(
+                    id=str(uuid.uuid4()),
+                    type=MessageType.HEARTBEAT,  # Using HEARTBEAT as PONG equivalent
+                    channel=Channel.DISCOVERY,
+                    data={"type": "pong", "timestamp": datetime.now(timezone.utc).isoformat()},
+                    timestamp=datetime.now(timezone.utc).isoformat()
+                ))
+            
+        else:
+            logger.debug(f"Unknown message type from discovery client {client_id}: {message_type}")
+            
+    except Exception as e:
+        logger.error(f"Error handling discovery client message: {e}")
+
+
+# ========================================================================
+# WEBSOCKET ENDPOINTS
+# ========================================================================
 
 @router.websocket("/{client_id}")
 async def websocket_endpoint(
@@ -96,8 +310,123 @@ async def websocket_endpoint(
             logger.error(f"Error during WebSocket cleanup for {client_id}: {cleanup_error}")
 
 
+@router.websocket("/discovery")
+async def discovery_websocket_endpoint(websocket: WebSocket):
+    """
+    Enhanced WebSocket endpoint for live opportunities discovery feed.
+    
+    Provides real-time stream of trading opportunities to the frontend,
+    transforming backend ProcessedPair data into the expected format.
+    """
+    await websocket.accept()
+    client_id = f"discovery_{int(datetime.now().timestamp())}"
+    logger.info(f"Discovery WebSocket client connected: {client_id}")
+    
+    try:
+        # Connect client to the hub
+        connected = await ws_hub.connect_client(client_id, websocket)
+        if not connected:
+            logger.error(f"Failed to connect discovery client: {client_id}")
+            await websocket.close(code=1011, reason="Server error")
+            return
+        
+        # Auto-subscribe to discovery channel
+        await ws_hub.subscribe_to_channel(client_id, Channel.DISCOVERY)
+        logger.info(f"Discovery client {client_id} subscribed to discovery channel")
+        
+        # Start opportunity broadcaster if not running
+        if not opportunity_broadcaster.is_running:
+            await opportunity_broadcaster.start()
+        
+        # Send connection established message
+        await websocket.send_json({
+            "type": "connection_established",
+            "client_id": client_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "channels": ["discovery"]
+        })
+        
+        # Keep connection alive and handle messages
+        while True:
+            try:
+                data = await websocket.receive_text()
+                
+                # Handle client messages (like filter updates)
+                try:
+                    message_data = json.loads(data)
+                    await _handle_discovery_client_message(client_id, message_data)
+                except json.JSONDecodeError:
+                    logger.warning(f"Invalid JSON from discovery client {client_id}: {data}")
+                except Exception as msg_error:
+                    logger.error(f"Error handling message from {client_id}: {msg_error}")
+                    
+            except WebSocketDisconnect:
+                logger.info(f"Discovery client {client_id} disconnected")
+                break
+            except Exception as e:
+                logger.error(f"Error handling discovery message for {client_id}: {e}")
+                break
+                
+    except Exception as e:
+        logger.error(f"Critical error in discovery endpoint: {e}")
+    finally:
+        try:
+            await ws_hub.disconnect_client(client_id, "Discovery connection closed")
+        except Exception as cleanup_error:
+            logger.error(f"Error cleaning up discovery client {client_id}: {cleanup_error}")
 
 
+@router.websocket("/autotrade")
+async def websocket_autotrade_endpoint(websocket: WebSocket):
+    """
+    Legacy autotrade WebSocket endpoint for frontend compatibility.
+    Maintained for backward compatibility with existing frontends.
+    """
+    # Accept the WebSocket connection
+    await websocket.accept()
+
+    client_id = f"autotrade_{uuid.uuid4().hex[:8]}"
+    logger.info(f"Legacy autotrade WebSocket connection: {client_id}")
+    
+    try:
+        # Use existing hub connection logic
+        connected = await ws_hub.connect_client(client_id, websocket)
+        if not connected:
+            logger.error(f"Failed to connect legacy autotrade client: {client_id}")
+            await websocket.close(code=1011, reason="Server error")
+            return
+        
+        # Auto-subscribe to autotrade channel for legacy clients
+        try:
+            await ws_hub.subscribe_to_channel(client_id, Channel.AUTOTRADE)
+            logger.info(f"Legacy client {client_id} auto-subscribed to autotrade channel")
+        except Exception as sub_error:
+            logger.error(f"Failed to auto-subscribe legacy client: {sub_error}")
+        
+        # Handle messages
+        while True:
+            try:
+                data = await websocket.receive_text()
+                await ws_hub.handle_client_message(client_id, data)
+            except WebSocketDisconnect:
+                logger.info(f"Legacy autotrade client {client_id} disconnected")
+                break
+            except Exception as e:
+                logger.error(f"Error in legacy autotrade endpoint for {client_id}: {e}")
+                break
+                
+    except Exception as e:
+        logger.error(f"Critical error in legacy autotrade endpoint: {e}")
+    finally:
+        try:
+            await ws_hub.disconnect_client(client_id, "Legacy connection closed")
+        except Exception as cleanup_error:
+            logger.error(f"Error cleaning up legacy client {client_id}: {cleanup_error}")
+
+
+# ========================================================================
+# HTTP ENDPOINTS
+# ========================================================================
 
 @router.get("/status")
 async def websocket_status():
@@ -113,10 +442,15 @@ async def websocket_status():
         return {
             "status": "operational" if ws_hub and hasattr(ws_hub, '_running') and ws_hub._running else "degraded",
             "hub_stats": hub_stats,
+            "opportunity_broadcaster": {
+                "running": opportunity_broadcaster.is_running,
+                "status": "operational" if opportunity_broadcaster.is_running else "stopped"
+            },
             "endpoints": {
                 "main": "/ws/{client_id}",
-                "legacy": "/ws/autotrade",
-                "description": "Single WebSocket endpoint with channel subscriptions"
+                "discovery": "/ws/discovery", 
+                "legacy_autotrade": "/ws/autotrade",
+                "description": "WebSocket endpoints with live opportunities broadcasting"
             }
         }
     except Exception as e:
@@ -125,6 +459,54 @@ async def websocket_status():
             "status": "error",
             "error": str(e),
             "hub_stats": {"error": "unable_to_retrieve"}
+        }
+
+
+@router.get("/health")
+async def websocket_health():
+    """
+    Detailed health check for WebSocket system components.
+    
+    Returns:
+        Dict containing detailed health information
+    """
+    try:
+        health_info = {
+            "status": "healthy",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "components": {
+                "hub_available": ws_hub is not None,
+                "hub_running": False,
+                "connection_count": 0,
+                "channel_count": 0,
+                "opportunity_broadcaster_running": opportunity_broadcaster.is_running
+            }
+        }
+        
+        if ws_hub:
+            try:
+                stats = ws_hub.get_connection_stats()
+                health_info["components"].update({
+                    "hub_running": hasattr(ws_hub, '_running') and ws_hub._running,
+                    "connection_count": stats.get("total_connections", 0),
+                    "channel_count": len(stats.get("channel_subscriptions", {}))
+                })
+                health_info["hub_stats"] = stats
+            except Exception as stats_error:
+                health_info["components"]["stats_error"] = str(stats_error)
+                health_info["status"] = "degraded"
+        else:
+            health_info["status"] = "unhealthy"
+            health_info["error"] = "WebSocket hub not available"
+        
+        return health_info
+        
+    except Exception as e:
+        logger.error(f"WebSocket health check failed: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
 
 
@@ -204,6 +586,11 @@ async def websocket_test_page():
             .message.error {
                 background-color: #f8d7da;
                 border-left: 4px solid #dc3545;
+            }
+            .message.opportunity {
+                background-color: #d1ecf1;
+                border-left: 4px solid #17a2b8;
+                font-weight: bold;
             }
             button { 
                 padding: 10px 16px; 
@@ -297,15 +684,15 @@ async def websocket_test_page():
                     <div class="stat-label">Messages Sent</div>
                 </div>
                 <div class="stat-box">
-                    <div class="stat-value" id="heartbeatCount">0</div>
-                    <div class="stat-label">Heartbeats</div>
+                    <div class="stat-value" id="opportunitiesReceived">0</div>
+                    <div class="stat-label">Opportunities Received</div>
                 </div>
             </div>
             
             <div class="controls">
-                <button onclick="connect()" class="btn-success">Connect</button>
+                <button onclick="connectDiscovery()" class="btn-success">Connect to Discovery</button>
+                <button onclick="connectAutotrade()" class="btn-success">Connect to Autotrade</button>
                 <button onclick="disconnect()" class="btn-danger">Disconnect</button>
-                <button onclick="sendManualHeartbeat()" class="btn-warning">Send Heartbeat</button>
                 <button onclick="testConnection()" class="btn-secondary">Test Connection</button>
             </div>
             
@@ -336,11 +723,8 @@ async def websocket_test_page():
                 connectionCount: 0,
                 messagesReceived: 0,
                 messagesSent: 0,
-                heartbeatCount: 0
+                opportunitiesReceived: 0
             };
-            let heartbeatInterval = null;
-            let reconnectAttempts = 0;
-            let maxReconnectAttempts = 5;
             let messageLog = [];
 
             function updateStatus(connected, details = '') {
@@ -358,7 +742,7 @@ async def websocket_test_page():
                 document.getElementById('connectionCount').textContent = stats.connectionCount;
                 document.getElementById('messagesReceived').textContent = stats.messagesReceived;
                 document.getElementById('messagesSent').textContent = stats.messagesSent;
-                document.getElementById('heartbeatCount').textContent = stats.heartbeatCount;
+                document.getElementById('opportunitiesReceived').textContent = stats.opportunitiesReceived;
             }
 
             function addMessage(message, type = 'system') {
@@ -370,7 +754,6 @@ async def websocket_test_page():
                 messagesEl.appendChild(messageDiv);
                 messagesEl.scrollTop = messagesEl.scrollHeight;
                 
-                // Log message for export
                 messageLog.push({
                     timestamp: new Date().toISOString(),
                     type: type,
@@ -378,13 +761,21 @@ async def websocket_test_page():
                 });
             }
 
-            function connect() {
+            function connectDiscovery() {
+                connect('/ws/discovery');
+            }
+
+            function connectAutotrade() {
+                connect('/ws/autotrade');
+            }
+
+            function connect(endpoint = null) {
                 if (ws && ws.readyState === WebSocket.OPEN) {
                     addMessage('Already connected', 'system');
                     return;
                 }
 
-                const wsUrl = `ws://localhost:8001/ws/${clientId}`;
+                const wsUrl = endpoint || `ws://localhost:8001/ws/${clientId}`;
                 addMessage(`Connecting to: ${wsUrl}`, 'system');
                 
                 try {
@@ -392,13 +783,9 @@ async def websocket_test_page():
 
                     ws.onopen = function(event) {
                         stats.connectionCount++;
-                        reconnectAttempts = 0;
                         updateStatus(true, '- Ready for messages');
                         updateStats();
                         addMessage('WebSocket connected successfully', 'system');
-                        
-                        // Start automatic heartbeat response
-                        setupAutomaticHeartbeat();
                     };
 
                     ws.onmessage = function(event) {
@@ -407,15 +794,19 @@ async def websocket_test_page():
                         
                         try {
                             const data = JSON.parse(event.data);
-                            const messageContent = `${data.type} on ${data.channel} - ${JSON.stringify(data.data)}`;
-                            addMessage(`Received: ${messageContent}`, 'received');
                             
-                            // Handle heartbeat messages automatically
-                            if (data.type === 'heartbeat' && data.data && data.data.ping) {
-                                stats.heartbeatCount++;
+                            // Check for opportunities
+                            if (data.type === 'new_opportunity' || 
+                                (data.data && data.data.type === 'new_opportunity')) {
+                                stats.opportunitiesReceived++;
                                 updateStats();
-                                respondToHeartbeat();
-                                addMessage('Heartbeat ping received, sending pong', 'system');
+                                
+                                const oppData = data.data || data;
+                                const messageContent = `OPPORTUNITY: ${oppData.token_symbol} on ${oppData.chain} - Risk: ${oppData.risk_score}/100 - Liquidity: $${oppData.liquidity_usd?.toLocaleString() || '0'}`;
+                                addMessage(messageContent, 'opportunity');
+                            } else {
+                                const messageContent = `${data.type} on ${data.channel} - ${JSON.stringify(data.data)}`;
+                                addMessage(`Received: ${messageContent}`, 'received');
                             }
                         } catch (e) {
                             addMessage(`Raw message: ${event.data}`, 'received');
@@ -425,17 +816,6 @@ async def websocket_test_page():
                     ws.onclose = function(event) {
                         updateStatus(false, `Code: ${event.code}, Reason: ${event.reason || 'Unknown'}`);
                         addMessage(`WebSocket closed: ${event.code} - ${event.reason || 'No reason provided'}`, 'error');
-                        
-                        // Stop heartbeat
-                        if (heartbeatInterval) {
-                            clearInterval(heartbeatInterval);
-                            heartbeatInterval = null;
-                        }
-                        
-                        // Attempt reconnection for unexpected closures
-                        if (event.code !== 1000 && reconnectAttempts < maxReconnectAttempts) {
-                            scheduleReconnect();
-                        }
                     };
 
                     ws.onerror = function(error) {
@@ -449,57 +829,10 @@ async def websocket_test_page():
 
             function disconnect() {
                 if (ws) {
-                    // Stop heartbeat
-                    if (heartbeatInterval) {
-                        clearInterval(heartbeatInterval);
-                        heartbeatInterval = null;
-                    }
-                    
                     ws.close(1000, 'Manual disconnect');
                     ws = null;
                     addMessage('Manually disconnected', 'system');
                 }
-            }
-
-            function setupAutomaticHeartbeat() {
-                // Clear any existing interval
-                if (heartbeatInterval) {
-                    clearInterval(heartbeatInterval);
-                }
-                
-                // Send heartbeat every 25 seconds (before server timeout)
-                heartbeatInterval = setInterval(() => {
-                    if (ws && ws.readyState === WebSocket.OPEN) {
-                        sendManualHeartbeat();
-                    }
-                }, 25000);
-            }
-
-            function respondToHeartbeat() {
-                if (ws && ws.readyState === WebSocket.OPEN) {
-                    const pongMessage = {
-                        id: Date.now().toString(),
-                        type: 'heartbeat',
-                        channel: 'system',
-                        data: { pong: true },
-                        timestamp: new Date().toISOString(),
-                        client_id: clientId
-                    };
-                    
-                    ws.send(JSON.stringify(pongMessage));
-                    stats.messagesSent++;
-                    updateStats();
-                }
-            }
-
-            function scheduleReconnect() {
-                const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
-                addMessage(`Reconnecting in ${delay/1000}s (attempt ${reconnectAttempts + 1}/${maxReconnectAttempts})`, 'system');
-                
-                setTimeout(() => {
-                    reconnectAttempts++;
-                    connect();
-                }, delay);
             }
 
             function sendMessage(type, channel, data) {
@@ -529,10 +862,6 @@ async def websocket_test_page():
                 }
             }
 
-            function sendManualHeartbeat() {
-                return sendMessage('heartbeat', 'system', { ping: true });
-            }
-
             function subscribe() {
                 const channel = document.getElementById('channel').value;
                 return sendMessage('subscription_ack', 'system', { 
@@ -557,8 +886,7 @@ async def websocket_test_page():
                 
                 addMessage('Testing connection...', 'system');
                 
-                // Test with a simple heartbeat
-                if (sendManualHeartbeat()) {
+                if (sendMessage('heartbeat', 'system', { ping: true })) {
                     addMessage('Connection test successful', 'system');
                 } else {
                     addMessage('Connection test failed', 'error');
@@ -592,7 +920,7 @@ async def websocket_test_page():
                 addMessage('Logs exported successfully', 'system');
             }
 
-            // Auto-connect on page load
+            // Auto-update stats
             window.onload = function() {
                 addMessage('DEX Sniper Pro WebSocket Test Client loaded', 'system');
                 addMessage(`Generated Client ID: ${clientId}`, 'system');
@@ -612,7 +940,9 @@ async def websocket_test_page():
     return HTMLResponse(content=html_content)
 
 
-# Helper functions for broadcasting messages to channels
+# ========================================================================
+# HELPER FUNCTIONS FOR BROADCASTING MESSAGES
+# ========================================================================
 
 async def broadcast_autotrade_message(message_type: MessageType, data: dict) -> int:
     """
@@ -711,143 +1041,3 @@ async def broadcast_system_message(message_type: MessageType, data: dict) -> int
     except Exception as e:
         logger.error(f"Failed to broadcast system message: {e}")
         return 0
-
-
-@router.websocket("/autotrade")
-async def websocket_autotrade_endpoint(websocket: WebSocket):
-    """
-    Legacy autotrade WebSocket endpoint for frontend compatibility.
-    Maintained for backward compatibility with existing frontends.
-    """
-    # Accept the WebSocket connection
-    await websocket.accept()
-
-    client_id = f"autotrade_{uuid.uuid4().hex[:8]}"
-    logger.info(f"Legacy autotrade WebSocket connection: {client_id}")
-    
-    try:
-        # Use existing hub connection logic
-        connected = await ws_hub.connect_client(client_id, websocket)
-        if not connected:
-            logger.error(f"Failed to connect legacy autotrade client: {client_id}")
-            await websocket.close(code=1011, reason="Server error")
-            return
-        
-        # Auto-subscribe to autotrade channel for legacy clients
-        try:
-            await ws_hub.subscribe_to_channel(client_id, Channel.AUTOTRADE)
-            logger.info(f"Legacy client {client_id} auto-subscribed to autotrade channel")
-        except Exception as sub_error:
-            logger.error(f"Failed to auto-subscribe legacy client: {sub_error}")
-        
-        # Handle messages
-        while True:
-            try:
-                data = await websocket.receive_text()
-                await ws_hub.handle_client_message(client_id, data)
-            except WebSocketDisconnect:
-                logger.info(f"Legacy autotrade client {client_id} disconnected")
-                break
-            except Exception as e:
-                logger.error(f"Error in legacy autotrade endpoint for {client_id}: {e}")
-                break
-                
-    except Exception as e:
-        logger.error(f"Critical error in legacy autotrade endpoint: {e}")
-    finally:
-        try:
-            await ws_hub.disconnect_client(client_id, "Legacy connection closed")
-        except Exception as cleanup_error:
-            logger.error(f"Error cleaning up legacy client {client_id}: {cleanup_error}")
-
-
-# Health check endpoint for WebSocket system
-@router.get("/health")
-async def websocket_health():
-    """
-    Detailed health check for WebSocket system components.
-    
-    Returns:
-        Dict containing detailed health information
-    """
-    try:
-        health_info = {
-            "status": "healthy",
-            "timestamp": str(uuid.uuid4()),  # Using timestamp placeholder
-            "components": {
-                "hub_available": ws_hub is not None,
-                "hub_running": False,
-                "connection_count": 0,
-                "channel_count": 0
-            }
-        }
-        
-        if ws_hub:
-            try:
-                stats = ws_hub.get_connection_stats()
-                health_info["components"].update({
-                    "hub_running": hasattr(ws_hub, '_running') and ws_hub._running,
-                    "connection_count": stats.get("total_connections", 0),
-                    "channel_count": len(stats.get("channel_subscriptions", {}))
-                })
-                health_info["hub_stats"] = stats
-            except Exception as stats_error:
-                health_info["components"]["stats_error"] = str(stats_error)
-                health_info["status"] = "degraded"
-        else:
-            health_info["status"] = "unhealthy"
-            health_info["error"] = "WebSocket hub not available"
-        
-        return health_info
-        
-    except Exception as e:
-        logger.error(f"WebSocket health check failed: {e}")
-        return {
-            "status": "error",
-            "error": str(e),
-            "timestamp": str(uuid.uuid4())
-        }
-    
-
-
-
-
-@router.websocket("/discovery")
-async def discovery_websocket_endpoint(websocket: WebSocket):
-    """Dedicated WebSocket endpoint for discovery feed."""
-    await websocket.accept()
-    client_id = f"discovery_{int(time.time())}"
-    logger.info(f"Discovery WebSocket client connected: {client_id}")
-    
-    try:
-        # Connect client to the hub
-        connected = await ws_hub.connect_client(client_id, websocket)
-        if not connected:
-            logger.error(f"Failed to connect discovery client: {client_id}")
-            await websocket.close(code=1011, reason="Server error")
-            return
-        
-        # Auto-subscribe to discovery channel
-        await ws_hub.subscribe_to_channel(client_id, Channel.DISCOVERY)
-        logger.info(f"Discovery client {client_id} subscribed to discovery channel")
-        
-        # Keep connection alive and handle messages
-        while True:
-            try:
-                data = await websocket.receive_text()
-                # Discovery clients typically only receive, but handle any messages
-                await ws_hub.handle_client_message(client_id, data)
-            except WebSocketDisconnect:
-                logger.info(f"Discovery client {client_id} disconnected")
-                break
-            except Exception as e:
-                logger.error(f"Error handling discovery message for {client_id}: {e}")
-                break
-                
-    except Exception as e:
-        logger.error(f"Critical error in discovery endpoint: {e}")
-    finally:
-        try:
-            await ws_hub.disconnect_client(client_id, "Discovery connection closed")
-        except Exception as cleanup_error:
-            logger.error(f"Error cleaning up discovery client {client_id}: {cleanup_error}")

@@ -558,7 +558,14 @@ class EventProcessor:
                 processed_pair.intelligence_data = intelligence_analysis
                 
                 # Extract AI scores for opportunity calculation
-                processed_pair.ai_opportunity_score = intelligence_analysis.get('intelligence_score', 50.0) / 100.0  # Normalize to 0-1
+                # Extract AI scores for opportunity calculation - fix dict access
+                intelligence_score_data = intelligence_analysis.get('intelligence_score', {})
+                if isinstance(intelligence_score_data, dict):
+                    overall_score = intelligence_score_data.get('overall_score', 0.5)  # Already 0-1 scale
+                else:
+                    overall_score = float(intelligence_score_data) / 100.0 if intelligence_score_data else 0.5
+
+                processed_pair.ai_opportunity_score = overall_score
                 processed_pair.ai_confidence = intelligence_analysis.get('confidence', 0.5)
                 
                 # Apply AI insights to opportunity scoring (this is the key Phase 2.2 integration)
@@ -660,10 +667,34 @@ class EventProcessor:
         """
         try:
             # Get AI intelligence scores
-            intelligence_score = intelligence_analysis.get('intelligence_score', 50.0)  # 0-100
-            coordination_risk = intelligence_analysis.get('coordination_risk', 0.0)      # 0-100
-            social_sentiment = intelligence_analysis.get('social_sentiment', 0.0)       # -1 to 1
-            whale_activity = intelligence_analysis.get('whale_activity_score', 0.0)     # 0-100
+            # Get AI intelligence scores - fix dict access
+            intelligence_score_data = intelligence_analysis.get('intelligence_score', {})
+            if isinstance(intelligence_score_data, dict):
+                intelligence_score = intelligence_score_data.get('overall_score', 0.5) * 100  # Convert to 0-100 scale
+            else:
+                intelligence_score = float(intelligence_score_data) if intelligence_score_data else 50.0
+
+            # Extract coordination patterns data
+            coordination_data = intelligence_analysis.get('coordination_patterns', {})
+            if isinstance(coordination_data, dict):
+                coordination_risk = coordination_data.get('risk_score', 0.0) * 100  # Convert to 0-100 scale
+            else:
+                coordination_risk = float(coordination_data) if coordination_data else 0.0
+
+            # Extract social sentiment data  
+            social_data = intelligence_analysis.get('social_sentiment', {})
+            if isinstance(social_data, dict):
+                social_sentiment = social_data.get('score', 0.0)
+            else:
+                social_sentiment = float(social_data) if social_data else 0.0
+
+            # Extract whale activity data
+            whale_data = intelligence_analysis.get('whale_activity', {})
+            if isinstance(whale_data, dict):
+                whale_activity = whale_data.get('activity_score', 0.0) * 100  # Convert to 0-100 scale
+            else:
+                whale_activity = float(whale_data) if whale_data else 0.0
+
             ai_confidence = intelligence_analysis.get('confidence', 0.5)                # 0-1
             market_regime = intelligence_analysis.get('market_regime', 'unknown')
             

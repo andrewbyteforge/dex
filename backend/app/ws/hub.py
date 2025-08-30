@@ -21,6 +21,8 @@ from fastapi import WebSocket, WebSocketDisconnect
 logger = logging.getLogger(__name__)
 
 
+# Add this to MessageType enum in backend/app/ws/hub.py
+
 class MessageType(str, Enum):
     """WebSocket message types for type safety."""
     
@@ -32,6 +34,7 @@ class MessageType(str, Enum):
     
     # Discovery messages
     NEW_PAIR = "new_pair"
+    NEW_OPPORTUNITY = "new_opportunity"  # ADD THIS LINE
     RISK_UPDATE = "risk_update"
     DISCOVERY_STATUS = "discovery_status"
     
@@ -49,6 +52,7 @@ class MessageType(str, Enum):
     SUBSCRIPTION_ACK = "subscription_ack"
     ERROR = "error"
     HEARTBEAT = "heartbeat"
+    PONG = "pong"  # ADD THIS LINE TOO (used in discovery client message handler)
 
 
 class Channel(str, Enum):

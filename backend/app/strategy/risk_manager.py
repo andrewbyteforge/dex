@@ -174,7 +174,7 @@ class RiskManager:
             f"Starting risk assessment for {token_address} on {chain}",
             extra={
                 "trace_id": trace_id,
-                "module": "risk_manager",
+                "component": "risk_manager",
                 "token_address": token_address,
                 "chain": chain,
                 "trade_amount": str(trade_amount) if trade_amount else None
@@ -218,7 +218,7 @@ class RiskManager:
                         f"Risk check {i} failed: {result}",
                         extra={
                             "trace_id": trace_id,
-                            "module": "risk_manager",
+                            "component": "risk_manager",
                             "token_address": token_address,
                             "check_index": i,
                             "error": str(result)
@@ -255,7 +255,7 @@ class RiskManager:
                 f"Risk assessment completed: {overall_risk.value} (score: {overall_score:.3f})",
                 extra={
                     "trace_id": trace_id,
-                    "module": "risk_manager",
+                    "component": "risk_manager",
                     "token_address": token_address,
                     "chain": chain,
                     "overall_risk": overall_risk.value,
@@ -274,7 +274,7 @@ class RiskManager:
                 f"Risk assessment failed: {e}",
                 extra={
                     "trace_id": trace_id,
-                    "module": "risk_manager",
+                    "component": "risk_manager",
                     "token_address": token_address,
                     "chain": chain,
                     "error": str(e),
@@ -1007,22 +1007,22 @@ class RiskManager:
         recommendations = []
         
         if overall_risk == RiskLevel.CRITICAL:
-            recommendations.append("⛔ DO NOT TRADE - Critical risks detected")
+            recommendations.append("DO NOT TRADE - Critical risks detected")
         elif overall_risk == RiskLevel.HIGH:
-            recommendations.append("⚠️ Trade with extreme caution and small amounts only")
+            recommendations.append("Trade with extreme caution and small amounts only")
         elif overall_risk == RiskLevel.MEDIUM:
-            recommendations.append("⚠️ Use conservative position sizing and tight stop losses")
+            recommendations.append("Use conservative position sizing and tight stop losses")
         else:
-            recommendations.append("✅ Acceptable risk profile for trading")
+            recommendations.append("Acceptable risk profile for trading")
         
         # Add specific recommendations based on risk factors
         for factor in risk_factors:
             if factor.category == RiskCategory.LIQUIDITY_LOW and factor.level >= RiskLevel.MEDIUM:
-                recommendations.append("💧 Consider smaller trade sizes due to low liquidity")
+                recommendations.append("Consider smaller trade sizes due to low liquidity")
             elif factor.category == RiskCategory.TAX_EXCESSIVE and factor.level >= RiskLevel.MEDIUM:
-                recommendations.append("💰 Factor in high trading taxes when calculating profits")
+                recommendations.append("Factor in high trading taxes when calculating profits")
             elif factor.category == RiskCategory.LP_UNLOCKED and factor.level >= RiskLevel.MEDIUM:
-                recommendations.append("🔒 Monitor for potential liquidity removal")
+                recommendations.append("Monitor for potential liquidity removal")
         
         return recommendations
     

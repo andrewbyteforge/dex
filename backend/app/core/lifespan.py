@@ -2,7 +2,8 @@
 Application Lifespan Management for DEX Sniper Pro.
 
 Handles startup and shutdown of all core services including Redis rate limiting,
-database, chain clients, Market Intelligence, discovery broadcasting, and background services.
+database, chain clients, Market Intelligence, live opportunities broadcasting, 
+Dexscreener live feed, and background services.
 
 File: backend/app/core/lifespan.py
 """
@@ -192,159 +193,166 @@ async def setup_intelligence_autotrade_bridge(app: FastAPI) -> bool:
         return False
 
 
-async def start_discovery_broadcasting(app: FastAPI) -> bool:
+async def start_live_opportunities_system(app: FastAPI) -> bool:
     """
-    Start the discovery service that broadcasts real opportunities to frontend.
+    Start the live opportunities broadcasting system.
     
-    This connects your DexscreenerWatcher to the WebSocket hub for live feeds.
+    Connects event processor callbacks to WebSocket broadcasting for real-time
+    opportunity feeds to the frontend. This replaces the old DexscreenerWatcher
+    approach with a more integrated system using ProcessedPair data.
+    
+    Args:
+        app: FastAPI application instance
+        
+    Returns:
+        bool: True if started successfully
     """
     try:
-        logger.info("Starting discovery broadcasting service...")
+        logger.info("Starting live opportunities system...")
         
-        # Start the discovery loop as background task
-        asyncio.create_task(discovery_broadcast_loop(app))
+        # Import the opportunity broadcaster
+        try:
+            from ..api.websocket import opportunity_broadcaster
+        except ImportError as e:
+            logger.error(f"Cannot import opportunity broadcaster: {e}")
+            app.state.opportunities_status = "import_failed"
+            return False
         
-        app.state.discovery_broadcasting = "operational"
-        logger.info("Discovery broadcasting started successfully")
+        # Check if event processor is available
+        try:
+            from ..discovery.event_processor import event_processor
+            if not event_processor:
+                logger.warning("Event processor not available - opportunities system inactive")
+                app.state.opportunities_status = "event_processor_unavailable"
+                return False
+        except ImportError as e:
+            logger.warning(f"Event processor not available: {e}")
+            app.state.opportunities_status = "event_processor_not_available"
+            return False
+            
+        # Check if WebSocket hub is available
+        if not hasattr(app.state, "ws_hub") or not app.state.ws_hub:
+            logger.warning("WebSocket hub not available - opportunities system inactive")
+            app.state.opportunities_status = "websocket_hub_unavailable"
+            return False
+        
+        # Start the opportunity broadcaster
+        await opportunity_broadcaster.start()
+        
+        # Set status
+        app.state.opportunities_status = "operational"
+        app.state.opportunities_started_at = datetime.now(timezone.utc)
+        app.state.opportunity_broadcaster = opportunity_broadcaster
+        
+        logger.info("Live opportunities system started successfully")
+        logger.info("   • Listening for approved ProcessedPairs from event processor")
+        logger.info("   • Broadcasting opportunities to /ws/discovery WebSocket clients")
+        logger.info("   • Transforming backend data to frontend opportunity format")
+        logger.info("   • AI analysis and risk assessment included in opportunity data")
+        
         return True
         
     except Exception as e:
-        logger.error(f"Failed to start discovery broadcasting: {e}")
-        app.state.discovery_broadcasting = "failed"
+        logger.error(f"Failed to start live opportunities system: {e}")
+        app.state.opportunities_status = f"failed - {str(e)}"
         return False
 
 
-async def discovery_broadcast_loop(app: FastAPI) -> None:
-    """
-    Background loop that discovers opportunities and broadcasts via WebSocket.
-    """
-    logger.info("Discovery broadcast loop started")
-    
-    # Wait for WebSocket hub to be ready
-    await asyncio.sleep(5)
-    
-    # Initialize watcher
+async def initialize_event_processor(app: FastAPI) -> bool:
+    """Initialize the discovery event processor."""
     try:
-        from ..discovery.dexscreener_watcher import DexscreenerWatcher
-        watcher = DexscreenerWatcher()
-        await watcher.start()
-        logger.info("DexscreenerWatcher initialized successfully")
+        logger.info("Initializing discovery event processor...")
+        
+        from ..discovery.event_processor import event_processor
+        
+        if not event_processor:
+            logger.error("Event processor instance not available")
+            app.state.event_processor_status = "not_available"
+            return False
+        
+        # Start the event processor as background task (don't await it)
+        asyncio.create_task(event_processor.start_processing())
+        
+        app.state.event_processor = event_processor
+        app.state.event_processor_status = "operational"
+        
+        logger.info("Event processor started as background service")
+        logger.info("   • Processing discovery events with AI intelligence")
+        logger.info("   • Risk assessment and opportunity scoring active")
+        logger.info("   • Ready to generate ProcessedPair opportunities")
+        
+        return True
+        
+    except ImportError as e:
+        logger.warning(f"Event processor not available: {e}")
+        app.state.event_processor_status = "not_available"
+        return False
     except Exception as e:
-        logger.error(f"Failed to initialize DexscreenerWatcher: {e}")
-        return
+        logger.error(f"Event processor initialization failed: {e}")
+        app.state.event_processor_status = "failed"
+        return False
+
+
+async def start_dexscreener_live_feed(app: FastAPI) -> bool:
+    """
+    Start the Dexscreener live feed for real trading opportunities.
     
-    while True:
+    Args:
+        app: FastAPI application instance
+        
+    Returns:
+        bool: True if started successfully
+    """
+    try:
+        logger.info("Starting Dexscreener live feed...")
+        
+        # Import the live feed
         try:
-            # Get WebSocket hub directly
-            ws_hub = getattr(app.state, "ws_hub", None)
-            if not ws_hub:
-                logger.warning("WebSocket hub not available for broadcasting")
-                await asyncio.sleep(60)
-                continue
-                
-            # Discover new pairs
-            discovered_pairs = await watcher.discover_new_pairs(
-                chains=['ethereum', 'bsc', 'polygon', 'base'], 
-                limit=10
-            )
-            
-            if discovered_pairs:
-                logger.info(f"Broadcasting {len(discovered_pairs)} opportunities to WebSocket")
-                
-                # Send each pair as a simple message
-                for pair_data in discovered_pairs:
-                    try:
-                        # Format for frontend
-                        opportunity = format_opportunity_for_frontend(pair_data)
-                        
-                        # Send directly to discovery channel clients
-                        from ..ws.hub import Channel
-                        clients = ws_hub.get_channel_clients(Channel.DISCOVERY)
-                        
-                        for websocket in clients:
-                            try:
-                                message = {
-                                    "type": "new_opportunity",
-                                    "data": opportunity
-                                }
-                                await websocket.send_json(message)
-                                logger.debug(f"Sent {opportunity['token_symbol']} to discovery client")
-                            except Exception as e:
-                                logger.warning(f"Failed to send to discovery client: {e}")
-                    
-                    except Exception as e:
-                        logger.error(f"Error formatting opportunity: {e}")
-                        continue
-            else:
-                logger.debug("No new pairs discovered in this cycle")
-            
-            # Wait 30 seconds before next discovery cycle
-            await asyncio.sleep(30)
-            
-        except Exception as e:
-            logger.error(f"Discovery broadcast loop error: {e}")
-            await asyncio.sleep(60)
-
-
-
-
-
-
-def format_opportunity_for_frontend(pair_data: dict) -> dict:
-    """Convert Dexscreener pair data to frontend opportunity format."""
-    
-    base_token = pair_data.get('baseToken', {})
-    volume_data = pair_data.get('volume', {})
-    price_change = pair_data.get('priceChange', {})
-    liquidity = pair_data.get('liquidity', {})
-    
-    # Calculate basic risk score based on liquidity and volume
-    liquidity_usd = float(liquidity.get('usd', 0))
-    volume_24h = float(volume_data.get('h24', 0))
-    
-    risk_score = 50  # Base risk
-    if liquidity_usd < 10000:
-        risk_score += 20  # Higher risk for low liquidity
-    if volume_24h < 5000:
-        risk_score += 15  # Higher risk for low volume
+            from ..discovery.live_feed import dexscreener_live_feed
+        except ImportError as e:
+            logger.error(f"Cannot import live feed: {e}")
+            app.state.live_feed_status = "import_failed"
+            return False
         
-    risk_score = min(95, max(5, risk_score))  # Clamp between 5-95
+        # Check if event processor is available
+        if not hasattr(app.state, "event_processor") or not app.state.event_processor:
+            logger.warning("Event processor not available - live feed inactive")
+            app.state.live_feed_status = "event_processor_unavailable"
+            return False
         
-    # Determine profit potential
-    price_change_1h = float(price_change.get('h1', 0))
-    if abs(price_change_1h) > 10:
-        profit_potential = "high"
-    elif abs(price_change_1h) > 5:
-        profit_potential = "medium"
-    else:
-        profit_potential = "low"
-    
-    return {
-        "id": pair_data.get('pairAddress', f"pair_{int(time.time())}"),
-        "token_symbol": base_token.get('symbol', 'UNKNOWN'),
-        "token_address": base_token.get('address', ''),
-        "chain": pair_data.get('chainId', 'ethereum'),
-        "dex": pair_data.get('dexId', 'uniswap'),
-        "liquidity_usd": liquidity_usd,
-        "volume_24h": volume_24h,
-        "price_change_1h": price_change_1h,
-        "market_cap": float(pair_data.get('fdv', 0)),
-        "risk_score": risk_score,
-        "opportunity_type": "new_pair",
-        "profit_potential": profit_potential,
-        "detected_at": datetime.now().isoformat()
-    }
+        # Start the live feed as background task
+        asyncio.create_task(dexscreener_live_feed.start())
+        
+        # Set status
+        app.state.live_feed_status = "operational"
+        app.state.live_feed_started_at = datetime.now(timezone.utc)
+        app.state.dexscreener_live_feed = dexscreener_live_feed
+        
+        logger.info("Dexscreener live feed started successfully")
+        logger.info("   • Polling Dexscreener API every 15 seconds")
+        logger.info("   • Processing new pairs from: ethereum, bsc, polygon, base, arbitrum")
+        logger.info("   • Feeding real opportunities to Event Processor")
+        logger.info("   • Min liquidity filter: $1,000 USD")
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"Failed to start Dexscreener live feed: {e}")
+        app.state.live_feed_status = f"failed - {str(e)}"
+        return False
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """
     Enhanced application lifecycle management with Redis rate limiting,
-    Market Intelligence, and discovery broadcasting.
+    Market Intelligence, event processor, live opportunities broadcasting,
+    and Dexscreener live feed.
 
     Manages startup and shutdown of all core services including
     Redis rate limiting, database, chain clients, Market Intelligence,
-    discovery broadcasting, and background services.
+    event processor, live opportunities broadcasting, Dexscreener live feed,
+    and background services.
     """
     logger.info("Starting DEX Sniper Pro backend...")
 
@@ -637,23 +645,61 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             )
             app.state.bridge_status = "not_available"
 
-        # 10. Start Discovery Broadcasting (NEW)
-        if hasattr(app.state, "ws_hub") and app.state.websocket_status == "operational":
-            try:
-                discovery_success = await start_discovery_broadcasting(app)
-                if discovery_success:
-                    logger.info("Discovery broadcasting operational")
-                else:
-                    startup_warnings.append("Discovery broadcasting setup failed")
-            except Exception as e:
-                logger.error("Discovery broadcasting setup error: %s", e)
-                startup_warnings.append(f"Discovery broadcasting error: {e}")
-                app.state.discovery_broadcasting = f"error - {str(e)}"
-        else:
-            logger.warning("Cannot start discovery broadcasting - WebSocket hub not available")
-            app.state.discovery_broadcasting = "not_available"
+        # 10. Initialize Event Processor
+        try:
+            event_processor_success = await initialize_event_processor(app)
+            if event_processor_success:
+                logger.info("Event processor operational")
+            else:
+                startup_warnings.append("Event processor initialization failed")
+        except Exception as e:
+            logger.error("Event processor setup error: %s", e)
+            startup_warnings.append(f"Event processor error: {e}")
+            app.state.event_processor_status = f"error - {str(e)}"
 
-        # 11. Log comprehensive startup summary
+        # 11. Start Live Opportunities System
+        if (hasattr(app.state, "ws_hub") and app.state.websocket_status == "operational" and
+            hasattr(app.state, "event_processor") and 
+            getattr(app.state, "event_processor_status", None) == "operational"):
+            
+            try:
+                opportunities_success = await start_live_opportunities_system(app)
+                if opportunities_success:
+                    logger.info("Live opportunities system operational")
+                else:
+                    startup_warnings.append("Live opportunities system setup failed")
+            except Exception as e:
+                logger.error(f"Live opportunities system setup error: {e}")
+                startup_warnings.append(f"Live opportunities system error: {e}")
+                app.state.opportunities_status = f"error - {str(e)}"
+        else:
+            logger.warning("Cannot start live opportunities - missing dependencies")
+            missing_deps = []
+            if not hasattr(app.state, "ws_hub") or app.state.websocket_status != "operational":
+                missing_deps.append("websocket_hub")
+            if not hasattr(app.state, "event_processor") or getattr(app.state, "event_processor_status", None) != "operational":
+                missing_deps.append("event_processor")
+            app.state.opportunities_status = f"dependencies_unavailable: {','.join(missing_deps)}"
+
+        # 12. Start Dexscreener Live Feed (NEW - for real opportunities)
+        if (hasattr(app.state, "event_processor") and 
+            getattr(app.state, "event_processor_status", None) == "operational"):
+            
+            try:
+                live_feed_success = await start_dexscreener_live_feed(app)
+                if live_feed_success:
+                    logger.info("Dexscreener live feed operational")
+                else:
+                    startup_warnings.append("Dexscreener live feed setup failed")
+            except Exception as e:
+                logger.error(f"Dexscreener live feed setup error: {e}")
+                startup_warnings.append(f"Dexscreener live feed error: {e}")
+                app.state.live_feed_status = f"error - {str(e)}"
+        else:
+            logger.warning("Cannot start live feed - event processor not operational")
+            app.state.live_feed_status = "event_processor_not_operational"
+
+        # 13. Log comprehensive startup summary
         logger.info("=" * 60)
         logger.info("DEX Sniper Pro backend initialized successfully!")
 
@@ -698,11 +744,25 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 app.state.intelligence_hub_status,
             )
 
-        # Discovery Broadcasting status
-        if hasattr(app.state, "discovery_broadcasting"):
+        # Event Processor status
+        if hasattr(app.state, "event_processor_status"):
             logger.info(
-                "  Discovery Broadcasting: %s",
-                app.state.discovery_broadcasting,
+                "  Event Processor: %s",
+                app.state.event_processor_status,
+            )
+
+        # Live Opportunities status
+        if hasattr(app.state, "opportunities_status"):
+            logger.info(
+                "  Live Opportunities: %s",
+                app.state.opportunities_status,
+            )
+
+        # Dexscreener Live Feed status
+        if hasattr(app.state, "live_feed_status"):
+            logger.info(
+                "  Dexscreener Live Feed: %s",
+                app.state.live_feed_status,
             )
 
         # Component status summary
@@ -722,8 +782,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "intelligence_hub": getattr(
                 app.state, "intelligence_hub_status", "unknown"
             ),
-            "discovery_broadcasting": getattr(
-                app.state, "discovery_broadcasting", "unknown"
+            "event_processor": getattr(
+                app.state, "event_processor_status", "unknown"
+            ),
+            "live_opportunities": getattr(
+                app.state, "opportunities_status", "unknown"
+            ),
+            "dexscreener_live_feed": getattr(
+                app.state, "live_feed_status", "unknown"
             ),
             "scheduler": getattr(app.state, "scheduler_status", "unknown"),
             "websocket": getattr(app.state, "websocket_status", "unknown"),
@@ -734,7 +800,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 operational_components.append(component)
             elif status in ["not_available", "degraded"]:
                 degraded_components.append(component)
-            elif status == "failed":
+            elif status == "failed" or "error" in status:
                 failed_components.append(component)
 
         logger.info(
@@ -780,18 +846,40 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     shutdown_errors: list[str] = []
 
     try:
-        # 1. Shutdown Discovery Broadcasting first
-        if hasattr(app.state, "discovery_broadcasting"):
+        # 1. Shutdown Dexscreener Live Feed first
+        if hasattr(app.state, "dexscreener_live_feed"):
             try:
-                app.state.discovery_broadcasting = "shutting_down"
-                logger.info("Discovery broadcasting shutdown initiated")
+                await app.state.dexscreener_live_feed.stop()
+                logger.info("Dexscreener live feed stopped successfully")
             except Exception as e:
-                shutdown_errors.append(f"Discovery broadcasting shutdown: {e}")
+                shutdown_errors.append(f"Live feed shutdown: {e}")
     except Exception as e:
-        shutdown_errors.append(f"Discovery broadcasting shutdown error: {e}")
+        shutdown_errors.append(f"Live feed shutdown error: {e}")
 
     try:
-        # 2. Shutdown Intelligence Hub
+        # 2. Shutdown Live Opportunities System
+        if hasattr(app.state, "opportunity_broadcaster"):
+            try:
+                await app.state.opportunity_broadcaster.stop()
+                logger.info("Live opportunities system shutdown initiated")
+            except Exception as e:
+                shutdown_errors.append(f"Live opportunities system shutdown: {e}")
+    except Exception as e:
+        shutdown_errors.append(f"Live opportunities system shutdown error: {e}")
+
+    try:
+        # 3. Shutdown Event Processor
+        if hasattr(app.state, "event_processor"):
+            try:
+                await app.state.event_processor.stop_processing()
+                logger.info("Event processor shutdown initiated")
+            except Exception as e:
+                shutdown_errors.append(f"Event processor shutdown: {e}")
+    except Exception as e:
+        shutdown_errors.append(f"Event processor shutdown error: {e}")
+
+    try:
+        # 4. Shutdown Intelligence Hub
         if "INTELLIGENCE_HUB_AVAILABLE" in locals() and INTELLIGENCE_HUB_AVAILABLE:
             if hasattr(app.state, "intelligence_hub"):
                 try:
@@ -803,7 +891,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         shutdown_errors.append(f"Intelligence hub shutdown error: {e}")
 
     try:
-        # 3. Shutdown Redis rate limiter
+        # 5. Shutdown Redis rate limiter
         try:
             from ..middleware.rate_limiting import shutdown_rate_limiter  # type: ignore
 
@@ -817,7 +905,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         shutdown_errors.append(f"Rate limiter shutdown error: {e}")
 
     try:
-        # 4. Stop scheduler
+        # 6. Stop scheduler
         if (
             hasattr(scheduler_manager, "scheduler")
             and scheduler_manager.scheduler.running
@@ -828,7 +916,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         shutdown_errors.append(f"Scheduler shutdown: {e}")
 
     try:
-        # 5. Clear caches
+        # 7. Clear caches
         if hasattr(app.state, "dexscreener_client"):
             app.state.dexscreener_client.clear_cache()
             logger.info("Dexscreener cache cleared")
@@ -836,7 +924,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         shutdown_errors.append(f"Cache cleanup: {e}")
 
     try:
-        # 6. Close chain clients
+        # 8. Close chain clients
         if hasattr(app.state, "evm_client"):
             await app.state.evm_client.close()
             logger.info("EVM client closed successfully")
@@ -853,7 +941,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         shutdown_errors.append(f"Solana client shutdown: {e}")
 
     try:
-        # 7. Stop WebSocket hub
+        # 9. Stop WebSocket hub
         if hasattr(app.state, "ws_hub"):
             await app.state.ws_hub.stop()  # type: ignore
             logger.info("WebSocket hub stopped successfully")

@@ -25,8 +25,12 @@ from ..strategy.risk_manager import RiskManager
 logger = logging.getLogger(__name__)
 
 
-class PairData(BaseModel):
-    """Structured pair data from Dexscreener."""
+class PairData(BaseModel):    
+    """
+
+    Structured pair data from Dexscreener.
+
+    """
     pair_address: str
     chain_id: str
     dex_id: str
@@ -41,6 +45,7 @@ class PairData(BaseModel):
     liquidity: Optional[Dict[str, Any]] = None
     fdv: Optional[float] = None
     pair_created_at: Optional[int] = None
+
 
 class DexscreenerWatcher:
     """
