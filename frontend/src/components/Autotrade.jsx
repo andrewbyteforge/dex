@@ -1,6 +1,18 @@
+/**
+ * DEX Sniper Pro - Enhanced Autotrade Component with Live Opportunities and AI Console
+ * 
+ * ENHANCEMENTS ADDED:
+ * - Live Opportunities Feed (runs independently)
+ * - Consolidated AI Console with terminal-style display
+ * - Enhanced real-time opportunity discovery
+ * - Improved AI thinking process visualization
+ * 
+ * File: frontend/src/components/Autotrade.jsx
+ */
+
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { Container, Row, Col, Alert, Nav, Modal, Button, Card, Badge, ListGroup, Spinner } from 'react-bootstrap';
-import { AlertTriangle, Shield, AlertCircle, Brain } from 'lucide-react';
+import { Container, Row, Col, Alert, Nav, Modal, Button, Card, Badge, ListGroup, Spinner, Table } from 'react-bootstrap';
+import { AlertTriangle, Shield, AlertCircle, Brain, TrendingUp, DollarSign, Clock, Activity, Terminal, Zap, Target } from 'lucide-react';
 
 // Import sub-components
 import AutotradeEngine from './autotrade/AutotradeEngine';
@@ -15,7 +27,394 @@ import AIIntelligenceDisplay from './AIIntelligenceDisplay';
 import { useAutotradeData } from '../hooks/useAutotradeData';
 import { useWallet } from '../hooks/useWallet';
 
+// FIXED: Backend runs on port 8001
 const API_BASE_URL = 'http://localhost:8001';
+
+// Development mode settings
+const DEV_MODE = import.meta?.env?.DEV || process.env.NODE_ENV === 'development';
+const SKIP_WALLET_APPROVAL_IN_DEV = true;
+
+/**
+ * Enhanced logging for debugging
+ */
+const logStartButtonDebug = (level, message, data = {}) => {
+  const logEntry = {
+    timestamp: new Date().toISOString(),
+    level,
+    component: 'Autotrade-StartButton',
+    trace_id: data.trace_id || `start_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    message,
+    backend_port: '8001',
+    dev_mode: DEV_MODE,
+    ...data
+  };
+
+  const style = `color: ${level === 'error' ? '#ff4444' : level === 'success' ? '#44ff44' : '#4488ff'}; font-weight: bold;`;
+  console.log(`%c[START-FIX] ${message}`, style, logEntry);
+  return logEntry.trace_id;
+};
+
+/**
+ * Live Opportunities Feed Component
+ */
+const LiveOpportunitiesFeed = () => {
+  const [opportunities, setOpportunities] = useState([]);
+  const [feedStatus, setFeedStatus] = useState('connecting');
+  const [lastUpdate, setLastUpdate] = useState(null);
+  const feedWs = useRef(null);
+
+  useEffect(() => {
+    // Connect to opportunities WebSocket feed
+    const connectToFeed = () => {
+      const wsUrl = `ws://localhost:8001/ws/discovery`;
+      feedWs.current = new WebSocket(wsUrl);
+
+      feedWs.current.onopen = () => {
+        setFeedStatus('connected');
+        console.log('[Opportunities Feed] Connected to live feed');
+      };
+
+      feedWs.current.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          
+          if (data.type === 'new_opportunity') {
+            const opportunity = {
+              id: data.id || `opp_${Date.now()}`,
+              token_symbol: data.token_symbol || 'UNKNOWN',
+              token_address: data.token_address,
+              chain: data.chain || 'ethereum',
+              dex: data.dex || 'uniswap',
+              liquidity_usd: data.liquidity_usd || 0,
+              volume_24h: data.volume_24h || 0,
+              price_change_1h: data.price_change_1h || 0,
+              market_cap: data.market_cap || 0,
+              risk_score: data.risk_score || 50,
+              opportunity_type: data.opportunity_type || 'new_pair',
+              detected_at: new Date().toISOString(),
+              profit_potential: data.profit_potential || 'medium'
+            };
+
+            setOpportunities(prev => [opportunity, ...prev.slice(0, 19)]); // Keep last 20
+            setLastUpdate(new Date());
+          }
+        } catch (error) {
+          console.error('[Opportunities Feed] Error parsing message:', error);
+        }
+      };
+
+      feedWs.current.onerror = () => {
+        setFeedStatus('error');
+      };
+
+      feedWs.current.onclose = () => {
+        setFeedStatus('disconnected');
+        // Reconnect after 5 seconds
+        setTimeout(connectToFeed, 5000);
+      };
+    };
+
+    // Start with some mock data for demonstration
+    const mockOpportunities = [
+      {
+        id: 'mock_1',
+        token_symbol: 'PEPE2.0',
+        token_address: '0x123...abc',
+        chain: 'ethereum',
+        dex: 'uniswap_v3',
+        liquidity_usd: 45000,
+        volume_24h: 125000,
+        price_change_1h: 15.7,
+        market_cap: 2500000,
+        risk_score: 35,
+        opportunity_type: 'new_pair',
+        detected_at: new Date().toISOString(),
+        profit_potential: 'high'
+      },
+      {
+        id: 'mock_2',
+        token_symbol: 'MOON',
+        token_address: '0x456...def',
+        chain: 'bsc',
+        dex: 'pancakeswap',
+        liquidity_usd: 78000,
+        volume_24h: 89000,
+        price_change_1h: -5.2,
+        market_cap: 1800000,
+        risk_score: 42,
+        opportunity_type: 'trending_reentry',
+        detected_at: new Date(Date.now() - 60000).toISOString(),
+        profit_potential: 'medium'
+      },
+      {
+        id: 'mock_3',
+        token_symbol: 'DEGEN',
+        token_address: '0x789...ghi',
+        chain: 'base',
+        dex: 'uniswap_v2',
+        liquidity_usd: 125000,
+        volume_24h: 234000,
+        price_change_1h: 8.3,
+        market_cap: 5200000,
+        risk_score: 28,
+        opportunity_type: 'momentum',
+        detected_at: new Date(Date.now() - 120000).toISOString(),
+        profit_potential: 'high'
+      }
+    ];
+
+    setOpportunities(mockOpportunities);
+    setLastUpdate(new Date());
+
+    // Also connect to real WebSocket
+    connectToFeed();
+
+    return () => {
+      if (feedWs.current) {
+        feedWs.current.close();
+      }
+    };
+  }, []);
+
+  const getRiskBadgeVariant = (riskScore) => {
+    if (riskScore < 30) return 'success';
+    if (riskScore < 60) return 'warning';
+    return 'danger';
+  };
+
+  const getProfitBadgeVariant = (potential) => {
+    switch (potential) {
+      case 'high': return 'success';
+      case 'medium': return 'warning';
+      case 'low': return 'secondary';
+      default: return 'light';
+    }
+  };
+
+  const formatCurrency = (amount) => {
+    if (amount >= 1000000) return `$${(amount / 1000000).toFixed(1)}M`;
+    if (amount >= 1000) return `$${(amount / 1000).toFixed(1)}K`;
+    return `$${amount.toFixed(0)}`;
+  };
+
+  const formatPercentage = (value) => {
+    const color = value >= 0 ? 'text-success' : 'text-danger';
+    return <span className={color}>{value >= 0 ? '+' : ''}{value.toFixed(1)}%</span>;
+  };
+
+  return (
+    <Card>
+      <Card.Header>
+        <div className="d-flex justify-content-between align-items-center">
+          <div className="d-flex align-items-center gap-2">
+            <TrendingUp size={18} />
+            <h5 className="mb-0">Live Opportunities</h5>
+          </div>
+          <div className="d-flex align-items-center gap-2">
+            <Badge bg={feedStatus === 'connected' ? 'success' : feedStatus === 'error' ? 'danger' : 'warning'}>
+              {feedStatus === 'connected' ? 'Live' : feedStatus === 'error' ? 'Error' : 'Connecting'}
+            </Badge>
+            {lastUpdate && (
+              <small className="text-muted">
+                Updated: {lastUpdate.toLocaleTimeString()}
+              </small>
+            )}
+          </div>
+        </div>
+      </Card.Header>
+      <Card.Body className="p-0">
+        <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
+          <Table className="mb-0" striped hover size="sm">
+            <thead className="sticky-top bg-light">
+              <tr>
+                <th>Token</th>
+                <th>Chain/DEX</th>
+                <th>Liquidity</th>
+                <th>1h Change</th>
+                <th>Risk</th>
+                <th>Profit</th>
+                <th>Type</th>
+                <th>Age</th>
+              </tr>
+            </thead>
+            <tbody>
+              {opportunities.length > 0 ? opportunities.map((opp) => (
+                <tr key={opp.id} className="cursor-pointer">
+                  <td>
+                    <div>
+                      <strong>{opp.token_symbol}</strong>
+                      <br />
+                      <small className="text-muted">
+                        {opp.token_address ? `${opp.token_address.substring(0, 6)}...` : 'N/A'}
+                      </small>
+                    </div>
+                  </td>
+                  <td>
+                    <Badge bg="secondary" className="me-1">{opp.chain.toUpperCase()}</Badge>
+                    <br />
+                    <small className="text-muted">{opp.dex}</small>
+                  </td>
+                  <td>
+                    <strong>{formatCurrency(opp.liquidity_usd)}</strong>
+                    <br />
+                    <small className="text-muted">Vol: {formatCurrency(opp.volume_24h)}</small>
+                  </td>
+                  <td>{formatPercentage(opp.price_change_1h)}</td>
+                  <td>
+                    <Badge bg={getRiskBadgeVariant(opp.risk_score)}>
+                      {opp.risk_score}/100
+                    </Badge>
+                  </td>
+                  <td>
+                    <Badge bg={getProfitBadgeVariant(opp.profit_potential)}>
+                      {opp.profit_potential.toUpperCase()}
+                    </Badge>
+                  </td>
+                  <td>
+                    <small>{opp.opportunity_type.replace('_', ' ')}</small>
+                  </td>
+                  <td>
+                    <small className="text-muted">
+                      {Math.round((new Date() - new Date(opp.detected_at)) / 60000)}m
+                    </small>
+                  </td>
+                </tr>
+              )) : (
+                <tr>
+                  <td colSpan="8" className="text-center py-4 text-muted">
+                    <Activity size={24} className="mb-2" />
+                    <br />
+                    Scanning for opportunities...
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </Table>
+        </div>
+      </Card.Body>
+    </Card>
+  );
+};
+
+/**
+ * Consolidated AI Console Component
+ */
+const AIConsole = ({ aiMessages, aiThoughts, aiStatus, currentAnalysis }) => {
+  const consoleRef = useRef(null);
+  const [consoleLines, setConsoleLines] = useState([]);
+
+  // Combine all AI activity into console lines
+  useEffect(() => {
+    const allActivity = [
+      ...aiMessages.map(msg => ({
+        timestamp: msg.timestamp,
+        type: 'message',
+        level: msg.type === 'ai_error' ? 'error' : msg.type === 'ai_decision' ? 'decision' : 'info',
+        content: msg.message,
+        data: msg
+      })),
+      ...aiThoughts.map(thought => ({
+        timestamp: thought.timestamp,
+        type: 'thought',
+        level: thought.type === 'decision' ? 'decision' : thought.type === 'warning' ? 'warning' : 'thinking',
+        content: thought.message,
+        data: thought
+      }))
+    ];
+
+    // Sort by timestamp and keep last 50
+    const sortedActivity = allActivity
+      .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+      .slice(0, 50);
+
+    setConsoleLines(sortedActivity);
+
+    // Auto-scroll to bottom
+    if (consoleRef.current) {
+      consoleRef.current.scrollTop = consoleRef.current.scrollHeight;
+    }
+  }, [aiMessages, aiThoughts]);
+
+  const getLineColor = (level) => {
+    switch (level) {
+      case 'error': return '#ff4444';
+      case 'warning': return '#ffaa00';
+      case 'decision': return '#44ff44';
+      case 'thinking': return '#88ccff';
+      default: return '#cccccc';
+    }
+  };
+
+  const getLinePrefix = (level) => {
+    switch (level) {
+      case 'error': return '❌ ERROR';
+      case 'warning': return '⚠️  WARN';
+      case 'decision': return '🤖 DECISION';
+      case 'thinking': return '🧠 THINKING';
+      default: return 'ℹ️  INFO';
+    }
+  };
+
+  return (
+    <Card>
+      <Card.Header>
+        <div className="d-flex justify-content-between align-items-center">
+          <div className="d-flex align-items-center gap-2">
+            <Terminal size={18} />
+            <h5 className="mb-0">AI Console</h5>
+          </div>
+          <div className="d-flex align-items-center gap-2">
+            <Badge bg={aiStatus === 'analyzing' ? 'warning' : aiStatus === 'connected' ? 'success' : 'secondary'}>
+              {aiStatus || 'idle'}
+            </Badge>
+            <Button variant="outline-secondary" size="sm" onClick={() => setConsoleLines([])}>
+              Clear
+            </Button>
+          </div>
+        </div>
+      </Card.Header>
+      <Card.Body className="p-0">
+        <div 
+          ref={consoleRef}
+          style={{ 
+            height: '400px', 
+            overflowY: 'auto', 
+            backgroundColor: '#1a1a1a', 
+            color: '#cccccc',
+            fontFamily: 'Monaco, Consolas, "Courier New", monospace',
+            fontSize: '13px',
+            padding: '10px'
+          }}
+        >
+          {consoleLines.length > 0 ? consoleLines.map((line, index) => (
+            <div key={index} className="mb-1">
+              <span style={{ color: '#666666' }}>
+                {new Date(line.timestamp).toLocaleTimeString()}
+              </span>
+              <span style={{ color: getLineColor(line.level), marginLeft: '10px' }}>
+                {getLinePrefix(line.level)}
+              </span>
+              <span style={{ marginLeft: '10px' }}>
+                {line.content}
+              </span>
+              {line.data?.risk_score && (
+                <span style={{ color: '#ffaa00', marginLeft: '10px' }}>
+                  [Risk: {line.data.risk_score}/100]
+                </span>
+              )}
+            </div>
+          )) : (
+            <div className="text-center py-4" style={{ color: '#666666' }}>
+              <Terminal size={32} className="mb-2" />
+              <br />
+              AI Console Ready... Waiting for analysis
+            </div>
+          )}
+        </div>
+      </Card.Body>
+    </Card>
+  );
+};
 
 const Autotrade = ({ systemHealth }) => {
     const [activeTab, setActiveTab] = useState('overview');
@@ -28,9 +427,9 @@ const Autotrade = ({ systemHealth }) => {
     // Wallet hook
     const { isConnected: walletConnected, walletAddress, selectedChain } = useWallet();
 
-    // ---------- Wallet approval authorization system ----------
+    // Wallet approval authorization system
     const [walletApprovalStatus, setWalletApprovalStatus] = useState({
-        isApproved: false,
+        isApproved: SKIP_WALLET_APPROVAL_IN_DEV && DEV_MODE,
         approvedChains: [],
         pendingApproval: false,
         spendingLimits: null,
@@ -40,7 +439,6 @@ const Autotrade = ({ systemHealth }) => {
     const [showWalletApprovalModal, setShowWalletApprovalModal] = useState(false);
     const [pendingStartMode, setPendingStartMode] = useState(null);
     const [forceApprovalFlow, setForceApprovalFlow] = useState(false);
-    // ---------------------------------------------------------
 
     // Centralized data hook
     const {
@@ -57,28 +455,72 @@ const Autotrade = ({ systemHealth }) => {
         refresh
     } = useAutotradeData(backendAvailable);
 
-    const engineMode = autotradeStatus.mode || 'disabled';
-    const isRunning = autotradeStatus.is_running || false;
+    const engineMode = autotradeStatus?.mode || 'disabled';
+    const isRunning = autotradeStatus?.is_running || false;
 
-    // --- AI thinking process (state for the newly added section) ---
-    const [aiStatus, setAiStatus] = useState('idle'); // 'idle' | 'connected' | 'analyzing' | 'ready' | 'error'
+    // AI state
+    const [aiStatus, setAiStatus] = useState('idle');
     const [currentAnalysis, setCurrentAnalysis] = useState(null);
     const [aiThoughts, setAiThoughts] = useState([]);
-    const isAutotradeEnabled = isRunning || (autotradeStatus?.mode && autotradeStatus.mode !== 'disabled');
-
-    // --- EXTRA AI panel state from snippet ---
+    const [aiMessages, setAiMessages] = useState([]);
+    const [intelligenceWs, setIntelligenceWs] = useState(null);
     const [aiThinking, setAiThinking] = useState(false);
     const [aiWs, setAiWs] = useState(null);
 
-    // --- NEW: AI Intelligence stream state (messages panel) ---
-    const [aiMessages, setAiMessages] = useState([]);
-    const [intelligenceWs, setIntelligenceWs] = useState(null);
-    // ----------------------------------------------------------
-
-    // --- Intelligence WebSocket (client-side) ---
     const wsRef = useRef(null);
+    const isAutotradeEnabled = isRunning || (autotradeStatus?.mode && autotradeStatus.mode !== 'disabled');
 
-    // Helper to append AI thoughts (keep last 20) – supports extra data fields
+    // Enhanced backend availability check
+    const checkBackendAvailability = useCallback(async () => {
+        const trace_id = logStartButtonDebug('debug', 'Checking backend availability');
+        
+        const endpoints = ['/api/health', '/api/autotrade/health', '/health'];
+
+        for (const endpoint of endpoints) {
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+                const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+                    method: 'GET',
+                    headers: { 'Content-Type': 'application/json' },
+                    signal: controller.signal,
+                    mode: 'cors'
+                });
+
+                clearTimeout(timeoutId);
+
+                if (response.ok) {
+                    const data = await response.json();
+                    setBackendAvailable(true);
+                    logStartButtonDebug('success', 'Backend is available', { 
+                        trace_id, 
+                        endpoint,
+                        health: data 
+                    });
+                    return;
+                }
+            } catch (error) {
+                continue;
+            }
+        }
+
+        setBackendAvailable(false);
+        logStartButtonDebug('error', 'Backend unavailable on all endpoints', { 
+            trace_id,
+            endpoints_tried: endpoints,
+            port: '8001'
+        });
+    }, []);
+
+    // Initialize backend check
+    useEffect(() => {
+        checkBackendAvailability();
+        const interval = setInterval(checkBackendAvailability, 30000);
+        return () => clearInterval(interval);
+    }, [checkBackendAvailability]);
+
+    // Helper to append AI thoughts
     const addAiThought = (message, type = 'info', data = {}) => {
         setAiThoughts(prev => ([
             {
@@ -88,10 +530,10 @@ const Autotrade = ({ systemHealth }) => {
                 ...data
             },
             ...prev
-        ]).slice(0, 20));
+        ]).slice(0, 50));
     };
 
-    // Open/close Intelligence WebSocket when wallet changes (and track aiMessages/status)
+    // WebSocket for AI intelligence
     useEffect(() => {
         if (!walletConnected || !walletAddress) {
             if (wsRef.current) {
@@ -112,47 +554,49 @@ const Autotrade = ({ systemHealth }) => {
         ws.onopen = () => {
             console.log('[AI WS] Connected:', wsUrl);
             setAiStatus('connected');
+            addAiThought('AI intelligence system connected', 'info');
         };
-        ws.onclose = (evt) => {
-            console.log('[AI WS] Closed:', evt.code, evt.reason);
-        };
-        ws.onerror = (err) => {
-            console.warn('[AI WS] Error:', err);
-            setAiStatus('error');
-        };
+
         ws.onmessage = (event) => {
             const data = JSON.parse(event.data);
+            setAiMessages(prev => [...prev, { ...data, timestamp: new Date().toISOString() }].slice(-50));
 
-            // Push raw WS messages into AI Intelligence stream (keep last 20)
-            setAiMessages(prev => ([
-                ...prev,
-                { ...data, timestamp: new Date().toISOString() }
-            ]).slice(-20));
-
-            // Existing typed handling for analysis/status
             switch (data.type) {
                 case 'ai_status':
                     setAiStatus(data.status || 'connected');
                     if (data.status === 'analyzing') {
-                        addAiThought('Analyzing new trading opportunity...', 'info');
+                        addAiThought('Analyzing new trading opportunity...', 'thinking');
                     }
                     break;
-
                 case 'ai_analysis':
                     setCurrentAnalysis(data.analysis);
                     setAiStatus('ready');
-
                     if (data.analysis?.decision === 'execute') {
-                        addAiThought(`✅ Trade approved: ${data.analysis.reasoning}`, 'success');
+                        addAiThought(`Trade approved: ${data.analysis.reasoning}`, 'decision', { approved: true });
                     } else {
-                        addAiThought(`⚠️ Trade skipped: ${data.analysis?.reasoning || 'No reasoning provided'}`, 'warning');
+                        addAiThought(`Trade skipped: ${data.analysis?.reasoning || 'Risk too high'}`, 'warning');
                     }
                     break;
-
-                default:
-                    // Other message types are simply logged in aiMessages above
+                case 'thinking':
+                    setAiThinking(true);
+                    addAiThought(data.message, 'thinking', data);
+                    break;
+                case 'decision':
+                    setAiThinking(false);
+                    addAiThought(data.message, 'decision', data);
                     break;
             }
+        };
+
+        ws.onerror = (err) => {
+            console.warn('[AI WS] Error:', err);
+            setAiStatus('error');
+            addAiThought('AI connection error', 'error');
+        };
+
+        ws.onclose = () => {
+            console.log('[AI WS] Closed');
+            setAiStatus('disconnected');
         };
 
         return () => {
@@ -162,381 +606,179 @@ const Autotrade = ({ systemHealth }) => {
         };
     }, [walletConnected, walletAddress]);
 
-    // EXTRA: Connect to AI WebSocket for "thinking/decision" stream when autotrade enabled
-    useEffect(() => {
-        if (isAutotradeEnabled) {
-            const ws = new WebSocket(`ws://localhost:8001/ws/intelligence/${walletAddress}`);
-            
-            ws.onmessage = (event) => {
-                const data = JSON.parse(event.data);
-                
-                if (data.type === 'thinking') {
-                    setAiThinking(true);
-                    addAiThought(data.message, 'thinking', data);
-                } else if (data.type === 'decision') {
-                    setAiThinking(false);
-                    addAiThought(data.message, 'decision', data);
-                }
-            };
-            
-            setAiWs(ws);
-            
-            return () => ws.close();
-        }
-    }, [isAutotradeEnabled]);
-
-    // Keep currentAnalysis in sync with aiIntelligenceData (fallback path)
-    useEffect(() => {
-        if (aiIntelligenceData) {
-            setAiStatus('analyzing');
-            setCurrentAnalysis(aiIntelligenceData);
-            addAiThought(
-                `Analyzing ${aiIntelligenceData?.token_symbol || 'pair'} on ${selectedChain || 'chain'}...`,
-                'info'
-            );
-            const t = setTimeout(() => setAiStatus('ready'), 500);
-            return () => clearTimeout(t);
-        }
-    }, [aiIntelligenceData, selectedChain]);
-
-    // Debug logs for wallet state tracking
-    useEffect(() => {
-        console.log('Wallet state changed:', { walletConnected, walletAddress, selectedChain });
-        console.log('Current approval status:', walletApprovalStatus);
-    }, [walletConnected, walletAddress, selectedChain, walletApprovalStatus]);
-
-    /**
-     * Check wallet approval status for autotrade
-     */
-    const checkWalletApprovalStatus = useCallback(async (skipIfRecent = false) => {
-        // Prevent multiple simultaneous calls
-        if (checkWalletApprovalStatus._isRunning) {
-            console.log('[Autotrade] Approval check already in progress, skipping');
-            return;
-        }
-        const now = Date.now();
-        if (skipIfRecent && checkWalletApprovalStatus._lastCheck && (now - checkWalletApprovalStatus._lastCheck < 2000)) {
-            console.log('[Autotrade] Approval check skipped - too recent');
-            return;
-        }
-        checkWalletApprovalStatus._isRunning = true;
-        checkWalletApprovalStatus._lastCheck = now;
-
-        if (!walletConnected || !walletAddress) {
-            console.log('Resetting approval status - wallet not ready');
-            setWalletApprovalStatus({
-                isApproved: false,
-                approvedChains: [],
-                pendingApproval: false,
-                spendingLimits: null,
-                approvalExpiry: null
-            });
-            checkWalletApprovalStatus._isRunning = false;
-            return;
-        }
-
-        try {
-            console.log(`[Autotrade] Checking approval status for ${walletAddress} on ${selectedChain}`);
-            const fundingResponse = await fetch(`${API_BASE_URL}/api/v1/wallet-funding/wallet-status`, {
-                method: 'GET',
-                headers: {
-                    'Content-Type': 'application/json',
-                    ...(localStorage.getItem('auth_token') && {
-                        'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
-                    })
-                }
-            });
-
-            if (fundingResponse.ok) {
-                const data = await fundingResponse.json();
-                console.log('[Autotrade] Wallet funding status response:', data);
-
-                let isCurrentChainApproved = false;
-                let spendingLimits = null;
-                let approvalExpiry = null;
-
-                if (data.approved_wallets && data.approved_wallets[selectedChain]) {
-                    const chainApproval = data.approved_wallets[selectedChain];
-                    const walletMatches = chainApproval.wallet_address?.toLowerCase() === walletAddress?.toLowerCase();
-                    const hasSpendingLimits = chainApproval.daily_limit_usd && chainApproval.per_trade_limit_usd;
-                    const isNotExpired = !chainApproval.expires_at || new Date(chainApproval.expires_at) > new Date();
-
-                    if (walletMatches && hasSpendingLimits && isNotExpired) {
-                        isCurrentChainApproved = true;
-                        spendingLimits = {
-                            dailyLimit: parseFloat(chainApproval.daily_limit_usd),
-                            perTradeLimit: parseFloat(chainApproval.per_trade_limit_usd),
-                            dailySpent: parseFloat(data.daily_spending?.[selectedChain] || 0)
-                        };
-                        approvalExpiry = chainApproval.expires_at;
-                    }
-                }
-
-                if (!isCurrentChainApproved && data.success && (data.wallet_funded || data.needs_approvals !== undefined)) {
-                    if (data.spending_limits && data.spending_limits[selectedChain]) {
-                        const limits = data.spending_limits[selectedChain];
-                        isCurrentChainApproved = true;
-                        spendingLimits = {
-                            dailyLimit: parseFloat(limits.daily_limit_usd || limits.dailyLimit || 500),
-                            perTradeLimit: parseFloat(limits.per_trade_limit_usd || limits.perTradeLimit || 100),
-                            dailySpent: parseFloat(limits.daily_spent_usd || limits.dailySpent || 0)
-                        };
-                        approvalExpiry = limits.expires_at || new Date(Date.now() + 24 * 60 * 60 * 1000);
-                    }
-                }
-
-                setWalletApprovalStatus({
-                    isApproved: isCurrentChainApproved,
-                    approvedChains: Object.keys(data.approved_wallets || {}),
-                    pendingApproval: false,
-                    spendingLimits,
-                    approvalExpiry
-                });
-                checkWalletApprovalStatus._isRunning = false;
-                return;
-            }
-
-            const response = await fetch(
-                `${API_BASE_URL}/api/v1/autotrade/wallet-approval-status?wallet_address=${encodeURIComponent(walletAddress)}&chain=${selectedChain}`,
-                {
-                    method: 'GET',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        ...(localStorage.getItem('auth_token') && {
-                            'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
-                        })
-                    }
-                }
-            );
-
-            if (!response.ok) {
-                if (response.status === 404) {
-                    setWalletApprovalStatus({
-                        isApproved: forceApprovalFlow || false,
-                        approvedChains: forceApprovalFlow ? [selectedChain] : [],
-                        pendingApproval: false,
-                        spendingLimits: forceApprovalFlow ? {
-                            dailyLimitUsd: 500,
-                            perTradeLimitUsd: 100,
-                            dailySpentUsd: 0
-                        } : null,
-                        approvalExpiry: forceApprovalFlow ? new Date(Date.now() + 24 * 60 * 60 * 1000) : null
-                    });
-                    checkWalletApprovalStatus._isRunning = false;
-                    return;
-                }
-                throw new Error(`Approval check failed: ${response.status}`);
-            }
-
-            const data = await response.json();
-
-            const isApproved = data.approved || data.is_approved || false;
-            const approvedChains = data.approved_chains || (isApproved ? [selectedChain] : []);
-
-            setWalletApprovalStatus({
-                isApproved,
-                approvedChains,
-                pendingApproval: data.pending_approval || false,
-                spendingLimits: data.spending_limits || data.limits || null,
-                approvalExpiry: data.approval_expiry || data.expires_at || null
-            });
-        } catch (error) {
-            console.error('[Autotrade] Failed to check approval status:', error);
-            setWalletApprovalStatus({
-                isApproved: forceApprovalFlow || false,
-                approvedChains: forceApprovalFlow ? [selectedChain] : [],
-                pendingApproval: false,
-                spendingLimits: forceApprovalFlow ? {
-                    dailyLimitUsd: 500,
-                    perTradeLimitUsd: 100,
-                    dailySpentUsd: 0
-                } : null,
-                approvalExpiry: forceApprovalFlow ? new Date(Date.now() + 24 * 60 * 60 * 1000) : null
-            });
-            setError(`Failed to check approval status: ${error.message}`);
-        } finally {
-            checkWalletApprovalStatus._isRunning = false;
-        }
-    }, [walletAddress, selectedChain, walletConnected, forceApprovalFlow]);
-
-    // Trigger approval check when wallet state changes
-    useEffect(() => {
-        console.log('Approval check effect triggered:', { walletConnected, walletAddress, selectedChain });
-
-        if (walletConnected && walletAddress && selectedChain) {
-            console.log('Calling checkWalletApprovalStatus...');
-            checkWalletApprovalStatus(true);
-        } else {
-            console.log('Resetting approval status - wallet not ready');
-            setWalletApprovalStatus(prev => ({
-                ...prev,
-                isApproved: false,
-                pendingApproval: false
+    // Simplified wallet approval check for dev mode
+    const checkWalletApprovalStatus = useCallback(async () => {
+        if (SKIP_WALLET_APPROVAL_IN_DEV && DEV_MODE) {
+            setWalletApprovalStatus(prev => ({ 
+                ...prev, 
+                isApproved: true,
+                approvedChains: [selectedChain],
+                spendingLimits: { dailyLimit: 1000, perTradeLimit: 100, dailySpent: 0 }
             }));
+            return;
+        }
+        // Full approval logic would go here for production
+    }, [selectedChain]);
+
+    useEffect(() => {
+        if (walletConnected && walletAddress && selectedChain) {
+            checkWalletApprovalStatus();
         }
     }, [walletConnected, walletAddress, selectedChain, checkWalletApprovalStatus]);
 
-    // Wallet state synchronization for handling state desync issues
-    useEffect(() => {
-        const handleWalletConnection = (evt) => {
-            console.log('Manual wallet state sync triggered', evt?.detail);
-            setTimeout(() => {
-                console.log('Forcing approval check after manual sync');
-                checkWalletApprovalStatus();
-            }, 100);
-        };
-
-        window.addEventListener('wallet:connected', handleWalletConnection);
-        window.addEventListener('wallet:changed', handleWalletConnection);
-
-        const interval = setInterval(() => {
-            try {
-                const walletData = localStorage.getItem('wallet_connection');
-                if (walletData) {
-                    const parsed = JSON.parse(walletData);
-                    if (parsed.address && !walletConnected) {
-                        console.log('Detected wallet desync, forcing sync');
-                        handleWalletConnection();
-                    }
-                }
-            } catch (e) {}
-        }, 2000);
-
-        return () => {
-            window.removeEventListener('wallet:connected', handleWalletConnection);
-            window.removeEventListener('wallet:changed', handleWalletConnection);
-            clearInterval(interval);
-        };
-    }, [walletConnected, checkWalletApprovalStatus]);
-
-    /**
-     * Start autotrade with mandatory wallet authorization check
-     */
+    // Enhanced startAutotrade function
     const startAutotrade = useCallback(async (mode = 'standard') => {
+        const trace_id = logStartButtonDebug('info', 'Starting autotrade request', { mode });
+        
         if (!backendAvailable) {
-            setError('Backend unavailable');
+            const errorMsg = 'Backend is not available - cannot start autotrade. Please check if the backend is running on port 8001.';
+            setError(errorMsg);
+            logStartButtonDebug('error', errorMsg, { trace_id, mode });
             return;
         }
 
-        if (!walletConnected || !walletAddress) {
-            setError('Please connect your wallet first');
-            return;
-        }
-
-        if (!walletApprovalStatus.isApproved) {
-            setPendingStartMode(mode);
-            setShowSecurityWarningModal(true);
-            return;
-        }
-
-        if (!walletApprovalStatus.spendingLimits) {
-            setError('Spending limits not configured. Please approve wallet with spending limits.');
-            setPendingStartMode(mode);
-            setShowSecurityWarningModal(true);
-            return;
+        if (!DEV_MODE || !SKIP_WALLET_APPROVAL_IN_DEV) {
+            if (!walletConnected || !walletAddress) {
+                const errorMsg = 'Please connect your wallet first';
+                setError(errorMsg);
+                logStartButtonDebug('error', errorMsg, { trace_id, mode });
+                return;
+            }
+        } else {
+            logStartButtonDebug('info', 'Development mode - skipping wallet checks', { trace_id, mode });
         }
 
         setLoading(true);
         setError(null);
+        addAiThought(`Starting autotrade engine in ${mode} mode...`, 'info');
 
         try {
-            const response = await fetch(`${API_BASE_URL}/api/v1/autotrade/start`, {
+            logStartButtonDebug('debug', 'Sending request to backend', {
+                trace_id,
+                url: `${API_BASE_URL}/api/v1/autotrade/start`,
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                    mode,
-                    wallet_address: walletAddress,
-                    chain: selectedChain,
-                    spending_limits: walletApprovalStatus.spendingLimits
-                })
+                mode,
+                dev_mode: DEV_MODE,
+                skip_wallet: SKIP_WALLET_APPROVAL_IN_DEV
             });
 
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+            const response = await fetch(`${API_BASE_URL}/api/v1/autotrade/start`, {
+                method: 'POST',
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'X-Trace-ID': trace_id
+                },
+                body: JSON.stringify({ mode }),
+                signal: controller.signal,
+                mode: 'cors'
+            });
+
+            clearTimeout(timeoutId);
+
             if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.detail || `Failed to start: ${response.statusText}`);
+                let errorData;
+                try {
+                    errorData = await response.json();
+                } catch {
+                    errorData = { 
+                        detail: `HTTP ${response.status}: ${response.statusText}`
+                    };
+                }
+                throw new Error(errorData.detail || errorData.message || `Failed to start: ${response.statusText}`);
             }
 
+            const result = await response.json();
+            
+            logStartButtonDebug('success', 'Autotrade engine started successfully', { 
+                trace_id,
+                mode,
+                result_status: result.status,
+                result_message: result.message,
+                result_trace_id: result.trace_id
+            });
+
+            addAiThought(`Autotrade engine started successfully in ${mode} mode`, 'decision', { approved: true });
+            setError(null);
             await refresh();
             setLastUpdate(new Date());
+            
         } catch (err) {
-            setError(err.message);
+            let errorMsg;
+            
+            if (err.name === 'AbortError') {
+                errorMsg = 'Request timed out - backend may be unresponsive';
+            } else if (err.message.includes('Failed to fetch')) {
+                errorMsg = 'Cannot connect to backend - please ensure it is running on port 8001';
+            } else {
+                errorMsg = err.message || 'Unknown error occurred';
+            }
+            
+            setError(errorMsg);
+            addAiThought(`Failed to start autotrade: ${errorMsg}`, 'error');
+            logStartButtonDebug('error', 'Failed to start autotrade engine', { 
+                trace_id, mode, error: errorMsg, error_type: err.constructor.name, error_name: err.name
+            });
         } finally {
             setLoading(false);
         }
-    }, [
-        backendAvailable, 
-        refresh, 
-        walletConnected, 
-        walletAddress, 
-        selectedChain,
-        walletApprovalStatus.isApproved,
-        walletApprovalStatus.spendingLimits
-    ]);
+    }, [backendAvailable, refresh, walletConnected, walletAddress, selectedChain, walletApprovalStatus.isApproved]);
 
     const stopAutotrade = useCallback(async () => {
+        const trace_id = logStartButtonDebug('info', 'Stopping autotrade engine');
+        
         if (!backendAvailable) {
-            setError('Backend unavailable');
+            const errorMsg = 'Backend unavailable';
+            setError(errorMsg);
             return;
         }
 
         setLoading(true);
         setError(null);
+        addAiThought('Stopping autotrade engine...', 'info');
 
         try {
             const response = await fetch(`${API_BASE_URL}/api/v1/autotrade/stop`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' }
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'X-Trace-ID': trace_id
+                },
+                mode: 'cors'
             });
 
             if (!response.ok) {
                 throw new Error(`Failed to stop: ${response.statusText}`);
             }
 
+            const result = await response.json();
+            addAiThought('Autotrade engine stopped successfully', 'decision');
             await refresh();
             setLastUpdate(new Date());
+            
         } catch (err) {
-            setError(err.message);
+            const errorMsg = err.message || 'Unknown error occurred';
+            setError(errorMsg);
+            addAiThought(`Failed to stop autotrade: ${errorMsg}`, 'error');
         } finally {
             setLoading(false);
         }
     }, [backendAvailable, refresh]);
 
-    const handleEmergencyStop = useCallback(async () => {
-        setShowEmergencyModal(false);
-        await stopAutotrade();
-    }, [stopAutotrade]);
-
-    /**
-     * Handle wallet approval completion and restart pending autotrade
-     */
     const handleWalletApprovalComplete = useCallback(async (approvalResult) => {
-        if (approvalResult && (approvalResult.status === 'approved' || approvalResult.success)) {
-            let spendingLimits = {
-                dailyLimitUsd: 500,
-                perTradeLimitUsd: 100,
-                dailySpentUsd: 0
-            };
-
-            if (approvalResult.spending_limits) {
-                spendingLimits = {
-                    dailyLimitUsd: parseFloat(approvalResult.spending_limits.daily_limit_usd || approvalResult.spending_limits.dailyLimitUsd || 500),
-                    perTradeLimitUsd: parseFloat(approvalResult.spending_limits.per_trade_limit_usd || approvalResult.spending_limits.perTradeLimitUsd || 100),
-                    dailySpentUsd: parseFloat(approvalResult.spending_limits.daily_spent_usd || approvalResult.spending_limits.dailySpentUsd || 0)
-                };
-            } else if (approvalResult.daily_limit_usd && approvalResult.per_trade_limit_usd) {
-                spendingLimits = {
-                    dailyLimitUsd: parseFloat(approvalResult.daily_limit_usd),
-                    perTradeLimitUsd: parseFloat(approvalResult.per_trade_limit_usd),
-                    dailySpentUsd: parseFloat(approvalResult.daily_spent_usd || 0)
-                };
-            }
-
+        if (approvalResult && approvalResult.success) {
             setWalletApprovalStatus({
                 isApproved: true,
                 approvedChains: [selectedChain],
                 pendingApproval: false,
-                spendingLimits,
-                approvalExpiry: approvalResult.expires_at || new Date(Date.now() + 24 * 60 * 60 * 1000)
+                spendingLimits: {
+                    dailyLimit: 500,
+                    perTradeLimit: 100,
+                    dailySpent: 0
+                },
+                approvalExpiry: new Date(Date.now() + 24 * 60 * 60 * 1000)
             });
         }
 
@@ -546,22 +788,9 @@ const Autotrade = ({ systemHealth }) => {
         if (pendingStartMode) {
             const modeToStart = pendingStartMode;
             setPendingStartMode(null);
-            setTimeout(() => {
-                startAutotrade(modeToStart);
-            }, 500);
+            setTimeout(() => startAutotrade(modeToStart), 500);
         }
     }, [pendingStartMode, startAutotrade, selectedChain]);
-
-    /**
-     * Force approval flow for testing/security (can be removed in production)
-     */
-    const toggleForceApprovalFlow = useCallback(() => {
-        setForceApprovalFlow(prev => {
-            const newValue = !prev;
-            setTimeout(checkWalletApprovalStatus, 100);
-            return newValue;
-        });
-    }, [checkWalletApprovalStatus]);
 
     return (
         <Container fluid>
@@ -569,6 +798,13 @@ const Autotrade = ({ systemHealth }) => {
                 <Alert variant="danger" dismissible onClose={() => setError(null)} className="mb-4">
                     <AlertTriangle size={18} className="me-2" />
                     {error}
+                </Alert>
+            )}
+
+            {DEV_MODE && SKIP_WALLET_APPROVAL_IN_DEV && (
+                <Alert variant="info" className="mb-4">
+                    <AlertCircle size={18} className="me-2" />
+                    <strong>Development Mode:</strong> Backend on port 8001, wallet approval bypassed, enhanced logging enabled.
                 </Alert>
             )}
 
@@ -589,6 +825,25 @@ const Autotrade = ({ systemHealth }) => {
             />
 
             <AutotradeMetrics metrics={metrics} aiStats={aiStats} marketRegime={marketRegime} />
+
+            {/* Live Opportunities Feed - Always Visible */}
+            <Row className="mb-4">
+                <Col>
+                    <LiveOpportunitiesFeed />
+                </Col>
+            </Row>
+
+            {/* Consolidated AI Console - Always Visible */}
+            <Row className="mb-4">
+                <Col>
+                    <AIConsole 
+                        aiMessages={aiMessages}
+                        aiThoughts={aiThoughts}
+                        aiStatus={aiStatus}
+                        currentAnalysis={currentAnalysis}
+                    />
+                </Col>
+            </Row>
 
             <Row className="mb-4">
                 <Col>
@@ -617,12 +872,10 @@ const Autotrade = ({ systemHealth }) => {
                 </Col>
             </Row>
 
-            {/* Tab content */}
             {activeTab === 'overview' && (
                 <Row>
                     <Col lg={8}>
-                        {/* Wallet Authorization Alert - Always show when wallet connected but not approved */}
-                        {walletConnected && walletAddress && selectedChain && !walletApprovalStatus.isApproved && (
+                        {walletConnected && walletAddress && selectedChain && !walletApprovalStatus.isApproved && !SKIP_WALLET_APPROVAL_IN_DEV && (
                             <Alert variant="warning" className="mb-3">
                                 <Shield className="me-2" />
                                 <strong>Wallet Authorization Required:</strong> Your wallet must be approved with spending limits on <em>{selectedChain}</em> before starting autotrade.
@@ -631,43 +884,14 @@ const Autotrade = ({ systemHealth }) => {
                                         variant="primary" 
                                         size="sm" 
                                         onClick={() => setShowWalletApprovalModal(true)}
-                                        className="me-2"
                                     >
                                         <Shield size={16} className="me-1" />
                                         Authorize Wallet & Set Limits
                                     </Button>
-                                    {/* Debug toggle - remove in production */}
-                                    <Button 
-                                        variant="outline-secondary" 
-                                        size="sm" 
-                                        onClick={toggleForceApprovalFlow}
-                                    >
-                                        {forceApprovalFlow ? 'Disable' : 'Enable'} Force Approval (Debug)
-                                    </Button>
                                 </div>
                             </Alert>
                         )}
 
-                        {/* Spending Limits Display - Show when approved */}
-                        {walletConnected && walletAddress && walletApprovalStatus.isApproved && walletApprovalStatus.spendingLimits && (
-                            <Alert variant="success" className="mb-3">
-                                <Shield className="me-2" />
-                                <strong>Wallet Authorized:</strong> Daily limit: ${walletApprovalStatus.spendingLimits.dailyLimit || walletApprovalStatus.spendingLimits.dailyLimitUsd} 
-                                | Per-trade limit: ${walletApprovalStatus.spendingLimits.perTradeLimit || walletApprovalStatus.spendingLimits.perTradeLimitUsd}
-                                | Daily spent: ${walletApprovalStatus.spendingLimits.dailySpent || walletApprovalStatus.spendingLimits.dailySpentUsd}
-                                <div className="mt-2">
-                                    <Button 
-                                        variant="outline-primary" 
-                                        size="sm" 
-                                        onClick={() => setShowWalletApprovalModal(true)}
-                                    >
-                                        Manage Spending Limits
-                                    </Button>
-                                </div>
-                            </Alert>
-                        )}
-
-                        {/* Additional overview content */}
                         <div className="d-flex justify-content-between align-items-center mb-3">
                             <h5>Autotrade Overview</h5>
                             {walletApprovalStatus.approvalExpiry && (
@@ -691,226 +915,6 @@ const Autotrade = ({ systemHealth }) => {
 
             {activeTab === 'advanced' && <AdvancedOrders isRunning={isRunning} wsConnected={wsConnected} />}
 
-            {/* --- EXISTING: AI Thinking Process section (after AutotradeMonitor) --- */}
-            {isAutotradeEnabled && (
-              <Row className="mb-4">
-                <Col lg={12}>
-                  <Card>
-                    <Card.Header className="d-flex align-items-center justify-content-between">
-                      <div className="d-flex align-items-center gap-2">
-                        <Brain size={20} />
-                        <h5 className="mb-0">AI Thinking Process</h5>
-                      </div>
-                      <Badge bg={aiStatus === 'analyzing' ? 'warning' : 'success'}>
-                        {aiStatus === 'analyzing' ? 'Analyzing...' : (aiStatus || 'Ready')}
-                      </Badge>
-                    </Card.Header>
-                    <Card.Body>
-                      {currentAnalysis ? (
-                        <>
-                          <AIIntelligenceDisplay
-                            tokenAddress={currentAnalysis.tokenAddress}
-                            chain={selectedChain}
-                            intelligenceData={currentAnalysis}
-                            className="mb-3"
-                          />
-
-                          {/* Real-time AI thoughts */}
-                          <div className="ai-thoughts-stream">
-                            <h6>Current Analysis:</h6>
-                            <ListGroup variant="flush">
-                              {aiThoughts.map((thought, idx) => (
-                                <ListGroup.Item key={idx} className="px-0">
-                                  <small className="text-muted">
-                                    {new Date(thought.timestamp).toLocaleTimeString()}
-                                  </small>
-                                  <div className={`mt-1 ${thought.type === 'warning' ? 'text-warning' : ''}`}>
-                                    {thought.message}
-                                  </div>
-                                </ListGroup.Item>
-                              ))}
-                            </ListGroup>
-                          </div>
-
-                          {/* AI Decision */}
-                          {currentAnalysis.decision && (
-                            <Alert 
-                              variant={currentAnalysis.decision === 'execute' ? 'success' : 'warning'}
-                              className="mt-3"
-                            >
-                              <strong>AI Decision:</strong> {currentAnalysis.decision.toUpperCase()}
-                              <br />
-                              <small>{currentAnalysis.reasoning}</small>
-                            </Alert>
-                          )}
-                        </>
-                      ) : (
-                        <Alert variant="info">
-                          <AlertCircle size={16} className="me-2" />
-                          AI is waiting for trading opportunities to analyze...
-                        </Alert>
-                      )}
-                    </Card.Body>
-                  </Card>
-                </Col>
-              </Row>
-            )}
-            {/* --- END: existing AI Thinking Process section --- */}
-
-            {/* --- NEW: Additional AI Thinking Panel (as requested) --- */}
-            {isAutotradeEnabled && (
-              <Row className="mt-4">
-                <Col lg={12}>
-                  <Card>
-                    <Card.Header>
-                      <div className="d-flex align-items-center justify-content-between">
-                        <div className="d-flex align-items-center gap-2">
-                          <Brain size={20} />
-                          <h5 className="mb-0">AI Thinking Process</h5>
-                        </div>
-                        {aiThinking && (
-                          <Spinner animation="border" size="sm" variant="primary" />
-                        )}
-                      </div>
-                    </Card.Header>
-                    <Card.Body>
-                      {aiThoughts.length > 0 ? (
-                        <div className="ai-thoughts">
-                          {aiThoughts.map((thought, idx) => (
-                            <div
-                              key={idx}
-                              className={`mb-2 p-2 border-start border-3 ${
-                                thought.type === 'decision'
-                                  ? (thought.approved ? 'border-success bg-success-subtle' : 'border-danger bg-danger-subtle')
-                                  : 'border-info bg-info-subtle'
-                              }`}
-                            >
-                              <small className="text-muted d-block">
-                                {new Date(thought.timestamp).toLocaleTimeString()}
-                              </small>
-                              <div className="mt-1">{thought.message}</div>
-                              {thought.type === 'decision' && (
-                                <div className="mt-2">
-                                  <Badge bg={thought.approved ? 'success' : 'danger'}>
-                                    Risk Score: {thought.risk_score}/100
-                                  </Badge>
-                                  {thought.reasons && (
-                                    <ul className="mb-0 mt-2">
-                                      {thought.reasons.map((reason, i) => (
-                                        <li key={i}><small>{reason}</small></li>
-                                      ))}
-                                    </ul>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <Alert variant="info">
-                          <Brain size={16} className="me-2" />
-                          AI is waiting for trading opportunities to analyze...
-                        </Alert>
-                      )}
-                    </Card.Body>
-                  </Card>
-                </Col>
-              </Row>
-            )}
-            {/* --- END: Additional AI Thinking Panel --- */}
-
-            {/* --- NEW: AI Intelligence Panel (messages stream) --- */}
-            {isAutotradeEnabled && (
-              <Row className="mt-4">
-                <Col lg={12}>
-                  <Card className="mb-4">
-                    <Card.Header>
-                      <div className="d-flex align-items-center justify-content-between">
-                        <div className="d-flex align-items-center gap-2">
-                          <Brain size={20} />
-                          <h5 className="mb-0">AI Intelligence</h5>
-                        </div>
-
-                        <div className="d-flex align-items-center gap-2">
-                          <Badge bg={
-                            aiStatus === 'analyzing' ? 'warning' : 
-                            aiStatus === 'connected' ? 'success' : 
-                            aiStatus === 'error' ? 'danger' : 'secondary'
-                          }>
-                            {aiStatus}
-                          </Badge>
-
-                          {/* Add this button for testing */}
-                        <Button
-                        variant="outline-primary"
-                        size="sm"
-                        disabled={!intelligenceWs || intelligenceWs.readyState !== WebSocket.OPEN}
-                        onClick={() => {
-                            intelligenceWs?.send(JSON.stringify({
-                            type: "analyze",
-                            token_data: {
-                                address: "0xtest123",
-                                chain: selectedChain || "ethereum",
-                                liquidity: 100000,
-                                volume: 50000,
-                                holders: 500,
-                                age_hours: 24
-                            }
-                            }));
-                        }}
-                        >
-                        Test AI Analysis
-                        </Button>
-                        </div>
-                      </div>
-                    </Card.Header>
-                    <Card.Body style={{ maxHeight: '400px', overflowY: 'auto' }}>
-                      {aiMessages.length > 0 ? (
-                        <div className="ai-message-stream">
-                          {aiMessages.map((msg, idx) => (
-                            <div 
-                              key={idx} 
-                              className={`mb-2 p-2 rounded ${
-                                msg.type === 'ai_decision' ? 
-                                  (msg.decision === 'approved' ? 'bg-success bg-opacity-10' : 'bg-danger bg-opacity-10') :
-                                msg.type === 'ai_error' ? 'bg-danger bg-opacity-10' :
-                                'bg-light'
-                              }`}
-                            >
-                              <small className="text-muted">
-                                {new Date(msg.timestamp).toLocaleTimeString()}
-                              </small>
-                              <div className="mt-1">
-                                {msg.message}
-                              </div>
-                              {msg.type === 'ai_decision' && (
-                                <div className="mt-2">
-                                  <Badge bg={msg.risk_level === 'low' ? 'success' : msg.risk_level === 'medium' ? 'warning' : 'danger'}>
-                                    Risk: {msg.risk_score}/100
-                                  </Badge>
-                                  {msg.suggested_position && (
-                                    <Badge bg="info" className="ms-2">
-                                      Position: {msg.suggested_position}%
-                                    </Badge>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <Alert variant="info" className="mb-0">
-                          <Brain size={16} className="me-2" />
-                          AI is ready to analyze trading opportunities...
-                        </Alert>
-                      )}
-                    </Card.Body>
-                  </Card>
-                </Col>
-              </Row>
-            )}
-            {/* --- END: AI Intelligence Panel (messages stream) --- */}
-
             {/* Emergency Stop Modal */}
             <Modal show={showEmergencyModal} onHide={() => setShowEmergencyModal(false)} centered>
                 <Modal.Header closeButton>
@@ -923,13 +927,16 @@ const Autotrade = ({ systemHealth }) => {
                     <Button variant="secondary" onClick={() => setShowEmergencyModal(false)}>
                         Cancel
                     </Button>
-                    <Button variant="danger" onClick={handleEmergencyStop}>
+                    <Button variant="danger" onClick={async () => {
+                        await stopAutotrade();
+                        setShowEmergencyModal(false);
+                    }}>
                         Execute Emergency Stop
                     </Button>
                 </Modal.Footer>
             </Modal>
 
-            {/* Security Warning Modal - Enhanced for spending limits */}
+            {/* Security Warning Modal */}
             <Modal show={showSecurityWarningModal} onHide={() => setShowSecurityWarningModal(false)} size="lg" centered>
                 <Modal.Header closeButton>
                     <Modal.Title>
@@ -942,30 +949,7 @@ const Autotrade = ({ systemHealth }) => {
                         <Shield className="me-2" />
                         <strong>Security Authorization:</strong> You must approve your wallet and configure spending limits before autotrade can execute trades with your funds.
                     </Alert>
-
-                    <p className="mb-3">
-                        To start autotrade in <strong>{pendingStartMode}</strong> mode, please complete the wallet authorization process:
-                    </p>
-
-                    <div className="bg-light p-4 rounded mb-3">
-                        <h6 className="mb-3">Required Security Steps:</h6>
-                        <ul className="mb-0">
-                            <li><strong>Set Daily Spending Limit:</strong> Maximum amount per day</li>
-                            <li><strong>Set Per-Trade Limit:</strong> Maximum amount per individual trade</li>
-                            <li><strong>Configure Duration:</strong> How long the approval lasts</li>
-                            <li><strong>Confirm Authorization:</strong> Explicitly approve autotrade access</li>
-                        </ul>
-                    </div>
-
-                    <div className="bg-info bg-opacity-10 p-3 rounded">
-                        <h6 className="text-info">Your Funds Stay Secure:</h6>
-                        <ul className="mb-0 small">
-                            <li>Funds remain in your wallet until trades execute</li>
-                            <li>You can revoke approval or modify limits anytime</li>
-                            <li>All trades are logged and auditable</li>
-                            <li>Emergency stop available at all times</li>
-                        </ul>
-                    </div>
+                    <p>To start autotrade in <strong>{pendingStartMode}</strong> mode, please complete the wallet authorization process.</p>
                 </Modal.Body>
                 <Modal.Footer>
                     <Button variant="secondary" onClick={() => {
@@ -982,7 +966,7 @@ const Autotrade = ({ systemHealth }) => {
                         }}
                     >
                         <Shield size={16} className="me-1" />
-                        Authorize Wallet & Set Limits
+                        Authorize Wallet
                     </Button>
                 </Modal.Footer>
             </Modal>

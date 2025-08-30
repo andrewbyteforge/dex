@@ -360,7 +360,7 @@ class Settings(BaseSettings):
 
     # Server Configuration
     host: str = "127.0.0.1"
-    port: int = 8000
+    port: int = 8001
     reload: bool = True
     workers: int = 1
     max_request_size: int = 16 * 1024 * 1024  # 16MB
